@@ -98,6 +98,9 @@ type RelayInfo struct {
 	TokenUnlimited    bool
 	StartTime         time.Time
 	FirstResponseTime time.Time
+	// UpstreamExchanges records each upstream HTTP attempt's connection, body
+	// write, first response byte and return. It is diagnostic only.
+	UpstreamExchanges []UpstreamExchangeMark
 	isFirstResponse   bool
 	//SendLastReasoningResponse bool
 	IsStream               bool
@@ -113,18 +116,19 @@ type RelayInfo struct {
 	// aliases never participate in channel selection or upstream routing.
 	BillingModelName string
 
-	RequestURLPath     string
-	RequestHeaders     map[string]string
-	ShouldIncludeUsage bool
-	DisablePing        bool // 是否禁止向下游发送自定义 Ping
-	ClientWs           *websocket.Conn
-	TargetWs           *websocket.Conn
-	InputAudioFormat   string
-	OutputAudioFormat  string
-	RealtimeTools      []dto.RealTimeTool
-	IsFirstRequest     bool
-	AudioUsage         bool
-	ReasoningEffort    string
+	RequestURLPath              string
+	RequestHeaders              map[string]string
+	ShouldIncludeUsage          bool
+	DisablePing                 bool // 是否禁止向下游发送自定义 Ping
+	ClientWs                    *websocket.Conn
+	TargetWs                    *websocket.Conn
+	InputAudioFormat            string
+	OutputAudioFormat           string
+	RealtimeTools               []dto.RealTimeTool
+	RealtimeSettlementAttempted bool // Owned by the connection finalizer, independent of strict protocol results.
+	IsFirstRequest              bool
+	AudioUsage                  bool
+	ReasoningEffort             string
 	// ReasoningConversion is the suffix-derived reasoning intent attached
 	// after model mapping. Converters read it via ReasoningState().
 	ReasoningConversion *dto.ReasoningConversionState
@@ -249,7 +253,16 @@ type RelayInfo struct {
 	// matching response conversion (see ResponsesToolState).
 	responsesToolState *convmeta.ResponsesToolState
 
-	conversionDiagnostics          []types.ConversionDiagnostic
+	conversionDiagnostics        []types.ConversionDiagnostic
+	ClaudeStreamPolicyApplied    bool
+	ClaudeStreamValidationSource string
+	ClaudeStreamMainMode         bool // Set only by an actual Claude upstream response handler.
+	StreamValidationPolicy       StreamValidationPolicy
+	StreamProcessingOwner        StreamProcessingOwner
+	// Responses WS settles before its terminal write. Only logging is postponed.
+	DeferStreamLog                 func(func())
+	claudeValidationPolicy         StreamValidationPolicy
+	streamPolicyFrozen             bool
 	conversionDiagnosticKeys       map[conversionDiagnosticKey]struct{}
 	conversionDiagnosticsTruncated bool
 

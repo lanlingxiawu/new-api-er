@@ -34,6 +34,7 @@ func relayErrorDisplayScopeApproved(c *gin.Context) bool {
 type relayErrorPreviewRequest struct {
 	Setting operation_setting.RelayErrorDisplaySetting `json:"setting"`
 	Sample  struct {
+		Group      string `json:"group"`
 		Source     string `json:"source"`
 		StatusCode int    `json:"status_code"`
 		ErrorCode  string `json:"error_code"`
@@ -56,11 +57,13 @@ func PreviewRelayErrorDisplay(c *gin.Context) {
 	}
 	source := strings.TrimSpace(request.Sample.Source)
 	if (source != operation_setting.RelayErrorSourceUpstream && source != operation_setting.RelayErrorSourceLocal) ||
-		utf8.RuneCountInString(request.Sample.Message) > operation_setting.MaxRelayErrorTextLen {
+		utf8.RuneCountInString(request.Sample.Message) > operation_setting.MaxRelayErrorTextLen ||
+		utf8.RuneCountInString(request.Sample.Group) > operation_setting.MaxRelayErrorGroupLen {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 	decision, err := operation_setting.PreviewRelayErrorDecision(request.Setting, operation_setting.RelayErrorInput{
+		Group:      operation_setting.ResolveRelayErrorGroup(request.Sample.Group, ""),
 		Upstream:   source == operation_setting.RelayErrorSourceUpstream,
 		StatusCode: request.Sample.StatusCode,
 		ErrorCode:  strings.TrimSpace(request.Sample.ErrorCode),
@@ -144,6 +147,10 @@ func respondRelayErrorDisplayInvalid(c *gin.Context, err error) {
 // relayErrorDisplayInvalidMessage is the i18n key (and its arguments) that
 // explains why a relay error display configuration does not validate.
 func relayErrorDisplayInvalidMessage(err error) (string, map[string]any) {
+	var groupsErr *operation_setting.RelayErrorGroupsInvalid
+	if errors.As(err, &groupsErr) {
+		return i18n.MsgSettingRelayErrorGroupsInvalid, map[string]any{"Rule": groupsErr.Rule, "Max": operation_setting.MaxRelayErrorRuleGroups, "Length": operation_setting.MaxRelayErrorGroupLen}
+	}
 	var stepErr *operation_setting.RelayErrorEditInvalid
 	if errors.As(err, &stepErr) {
 		key := i18n.MsgSettingRelayErrorEditInvalid

@@ -18,7 +18,7 @@
 
 **流式不存在这个问题。** `service/stream_lifecycle.go:119` 在超时时置 `reason = StreamEndReasonTimeout`、`clientGone = false`，随后按已接收到的 usage 走 `PostTextConsumeQuota` 正常结算。
 
-**亏损可以精确归因到具体用户。** 按 [单用户 AI 请求双超时](per-user-relay-timeout.md) 第 2 节，四个时长字段全为 `0` 的用户根本不进这套逻辑，全局默认值只对已主动配置过至少一个字段的用户生效。因此每一笔超时亏损背后都是一个显式要了短超时的用户。
+**超时成本需要结合用户覆盖和全局默认分析。** 按 [单用户 AI 请求双超时](per-user-relay-timeout.md) 2026-11-10 修订，总开关开启时，四个时长字段全为 `0` 的用户也继承全局默认。超时可能来自管理员设置的全局时限，不能再推断每笔超时亏损都来自用户显式设置短超时。既有超时计费策略不变。
 
 **根因在于非流式的计量盲区。** `non_stream_response_timeout` 在上游 HTTP 首字节**之前**到期（`service/relay_timeout.go:183` `RelayResponseTraceContext` 在非流式下标记首字节）。而非流式的首字节等价于上游已生成完毕——超时那一刻我们对输出用量是零信息，输入 token 能实算，输出只能拍脑袋。单纯"超时不退款"会变成按估算收费，用户没拿到内容、扣的钱还是估的，是最容易引发投诉的形态。
 

@@ -17,9 +17,91 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+// Exercise the real managed attempt with validation explicitly enabled, across
+// every streaming destination supported by the Claude adaptor. The disabled
+// counterparts use exactly the same inputs in TestClaudeMainStreamParity.
+func TestClaudeValidationEnabledFaultProtocols(t *testing.T) {
+	fixtures := claudeParityFixtures()
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses, types.RelayFormatGemini} {
+		for _, name := range []string{
+			"normal", "empty", "ping_only", "start_only", "missing_stop", "open_text", "open_tool",
+			"invalid_json", "upstream_error", "duplicate_index", "duplicate_start", "orphan_stop",
+			"wrong_delta_index", "negative_index", "fractional_index", "stop_without_delta", "delta_without_stop",
+			"usage_array", "usage_string", "usage_overflow", "usage_negative", "half_json", "html_body",
+			"wrong_type_event", "signature_in_text", "tool_use_incomplete", "error_before_start", "malformed_error",
+			"chat_foreign_protocol", "responses_foreign_protocol", "gemini_foreign_protocol", "read_error", "write_error",
+		} {
+			for _, chunk := range []int{1, 4096} {
+				t.Run(fmt.Sprintf("%s/%s/read=%d", format, name, chunk), func(t *testing.T) {
+					body, ok := fixtures[name]
+					require.True(t, ok)
+					reader := &forkClaudeReadBody{data: []byte(body), chunk: chunk}
+					if name == "read_error" {
+						reader.terminal = io.ErrUnexpectedEOF // Includes (n > 0, err != nil).
+					}
+					c, rec, resp, info := strictTestContext(reader)
+					c.Set(common.RequestIdKey, "audit")
+					info.RelayFormat, info.FinalRequestRelayFormat = format, types.RelayFormatClaude
+					info.DisablePing, info.ShouldIncludeUsage = true, true
+					if name == "write_error" {
+						c.Writer = claudeParityWriteError{c.Writer}
+					}
+					common.SetContextKey(c, constant.ContextKeyChannelSetting, dto.ChannelSettings{ClaudeStreamValidation: common.GetPointer(true)})
+					service.BeginStreamAttempt(c, info)
+					resp.Header.Set("Content-Type", "text/event-stream")
+					info.StreamSession.ObserveTransport(resp, nil)
+					info.StreamDiagnostic.Observe(resp)
+					info.StreamSession.ObserveHTTP(resp)
+					var usage *dto.Usage
+					if format == types.RelayFormatOpenAIResponses {
+						usage, _ = ClaudeResponsesStreamHandler(c, resp, info)
+					} else {
+						usage, _ = ClaudeStreamHandler(c, resp, info)
+					}
+					usage = service.FinalizeStreamUsage(c, info, usage)
+					require.NotNil(t, usage)
+					require.True(t, reader.closed, "release upstream body on every exit")
+					require.True(t, info.ClaudeStreamPolicyApplied)
+					require.False(t, info.ClaudeStreamMainMode)
+					require.Equal(t, format != types.RelayFormatClaude, info.StreamSession.Active(), "native strict parser owns its session")
+					require.NotNil(t, info.StreamResult)
+					require.GreaterOrEqual(t, usage.PromptTokens, 0)
+					require.GreaterOrEqual(t, usage.CompletionTokens, 0)
+					written := rec.Body.String()
+					require.Same(t, usage, service.FinalizeStreamUsage(c, info, usage), "freeze usage and terminal emission")
+					require.Equal(t, written, rec.Body.String())
+					if name == "normal" {
+						require.False(t, info.StreamResult.Failed, "reason=%s diagnostic=%s body=%s", info.StreamStatus.EndReason, info.StreamResult.Diagnostic.Error, rec.Body.String())
+						require.True(t, info.StreamResult.Diagnostic.UsageFinal)
+						require.Equal(t, 32000, usage.CompletionTokens)
+						return
+					}
+					require.True(t, info.StreamResult.Failed, "body=%s", rec.Body.String())
+					require.False(t, info.StreamResult.Diagnostic.UsageFinal)
+					require.NotContains(t, rec.Body.String(), "event: message_stop")
+					require.NotContains(t, rec.Body.String(), "data: [DONE]")
+					require.NotContains(t, rec.Body.String(), "event: response.completed")
+					if name != "write_error" {
+						errorMarker := `"error":`
+						if format == types.RelayFormatOpenAIResponses {
+							errorMarker = "event: error"
+						}
+						require.Equal(t, 1, strings.Count(rec.Body.String(), errorMarker), "one error, including repeated finalization; body=%s", rec.Body.String())
+					}
+					if name == "empty" || name == "ping_only" || name == "start_only" {
+						require.Zero(t, usage.TotalTokens, "no delivered content must not create a charge")
+					}
+				})
+			}
+		}
+	}
+}
 
 func auditNativeClaudeHandler(t *testing.T, body string) (*dto.Usage, *relaycommon.RelayInfo, string) {
 	t.Helper()
@@ -69,6 +151,70 @@ func TestAuditClaudeFineGrainedMaxTokens(t *testing.T) {
 			require.Contains(t, downstream, "event: message_stop")
 		})
 	}
+}
+
+// Exercise the real attempt wrappers as well as the adapter: bypassing only
+// strictClaudeStream would leave the generic observer able to reject this SSE.
+func TestClaudeMainModeWithManagedAttempt(t *testing.T) {
+	for _, strict := range []bool{true, false} {
+		for _, closed := range []bool{true, false} {
+			t.Run(fmt.Sprintf("strict=%t/closed=%t", strict, closed), func(t *testing.T) {
+				body := strictStart + strictText
+				if closed {
+					body += "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+				}
+				body += "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":32000}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+				c, rec, resp, info := strictTestContext(io.NopCloser(strings.NewReader(body)))
+				common.SetContextKey(c, constant.ContextKeyChannelSetting, dto.ChannelSettings{ClaudeStreamValidation: &strict})
+				service.BeginStreamAttempt(c, info)
+				info.StreamSession.ObserveTransport(resp, nil)
+				info.StreamSession.ObserveHTTP(resp)
+				info.StreamDiagnostic.Observe(resp)
+				usage, apiErr := ClaudeStreamHandler(c, resp, info)
+				require.Nil(t, apiErr)
+				usage = service.FinalizeStreamUsage(c, info, usage)
+				if strict && !closed {
+					require.Equal(t, "upstream_protocol_error", string(info.StreamStatus.EndReason))
+					require.Contains(t, rec.Body.String(), "event: error")
+					require.Less(t, usage.CompletionTokens, 32000)
+				} else {
+					require.NotContains(t, rec.Body.String(), "event: error")
+					require.Contains(t, rec.Body.String(), "event: message_stop")
+					require.Equal(t, 32000, usage.CompletionTokens)
+				}
+				require.NotNil(t, info.StreamDiagnostic.DownstreamBody())
+				if !strict {
+					require.True(t, info.ClaudeStreamMainMode)
+					require.False(t, info.StreamSession.Active())
+					require.Nil(t, info.StreamResult, "diagnostics must not activate strict settlement")
+				}
+			})
+		}
+	}
+}
+
+func TestClaudeMainModeCompatibilityToggle(t *testing.T) {
+	previous := operation_setting.ClaudeStreamUpstreamCompatibilityEnabled()
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.UpdateFromMap("claude_stream_compat_setting", map[string]string{"enabled": fmt.Sprint(previous)}))
+	})
+	for _, enabled := range []bool{false, true} {
+		require.NoError(t, config.GlobalConfig.UpdateFromMap("claude_stream_compat_setting", map[string]string{"enabled": fmt.Sprint(enabled)}))
+		t.Run(fmt.Sprint(enabled), TestClaudeMainModeWithManagedAttempt)
+	}
+}
+
+func TestClaudeMainPolicyKeepsNonStreamMode(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatClaude}
+	common.SetContextKey(c, constant.ContextKeyChannelSetting, dto.ChannelSettings{ClaudeStreamValidation: common.GetPointer(false)})
+	service.BeginStreamAttempt(c, info)
+	info.IsStream = true // Some upstream adapters detect SSE after the request begins.
+	prepareClaudeMainStream(nil, info)
+	require.False(t, info.ClaudeStreamMainMode)
+	require.False(t, info.ClaudeStreamPolicyApplied)
+	require.Nil(t, info.StreamSession)
 }
 
 func TestAuditClaudePreservesOriginalBillingSnapshot(t *testing.T) {

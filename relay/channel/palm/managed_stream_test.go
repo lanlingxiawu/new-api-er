@@ -58,3 +58,29 @@ func TestUnifiedPaLMJSONToStream(t *testing.T) {
 		}
 	}
 }
+
+func TestPaLMMainPolicyKeepsSoftParseErrorAndRecordsIt(t *testing.T) {
+	for _, body := range []string{`{"candidates":[{"content":"hello"}]}`, `{"candidates":[`} {
+		rec := newCloseNotifyRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		disabled := false
+		info := &relaycommon.RelayInfo{IsStream: true, RelayFormat: types.RelayFormatOpenAI, UserSetting: dto.UserSetting{StreamProtocolValidation: &disabled}}
+		service.BeginStreamAttempt(c, info)
+		resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
+		info.StreamSession.ObserveTransport(resp, nil)
+		err, text := palmStreamHandler(c, resp)
+		require.Nil(t, err, "main's soft parsing behavior is preserved")
+		require.Nil(t, info.StreamResult)
+		require.Contains(t, rec.Body.String(), "[DONE]")
+		require.NotContains(t, rec.Body.String(), "event: error")
+		malformed := strings.HasSuffix(body, "[")
+		require.Equal(t, malformed, info.StreamStatus.HasErrors())
+		if malformed {
+			require.Empty(t, text)
+			require.NotEmpty(t, info.StreamDiagnostic.Snapshot().Error)
+		} else {
+			require.Equal(t, "hello", text)
+		}
+	}
+}

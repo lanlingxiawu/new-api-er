@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -337,6 +355,27 @@ describe('private stream termination observations', () => {
     })
     expect(screen.getByText('1006')).toBeInTheDocument()
     expect(screen.queryByText(/HTTP response/)).not.toBeInTheDocument()
+  })
+
+  test('keeps unmeasured completion and output unknown when validation is disabled', async () => {
+    await openDiagnostic({
+      validation: {
+        enabled: false,
+        source: 'user',
+        config_origin: 'canonical',
+      },
+      delivery_evidence: { accepted: true },
+    })
+    expect(
+      screen.getByText('Protocol complete: Not validated')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Written output estimate: Unknown')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Received output estimate: Unknown')
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Protocol complete: No')).not.toBeInTheDocument()
   })
 
   test('preserves unknown protocol values as escaped evidence instead of guessing a source', async () => {

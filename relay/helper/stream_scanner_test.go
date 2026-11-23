@@ -334,6 +334,27 @@ func TestStreamScannerHandler_StreamStatus_ReplacesPreInitialized(t *testing.T) 
 	assert.Equal(t, 0, info.StreamStatus.TotalErrorCount())
 }
 
+func TestStreamScannerHandler_MainModePreservesPassiveErrorStatus(t *testing.T) {
+	c, resp, info := setupStreamTest(t, strings.NewReader(buildSSEBody(1)))
+	info.StreamProcessingOwner = relaycommon.StreamOwnerMain
+	status := relaycommon.NewStreamStatus()
+	info.StreamStatus = status
+	capture := relaycommon.NewStreamResponseCapture(1)
+	capture.PassiveStatus = status
+	info.StreamDiagnostic = capture
+	info.StreamSession = relaycommon.NewStreamSession("")
+	info.StreamSession.SetValidationEnabled(false)
+	info.StreamSession.Status = status
+	info.StreamSession.Capture = capture
+	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+		sr.Error(fmt.Errorf("actual upstream parse failure"))
+	})
+	require.Same(t, status, info.StreamStatus)
+	require.Equal(t, 1, info.StreamStatus.TotalErrorCount())
+	require.Contains(t, capture.Snapshot().Error, "actual upstream parse failure")
+	require.Nil(t, info.StreamResult)
+}
+
 func TestStreamScannerHandler_StreamStatus_EOFWithoutDone(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 5; i++ {

@@ -35,7 +35,8 @@ type streamMatchRun struct {
 	timeoutBeforeTerminal bool
 	// strict ends the stream the way the Claude strict stream does: it decides
 	// its own terminal frame and sets StreamResult without the stream session.
-	strict bool
+	strict                     bool
+	autoGroup, groupAfterFrame string
 }
 
 // runStreamMatch fails one managed stream, settles it and returns the live
@@ -69,6 +70,10 @@ func runStreamMatch(t *testing.T, tokenID int, requestID string, run streamMatch
 	c.Set("token_id", tokenID)
 	c.Set("original_model", "stream-match-model")
 	c.Set("group", "default")
+	if run.autoGroup != "" {
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, "auto")
+		common.SetContextKey(c, constant.ContextKeyAutoGroup, run.autoGroup)
+	}
 	common.SetContextKey(c, constant.ContextKeyIsStream, true)
 	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, "https://up.example.com")
 	common.SetContextKey(c, constant.ContextKeyRelayTotalTimeoutSeconds, 30)
@@ -114,6 +119,9 @@ func runStreamMatch(t *testing.T, tokenID int, requestID string, run streamMatch
 	if run.timeoutAfterFrame {
 		common.SetContextKey(c, constant.ContextKeyRelayTimeoutControl, settlementTimeoutControl{})
 	}
+	if run.groupAfterFrame != "" {
+		common.SetContextKey(c, constant.ContextKeyAutoGroup, run.groupAfterFrame)
+	}
 	FinalizeConsumptionSettlement(c, info, ConsumptionSettlementParams{Quota: run.quota, Content: "note", IsStream: true, Other: model.NewLogOther()})
 	model.DrainRelayLogsSync(5 * time.Second)
 	var logs []model.Log
@@ -128,6 +136,17 @@ func streamMatchAdminInfo(t *testing.T, log model.Log) map[string]any {
 	require.NoError(t, err)
 	adminInfo, _ := other["admin_info"].(map[string]any)
 	return adminInfo
+}
+
+func TestStreamFailureLogPreservesTerminalGroup(t *testing.T) {
+	withRelayErrorDisplay(t, operation_setting.RelayErrorDisplaySetting{Enabled: true, Rules: `[{"groups":["vip"],"source":"any","action":"replace","message":"VIP busy"},{"source":"any","action":"replace","message":"Global busy"}]`})
+	body, log := runStreamMatch(t, 91000191, "group-snapshot", streamMatchRun{
+		frame: `{"error":{"code":"quota","message":"quota low"}}`, autoGroup: "vip", groupAfterFrame: "default",
+	})
+	assert.Contains(t, body, "VIP busy")
+	assert.Equal(t, "vip", streamMatchAdminInfo(t, log)[operation_setting.RelayErrorGroupKey])
+	assert.Equal(t, "VIP busy (request id: group-snapshot)", model.MaskErrorLogContentForUser(&log, "en"))
+	assert.Contains(t, log.Content, "quota low", "admin keeps the original")
 }
 
 // Regression (review M3): the live terminal frame was matched with the

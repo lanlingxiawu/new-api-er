@@ -342,6 +342,7 @@ export type UpdateOptionGroupRequest = {
   scope?: string
   group_retry_times?: string
   module:
+    | 'stream_protocol_validation_setting'
     | 'performance_setting'
     | 'group_retry_status_setting'
     | 'group_retry_policy'
@@ -1174,6 +1175,7 @@ export type RelayErrorEdit = {
 /** Mirrors operation_setting.RelayErrorRule. */
 export type RelayErrorRule = {
   name?: string
+  groups?: string[]
   source: RelayErrorRuleSource
   status_codes?: number[]
   error_codes?: string[]
@@ -1195,6 +1197,7 @@ export type RelayErrorPreviewRequest = {
   scope?: string
   setting: RelayErrorDisplayDraft
   sample: {
+    group?: string
     source: 'upstream' | 'local'
     status_code: number
     error_code: string

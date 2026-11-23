@@ -107,6 +107,37 @@ func TestUnifiedAwsSDKStream(t *testing.T) {
 	}
 }
 
+func TestAwsProtocolDisabledKeepsMainUsageAndMissingTerminal(t *testing.T) {
+	for _, complete := range []bool{true, false} {
+		var raw bytes.Buffer
+		events := []string{`{"type":"message_start","message":{"id":"m","model":"claude","usage":{"input_tokens":2,"output_tokens":0}}}`, `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`, `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`, `{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":32000}}`}
+		if complete {
+			events = append(events, `{"type":"message_stop"}`)
+		}
+		for _, event := range events {
+			require.NoError(t, writeAwsStreamEvent(&raw, event))
+		}
+		rec := httptest.NewRecorder()
+		c := newAwsTestContext(rec, context.Background())
+		info := newAwsTestRelayInfo()
+		enabled := false
+		info.UserSetting.StreamProtocolValidation = &enabled
+		service.BeginStreamAttempt(c, info)
+		client := newAwsTestClient(relaycommon.StreamDiagnosticHTTPClient{Capture: info.StreamDiagnostic, Stream: info.StreamSession, Client: awsHTTPClientFunc(func(r *http.Request) (*http.Response, error) {
+			return newAwsStreamResponse(r, io.NopCloser(bytes.NewReader(raw.Bytes()))), nil
+		})})
+		apiErr, usage := awsStreamHandler(c, info, &Adaptor{AwsClient: client, AwsReq: newAwsStreamInput()})
+		require.Nil(t, apiErr)
+		require.Same(t, usage, service.FinalizeStreamUsage(c, info, usage))
+		require.Equal(t, 32000, usage.CompletionTokens)
+		require.Nil(t, info.StreamResult)
+		require.Contains(t, rec.Body.String(), "[DONE]")
+		require.NotContains(t, rec.Body.String(), "event: error")
+		diagnostic := info.StreamDiagnostic.Snapshot()
+		require.Equal(t, raw.Bytes(), append(diagnostic.BodyHead, diagnostic.BodyTail...))
+	}
+}
+
 // TestUnifiedAwsNativeClaudeDelta 验证真实 SDK 顺序下 message_delta 在 message_stop 前即可交付，截断不补成功。
 // 参数 t 为测试上下文；本地 HTTP 夹具只生成 AWS 二进制事件，不请求外部服务。
 func TestUnifiedAwsNativeClaudeDelta(t *testing.T) {

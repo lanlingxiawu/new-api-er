@@ -46,7 +46,6 @@ export function PromptDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={t('Prompt Details')}
-      description={t('View the complete prompt and its English translation')}
       contentClassName='sm:max-w-lg'
       contentHeight='auto'
       bodyClassName='space-y-4'

@@ -13,6 +13,7 @@ import (
 // TestClaudeRequestLoggingCapturesRequests 验证 Messages 与其他路径一样遵循原请求采集规则。
 // 参数 t：当前测试上下文，用于断言、子测试与清理；无返回值，失败通过测试断言报告。
 func TestClaudeRequestLoggingCapturesRequests(t *testing.T) {
+	requestLogTestEnv(t)
 	old := common.RequestLogEnabled
 	common.RequestLogEnabled = true
 	t.Cleanup(func() { common.RequestLogEnabled = old })

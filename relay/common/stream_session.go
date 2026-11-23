@@ -51,6 +51,9 @@ type StreamSnapshot struct {
 
 // StreamSession 保存单次中转尝试的协议和交付状态；短锁不跨网络读取、写出或刷新。
 type StreamSession struct {
+	Status              *StreamStatus                // Existing error log, independent of strict protocol decisions.
+	Capture             *StreamResponseCapture       // Passive error evidence; never selects usage.
+	validationDisabled  bool                         // Policy selection, independent of ownership transfer.
 	Termination         *StreamTerminationRecorder   // Shared optional observer; never used to decide stream state.
 	ResponseGate        *StreamResponseGate          // 本次实际响应门控，初始化后指针不变；未成功时观察器透明转交。
 	OpaqueSSE           bool                         // 仅旧智谱 add/finish 文本事件使用，不把正文强当 JSON。
@@ -85,6 +88,8 @@ type StreamSession struct {
 	receivedEstimate    func(string, int) int
 	receivedOnly        bool // 内容跟踪器专用：按接收片段计工具文本，不等待完整交付。
 	receivedTranscript  bool // 接收侧已计入转录 delta，完成快照不再重复估算。
+
+	RequireClaudeProtocol bool // Set by the strict Claude handler before reading; other upstreams retain auto-detection.
 }
 
 // streamTool 缓存一个待完成工具调用的名称与参数；所有字段仅在会话锁内操作。
@@ -145,7 +150,25 @@ func (s *StreamSession) Active() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.disabled && s.ResponseGate.AllowsStream()
+	return !s.disabled && !s.validationDisabled && s.ResponseGate.AllowsStream()
+}
+
+func (s *StreamSession) ValidationEnabled() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.validationDisabled
+}
+
+func (s *StreamSession) SetValidationEnabled(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.validationDisabled = !enabled
+	s.mu.Unlock()
 }
 
 // Snapshot 复制证据和帧，避免异步日志与读取工作者共享可变映射。
@@ -189,6 +212,17 @@ func (s *StreamSession) failLocked(reason StreamEndReason, err error) {
 // Fail 记录终止原因 reason 与底层 err；原因是否属上游由白名单判定，不直接写出响应或执行收费。
 func (s *StreamSession) Fail(reason StreamEndReason, err error) {
 	if !s.Active() {
+		if s != nil && !s.ValidationEnabled() {
+			s.Capture.SetError(err)
+			if err != nil {
+				s.Status.RecordError(string(reason))
+				if IsUpstreamStreamFailure(reason) {
+					s.Termination.Observe("upstream", "protocol", err)
+				} else {
+					s.Termination.Observe("gateway", "handler", err)
+				}
+			}
+		}
 		return
 	}
 	s.mu.Lock()
@@ -212,6 +246,11 @@ func (s *StreamSession) ClientFailed(err error) {
 // EndRead 处理读取结果 err：未完成时 EOF 记为不完整，其他错误记为读取异常；Complete 已为 true 时忽略所有后续读取错误。
 func (s *StreamSession) EndRead(err error) {
 	if !s.Active() || err == nil {
+		if s != nil && !s.ValidationEnabled() && err != nil && !errors.Is(err, io.EOF) {
+			s.Capture.SetError(err)
+			s.Termination.ObserveUpstreamRead(err)
+			s.Status.RecordError("upstream read failed")
+		}
 		return
 	}
 	s.mu.Lock()
@@ -284,6 +323,10 @@ func (s *StreamSession) ObserveEvent(event string, data []byte) error {
 		return nil
 	}
 	if bytes.Equal(data, []byte("[DONE]")) {
+		if s.RequireClaudeProtocol && !s.state.Complete {
+			s.failLocked("upstream_protocol_error", errors.New("DONE does not replace the Claude protocol terminator"))
+			return s.state.Err
+		}
 		// A real DONE may confirm fewer completed images than requested. Preview
 		// frames never count; EOF alone still cannot complete a partial batch.
 		requiredImages := s.ExpectedImages
@@ -342,6 +385,13 @@ func (s *StreamSession) ObserveEvent(event string, data []byte) error {
 		s.state.UsageFormat = types.RelayFormatGemini
 	}
 	upstreamError := (!realtimeRoundComplete && IsStreamErrorEvent(event, data)) || v.Get("Error.Code").Int() != 0 || v.Get("error_code").Int() != 0 || v.Get("header.code").Int() != 0 || v.Get("base_resp.status_code").Int() != 0
+	if s.RequireClaudeProtocol && !upstreamError {
+		claudeType := v.Get("type")
+		if claudeType.Type != gjson.String || claudeType.Str == "" || strings.HasPrefix(claudeType.Str, "response.") || v.Get("choices").Exists() || v.Get("candidates").Exists() || v.Get("usageMetadata").Exists() || v.Get("usage_metadata").Exists() {
+			s.failLocked("upstream_protocol_error", errors.New("expected Claude stream event, received a different protocol"))
+			return s.state.Err
+		}
+	}
 	if upstreamError {
 		// 错误正文与用量可信度分开：即使后续 usage 校验提前返回，仍有原始 SDK/WS 错误可发送。
 		s.state.ErrorPayload = bytes.Clone(rawData)

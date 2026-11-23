@@ -16,13 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { getRouteApi, useNavigate } from '@tanstack/react-router'
+import { getRouteApi, Link, useNavigate } from '@tanstack/react-router'
+import { ArrowLeft, ArrowUpRight } from 'lucide-react'
 import { Activity, useCallback, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
 import type { NavGroup } from '@/components/layout/types'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Button } from '@/components/ui/button'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { CacheStatsDialog } from '@/features/system-settings/general/channel-affinity/cache-stats-dialog'
 import { useSidebarConfig } from '@/hooks/use-sidebar-config'
 
@@ -109,23 +111,6 @@ function UsageLogsContent() {
     [filteredTabGroups]
   )
 
-  const handleSectionChange = useCallback(
-    (section: string) => {
-      if (!isUsageLogsSectionId(section) || section === 'upstream') return
-      void navigate({
-        to: '/usage-logs/$section',
-        params: { section },
-        search: {
-          ...searchParams,
-          page: 1,
-          filter: undefined,
-          localSection: section,
-        },
-      })
-    },
-    [navigate, searchParams]
-  )
-
   const isUpstreamSection = activeCategory === 'upstream'
   const savedLocalSection: LocalUsageLogsSectionId =
     searchParams.localSection ?? 'common'
@@ -135,18 +120,6 @@ function UsageLogsContent() {
 
   const handleHeaderTabChange = useCallback(
     (tab: string) => {
-      if (tab === 'upstream') {
-        if (!canManageScope || isUpstreamSection) return
-        void navigate({
-          to: '/usage-logs/$section',
-          params: { section: 'upstream' },
-          search: {
-            ...searchParams,
-            localSection,
-          },
-        })
-        return
-      }
       if (tab !== 'all' && tab !== 'self') return
       setViewScope(tab as LogsViewScope)
       const targetSection = isUpstreamSection ? savedLocalSection : localSection
@@ -162,7 +135,6 @@ function UsageLogsContent() {
       })
     },
     [
-      canManageScope,
       isUpstreamSection,
       localSection,
       navigate,
@@ -232,16 +204,44 @@ function UsageLogsContent() {
         </SectionPageLayout.Title>
         <SectionPageLayout.Actions>
           {canManageScope && (
-            <Tabs
-              value={isUpstreamSection ? 'upstream' : viewScope}
-              onValueChange={handleHeaderTabChange}
-            >
-              <TabsList>
-                <TabsTrigger value='all'>{t('All')}</TabsTrigger>
-                <TabsTrigger value='self'>{t('Only Mine')}</TabsTrigger>
-                <TabsTrigger value='upstream'>{t('Upstream Logs')}</TabsTrigger>
-              </TabsList>
-            </Tabs>
+            <div className='flex flex-wrap items-center gap-2'>
+              {!isUpstreamSection && (
+                <ToggleGroup
+                  value={[viewScope]}
+                  size='sm'
+                  variant='outline'
+                  aria-label={t('Log scope')}
+                  onValueChange={(values) => {
+                    const next = values.find((value) => value !== viewScope)
+                    if (next) handleHeaderTabChange(next)
+                  }}
+                >
+                  <ToggleGroupItem value='all'>{t('All')}</ToggleGroupItem>
+                  <ToggleGroupItem value='self'>
+                    {t('Only Mine')}
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              )}
+              <Button
+                variant='outline'
+                size='sm'
+                nativeButton={false}
+                render={
+                  <Link
+                    to='/usage-logs/$section'
+                    params={{
+                      section: isUpstreamSection
+                        ? savedLocalSection
+                        : 'upstream',
+                    }}
+                    search={{ ...searchParams, localSection }}
+                  />
+                }
+              >
+                {isUpstreamSection ? <ArrowLeft /> : <ArrowUpRight />}
+                {isUpstreamSection ? t('Back to logs') : t('Upstream Logs')}
+              </Button>
+            </div>
           )}
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
@@ -249,34 +249,57 @@ function UsageLogsContent() {
             <Activity mode={isUpstreamSection ? 'hidden' : 'visible'}>
               <div className='flex h-full min-h-0 flex-col gap-4'>
                 {showTaskSwitcher && (
-                  <Tabs
-                    value={localSection}
-                    onValueChange={handleSectionChange}
+                  <nav
+                    className='flex flex-wrap items-center gap-2'
+                    aria-label={t('Task Logs')}
                   >
-                    <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
-                      {visibleSections.map((section) => (
-                        <TabsTrigger key={section} value={section}>
-                          {t(SECTION_META[section].titleKey)}
-                        </TabsTrigger>
-                      ))}
-                    </TabsList>
-                  </Tabs>
+                    {visibleSections.map((section) => (
+                      <Button
+                        key={section}
+                        size='sm'
+                        variant={
+                          section === localSection ? 'secondary' : 'ghost'
+                        }
+                        nativeButton={false}
+                        render={
+                          <Link
+                            to='/usage-logs/$section'
+                            params={{ section }}
+                            search={{
+                              ...searchParams,
+                              page: 1,
+                              filter: undefined,
+                              localSection: section as LocalUsageLogsSectionId,
+                            }}
+                            aria-current={
+                              section === localSection ? 'page' : undefined
+                            }
+                          />
+                        }
+                      >
+                        {t(SECTION_META[section].titleKey)}
+                      </Button>
+                    ))}
+                  </nav>
                 )}
-                {/* 导出中心是从使用日志页的「高级导出」进来的，给一条一键返回的路。 */}
                 {isExportSection && (
-                  <Tabs
-                    value={localSection}
-                    onValueChange={handleSectionChange}
-                  >
-                    <TabsList>
-                      <TabsTrigger value='common'>
-                        {t(SECTION_META.common.titleKey)}
-                      </TabsTrigger>
-                      <TabsTrigger value='export'>
-                        {t(SECTION_META.export.titleKey)}
-                      </TabsTrigger>
-                    </TabsList>
-                  </Tabs>
+                  <nav aria-label={t('Back to logs')}>
+                    <Button
+                      size='sm'
+                      variant='ghost'
+                      nativeButton={false}
+                      render={
+                        <Link
+                          to='/usage-logs/$section'
+                          params={{ section: 'common' }}
+                          search={{ ...searchParams, localSection: 'common' }}
+                        />
+                      }
+                    >
+                      <ArrowLeft />
+                      {t('Common Logs')}
+                    </Button>
+                  </nav>
                 )}
                 <div className='min-h-0 flex-1 overflow-y-auto'>
                   {localPageContent}

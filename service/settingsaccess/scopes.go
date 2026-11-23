@@ -179,6 +179,10 @@ func buildDefinitions() map[string]Definition {
 		result["request-policies.routing"].OptionKeys[key] = struct{}{}
 	}
 	result["request-policies.routing"].OptionKeys["probe_routing_setting.max_input_chars"] = struct{}{}
+	result["request-policies.filtering"].OptionKeys["claude_stream_validation_setting.enabled"] = struct{}{}
+	result["request-policies.filtering"].GroupKeys["claude_stream_validation_setting"] = keys("enabled")
+	result["request-policies.filtering"].OptionKeys["stream_protocol_validation_setting.enabled"] = struct{}{}
+	result["request-policies.filtering"].GroupKeys["stream_protocol_validation_setting"] = keys("enabled")
 	result["request-policies.routing"].GroupKeys["probe_routing_setting"] = keys("max_input_chars")
 	result["request-policies.health"].GroupKeys["channel_daily_limit_setting"] = keys("enabled", "timezone", "retention_days")
 	result["models.channel-affinity"].OptionKeys["channel_affinity_setting.session_mode"] = struct{}{}

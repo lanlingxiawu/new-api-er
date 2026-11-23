@@ -30,7 +30,6 @@ import { Button } from '@/components/ui/button'
 import {
   Drawer,
   DrawerContent,
-  DrawerDescription,
   DrawerFooter,
   DrawerHeader,
   DrawerTitle,
@@ -208,13 +207,13 @@ export function LogsFilterToolbar<TData>(props: LogsFilterToolbarProps<TData>) {
           )}
         </DataTableMobileFilterPanel>
 
-        <DrawerContent className='max-h-[85dvh] p-0'>
+        <DrawerContent
+          aria-describedby={undefined}
+          className='max-h-[85dvh] p-0'
+        >
           <div className='mx-auto flex w-full max-w-md flex-1 flex-col overflow-hidden'>
             <DrawerHeader className='border-border/70 border-b px-4 py-3 text-left'>
               <DrawerTitle>{t('Filter')}</DrawerTitle>
-              <DrawerDescription>
-                {t('Adjust filters, then search to refresh the logs.')}
-              </DrawerDescription>
             </DrawerHeader>
             <div className='flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 py-3'>
               {props.mobileFilters ?? (

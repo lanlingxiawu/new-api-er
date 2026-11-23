@@ -342,7 +342,6 @@ export function ChannelHealthSection({
   return (
     <SettingsSection title={t('Channel health')}>
       <div className='text-muted-foreground space-y-1 text-sm'>
-        <p>{t('Source: global settings. Changes take effect after saving.')}</p>
         <p>
           {form.watch('AutomaticDisableChannelEnabled')
             ? t(

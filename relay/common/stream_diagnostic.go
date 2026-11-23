@@ -60,7 +60,7 @@ func (s *StreamSession) DiagnosticAvailable(ownedTimeout bool) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.disabled && s.ResponseGate.AllowsStream() && s.state.DiagnosticAvailable(ownedTimeout)
+	return !s.disabled && !s.validationDisabled && s.ResponseGate.AllowsStream() && s.state.DiagnosticAvailable(ownedTimeout)
 }
 
 // ObserveTransport 按真实 HTTP 执行器返回的 resp/err 启用观察，仅 HTTP 200 且无传输错误通过。

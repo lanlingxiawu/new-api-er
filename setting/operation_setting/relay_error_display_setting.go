@@ -26,6 +26,8 @@ const (
 	MaxRelayErrorRules        = 100
 	MaxRelayErrorRuleKeywords = 20
 	MaxRelayErrorRuleCodes    = 20
+	MaxRelayErrorRuleGroups   = 100
+	MaxRelayErrorGroupLen     = 128
 	MaxRelayErrorKeywordLen   = 100
 	MaxRelayErrorMessageLen   = 500
 	MaxRelayErrorRuleNameLen  = 100
@@ -87,6 +89,9 @@ const (
 	// RelayStreamMatchTruncatedKey is set (true) when the recorded text is only
 	// the start of the frame's error text (RelayErrorInput.Truncated).
 	RelayStreamMatchTruncatedKey = "stream_error_truncated"
+	// RelayErrorGroupKey keeps the error's actual request group in admin_info.
+	// An empty value explicitly records that no group had been resolved.
+	RelayErrorGroupKey = "relay_error_group"
 
 	// builtInRelayErrorMessage is the fallback text for when translations are
 	// not loaded; normally the localized i18n.MsgRelayErrorDefaultMessage is used.
@@ -111,6 +116,7 @@ type RelayErrorDisplaySetting struct {
 // substrings, not regular expressions.
 type RelayErrorRule struct {
 	Name        string           `json:"name,omitempty"`
+	Groups      []string         `json:"groups,omitempty"`
 	Source      string           `json:"source"`
 	StatusCodes []int            `json:"status_codes,omitempty"`
 	ErrorCodes  []string         `json:"error_codes,omitempty"`
@@ -134,6 +140,7 @@ type RelayErrorEdit struct {
 
 // RelayErrorInput describes one client-facing error.
 type RelayErrorInput struct {
+	Group      string
 	Upstream   bool
 	StatusCode int
 	ErrorCode  string
@@ -169,6 +176,7 @@ type compiledRelayErrorRule struct {
 	index       int
 	name        string
 	source      string
+	groups      map[string]struct{}
 	statusCodes map[int]struct{}
 	errorCodes  map[string]struct{}
 	keywords    []string
@@ -316,6 +324,32 @@ func (e *RelayErrorEditInvalid) Error() string {
 
 func (e *RelayErrorEditInvalid) Unwrap() error { return ErrRelayErrorDisplayInvalid }
 
+// RelayErrorGroupsInvalid identifies the rule whose group scope needs fixing.
+type RelayErrorGroupsInvalid struct {
+	Rule int
+}
+
+func (e *RelayErrorGroupsInvalid) Error() string {
+	return fmt.Sprintf("%v: rule %d has invalid request groups", ErrRelayErrorDisplayInvalid, e.Rule)
+}
+
+func (e *RelayErrorGroupsInvalid) Unwrap() error { return ErrRelayErrorDisplayInvalid }
+
+// ResolveRelayErrorGroup uses the selected auto group before the validated
+// request group. Names retain their exact spelling; unresolved auto and invalid
+// names are unknown, so only rules for all groups may match them.
+func ResolveRelayErrorGroup(usingGroup, autoGroup string) string {
+	if autoGroup != "" {
+		usingGroup = autoGroup
+	}
+	if len(usingGroup) > utf8.UTFMax*MaxRelayErrorGroupLen ||
+		utf8.RuneCountInString(usingGroup) > MaxRelayErrorGroupLen ||
+		usingGroup == "auto" || strings.TrimSpace(usingGroup) == "" {
+		return ""
+	}
+	return usingGroup
+}
+
 // relayErrorStepError is a step-level failure before the rule number is known.
 type relayErrorStepError struct {
 	step       int
@@ -376,8 +410,11 @@ func compileRelayErrorDisplayParts(setting RelayErrorDisplaySetting) *relayError
 		compiled, err := compileRelayErrorRule(rule)
 		if err != nil {
 			var stepErr *relayErrorStepError
+			var groupsErr *RelayErrorGroupsInvalid
 			if errors.As(err, &stepErr) {
 				skip(RelayErrorSkippedRule, i+1, &RelayErrorEditInvalid{Rule: i + 1, Step: stepErr.step, Reason: stepErr.reason, TooComplex: stepErr.tooComplex})
+			} else if errors.As(err, &groupsErr) {
+				skip(RelayErrorSkippedRule, i+1, &RelayErrorGroupsInvalid{Rule: i + 1})
 			} else {
 				skip(RelayErrorSkippedRule, i+1, invalid("rule %d: %v", i+1, err))
 			}
@@ -399,6 +436,18 @@ func compileRelayErrorRule(rule RelayErrorRule) (compiledRelayErrorRule, error) 
 	}
 	if utf8.RuneCountInString(out.name) > MaxRelayErrorRuleNameLen {
 		return out, fmt.Errorf("name longer than %d characters", MaxRelayErrorRuleNameLen)
+	}
+	if len(rule.Groups) > MaxRelayErrorRuleGroups {
+		return out, &RelayErrorGroupsInvalid{}
+	}
+	if len(rule.Groups) > 0 {
+		out.groups = make(map[string]struct{}, len(rule.Groups))
+		for _, group := range rule.Groups {
+			if ResolveRelayErrorGroup(group, "") == "" {
+				return out, &RelayErrorGroupsInvalid{}
+			}
+			out.groups[group] = struct{}{}
+		}
 	}
 	switch out.source {
 	case RelayErrorSourceUpstream, RelayErrorSourceLocal, RelayErrorSourceAny:
@@ -712,6 +761,11 @@ func (r *compiledRelayErrorRule) apply(original string) string {
 }
 
 func (r *compiledRelayErrorRule) matches(in RelayErrorInput, lowerMessage string) bool {
+	if r.groups != nil {
+		if _, ok := r.groups[in.Group]; !ok {
+			return false
+		}
+	}
 	switch r.source {
 	case RelayErrorSourceUpstream:
 		if !in.Upstream {
@@ -962,9 +1016,10 @@ func StreamFailureRelayErrorInput(timedOut bool, message string) RelayErrorInput
 // records whatever ended the stream, typically the upstream's own text, so it is
 // matched as an upstream stream error — the same input the terminal frame of
 // that stream was decided with.
-func MaskRelayStreamErrorForUser(message, lang string) (string, bool) {
+func MaskRelayStreamErrorForUser(message, lang, group string) (string, bool) {
 	in := StreamFailureRelayErrorInput(false, message)
 	in.Lang = lang
+	in.Group = ResolveRelayErrorGroup(group, "")
 	d := relayErrorDisplaySnapshot.Load().decide(in)
 	if !d.Replace {
 		return message, false

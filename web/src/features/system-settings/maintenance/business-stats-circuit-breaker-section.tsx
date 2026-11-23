@@ -16,15 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import * as z from 'zod'
-import { useEffect, useMemo, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQuery } from '@tanstack/react-query'
 import { Info } from 'lucide-react'
+import { useEffect, useMemo, useRef } from 'react'
+import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { getBusinessStatsCircuitBreakerStatus } from '../api'
+import * as z from 'zod'
+
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   Form,
@@ -38,6 +38,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
+
+import { getBusinessStatsCircuitBreakerStatus } from '../api'
 import {
   SettingsForm,
   SettingsSwitchContent,
@@ -77,10 +79,7 @@ const schema = z
       values.business_stats_circuit_breaker_setting.max_cooldown_seconds >=
       values.business_stats_circuit_breaker_setting.initial_cooldown_seconds,
     {
-      path: [
-        'business_stats_circuit_breaker_setting',
-        'max_cooldown_seconds',
-      ],
+      path: ['business_stats_circuit_breaker_setting', 'max_cooldown_seconds'],
       message: 'Max cooldown must be greater than or equal to initial cooldown',
     }
   )
@@ -113,9 +112,7 @@ function buildFormDefaults(defaults: FlatDefaults): FormValues {
           'business_stats_circuit_breaker_setting.initial_cooldown_seconds'
         ],
       max_cooldown_seconds:
-        defaults[
-          'business_stats_circuit_breaker_setting.max_cooldown_seconds'
-        ],
+        defaults['business_stats_circuit_breaker_setting.max_cooldown_seconds'],
       side_effect_db_timeout_ms:
         defaults[
           'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms'
@@ -168,8 +165,7 @@ const numericFields: Array<{
   {
     name: 'max_cooldown_seconds',
     label: 'Max cooldown',
-    description:
-      'Cooldown doubles on repeated failures, capped here.',
+    description: 'Cooldown doubles on repeated failures, capped here.',
     min: 1,
     max: 604800,
     suffix: 'seconds',
@@ -177,8 +173,7 @@ const numericFields: Array<{
   {
     name: 'side_effect_db_timeout_ms',
     label: 'DB timeout',
-    description:
-      'Lookup timeout after settlement. Timeout counts as failure.',
+    description: 'Lookup timeout after settlement. Timeout counts as failure.',
     min: 50,
     max: 30000,
     suffix: 'ms',
@@ -232,9 +227,7 @@ export function BusinessStatsCircuitBreakerSection({
     runtimeStatusLabel = t('Runtime status: bypassing side logic')
   }
 
-  const enabled = form.watch(
-    'business_stats_circuit_breaker_setting.enabled'
-  )
+  const enabled = form.watch('business_stats_circuit_breaker_setting.enabled')
   const manualDisabled = form.watch(
     'business_stats_circuit_breaker_setting.manual_disabled'
   )
@@ -271,20 +264,12 @@ export function BusinessStatsCircuitBreakerSection({
             saveLabel='Save guard settings'
           />
 
-          <Alert>
-            <Info data-icon='inline-start' />
-            <AlertTitle className='text-sm'>
-              {t('Protect settlement from side effects')}
-            </AlertTitle>
-            <AlertDescription className='text-muted-foreground text-xs leading-5'>
-              <div>
-                {t(
-                  'These settings only affect post-settlement cost ledgers, commission logs, and business statistics. Main quota settlement remains isolated.'
-                )}
-              </div>
-              {status && (
-                <div className='mt-1 flex flex-wrap gap-x-3 gap-y-1'>
-                  <span>{runtimeStatusLabel}</span>
+          {status && (
+            <Alert>
+              <Info data-icon='inline-start' />
+              <AlertTitle className='text-sm'>{runtimeStatusLabel}</AlertTitle>
+              <AlertDescription className='text-muted-foreground text-xs leading-5'>
+                <div className='flex flex-wrap gap-x-3 gap-y-1'>
                   <span>
                     {t('Consecutive failures')}: {status.consecutive_failures}
                   </span>
@@ -300,9 +285,9 @@ export function BusinessStatsCircuitBreakerSection({
                     </span>
                   )}
                 </div>
-              )}
-            </AlertDescription>
-          </Alert>
+              </AlertDescription>
+            </Alert>
+          )}
 
           <FormField
             control={form.control}

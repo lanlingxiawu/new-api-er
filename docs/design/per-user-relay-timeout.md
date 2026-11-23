@@ -3,6 +3,48 @@
 状态：实现与回归验证完成  
 日期：2026-08-06
 
+## 2026-11-10：全局默认继承修正
+
+用户已要求按“全局开启则 0 继承后台默认、关闭则恢复旧逻辑”修复。以下修订取代本文早期版本的全零用户退出和零有效时长退出规则。
+
+### 目标、规则与生命周期
+
+- 总开关开启且 controller 调用启动点时，所有用户进入托管；四项全 `0`、缓存字段缺失也按当前请求模式继承全局默认。
+- 用户单项 `0` 继承，正数覆盖，`-1` 不限制；全局单项 `0` 表示不限制。两个有效时长均为 `0` 时仍托管但不创建 timer，防止旧环境变量重新施加限制。
+- 仍使用用户的 `first_output` / `idle` 模式；全零用户也会采用该模式。默认 `first_output` 在首次有效输出后停止响应计时，不等价于旧扫描器的持续空闲超时。
+- 全局关闭时，新请求完整恢复旧 HTTP Client 和扫描器限制。未调用启动点的任务、fetch、Realtime 等范围不变。
+- 数据流：现有设置接口保存 options → 原子发布快照 → 请求入口捕获快照 → 解析当前模式的用户覆盖 → 创建控制器和 writer → 正常输出停止/重置 timer → 结束关闭控制器。保存、关闭或重新开启均只影响后续请求，在途请求保留已捕获快照。
+
+### API、数据模型、配置和错误处理
+
+沿用现有管理员分组配置 API（`system-tuning.relay-timeout` 权限）及管理员用户更新 API；请求/响应字段和权限均不变。不新增表、列、迁移、索引或配置项，不修改持久化逻辑。沿用既有 `relay_timeout`、504、已提交响应终止和计费处理，不改变错误格式或计费算法。默认用户现在会参与既有受管超时处理，因此原来依赖“全零不托管”的非流式超时计费分析不再适用。
+
+### Main Chain Impact
+
+同步部分仅从请求 context 读取当前模式两个整数、一个模式字符串和已捕获的快照，解析后创建请求本地控制器、writer 及最多两个 runtime timer；没有新增 DB、Redis、网络调用或后台任务。timer 到期沿用现有短回调取消请求，handler 返回负责清理。正常路径不创建每请求常驻 goroutine。开关 `relay_timeout_setting.enabled` 可随时恢复新请求的旧链路。
+
+### Shared Resource Audit
+
+共享配置快照沿用原子发布/读取；用户字段沿用现有鉴权缓存，不增加 Redis key 或 DB 访问。控制器锁、状态、timer 都是请求私有。HTTP client 仍浅拷贝并复用同一 Transport/连接池，不创建新池；受管请求移除旧 Client.Timeout 和流扫描超时。长请求占用已有连接的时间可能随新默认值增加，需要按实际时长规划容量。`users`、`options`、账本与日志的读写实现不变。
+
+### Concurrency Analysis
+
+30k RPM 为约 500 RPS，100k RPM 为约 1667 RPS：新增 DB/Redis 调用均为 0，无全局/分布式锁；已有的一次快照读取不变。全零用户也会分配请求控制器和最多两个 timer，数量按在途请求数增长；平均 30 秒时分别约 15,000 / 50,000 个控制器和最多 30,000 / 100,000 个 timer。`first_output` 首次输出后停止响应 timer，`idle` 沿用请求私有锁重置 timer。该估算不代表完成 100k RPM 压测。
+
+### 回归计划
+
+先修改测试，覆盖流式/非流式全零与缺失字段继承、1200→2200 热更新、在途快照不变、正数覆盖、`-1`、全局两个零仍托管、仅另一模式有覆盖、模式选择、关闭与重新开启、无启动点不托管。检查受管 HTTP client 去除旧 Timeout 且复用 Transport，以及退出时停止 timer。随后运行相关 Go 包测试；不调用真实上游。
+
+### 本次验证结果
+
+- 修改测试后、修改实现前，`go test ./middleware -run TestRelayRequestTimeout -count=1` 在全零继承、模式选择、零限制和热更新场景失败，确认测试能捕获原缺陷。
+- 修复后 `go test ./middleware ./setting/operation_setting -count=1` 均通过。该轮清空测试进程的 `SQL_DSN` / `LOG_SQL_DSN`，middleware 的 DB 用例按既有 harness 跳过；本次超时用例均执行。
+- `go test ./service -run 'Test(RelayHTTPClient|NewRelayHTTPClient|RelayResponseTrace|RelayRequestContext|RelayContextError|RelayTimeoutPerCall|RelayUpstreamContext|ResolveRelayTimeoutOverride|ValidateRelayTimeout|NormalizeRelayStreamResponse|ValidateRelayStreamResponse|RelayRetryBudgetExhausted)' -count=1` 通过。使用临时 PostgreSQL 17.11（`postgres:17-alpine`），harness 创建隔离 schema，验证完成已停止并移除容器。最初因无 SQL_DSN 无法启动服务层测试，随后以该隔离数据库完成验证。
+- `go test ./controller -run 'Test(NormalizeRelayTimeoutError|RelayRetryStopsForOwnedTimeout|HandleRelayTimeoutResponse|ShouldReportAdaptedRelayTimeout)' -count=1` 通过。
+- `go test -race ./middleware ./setting/operation_setting -run 'Test(RelayRequestTimeout|ReplaceRelayTimeoutSetting|ApplyRelayTimeoutEnvDefaults)' -count=1` 通过。Windows 需 `CGO_ENABLED=1`、`CC=C:/msys64/mingw64/bin/gcc.exe` 并将该 bin 加入 PATH；初次未配置完整工具链时编译失败，补齐后通过。
+- `gofmt`、`git diff --check` 通过。未修改数据库行为、前端或 relaykit；未运行三库迁移矩阵、全仓测试或 100k RPM 压测，未部署生产。
+- 记录位于 `_local/relay-timeout-inheritance-*.log`。本次只移除两个启动退出条件，既有后台持久化、快照发布和用户数据保持原实现。
+
 ## 1. 目标与范围
 
 每个 AI 请求同时支持两个限制，并按流式、非流式分别配置：
@@ -39,12 +81,11 @@ RELAY_TIMEOUT=0
 RELAY_IDLE_CONN_TIMEOUT=90
 ```
 
-启动顺序为：代码默认值 → 环境变量回退 → DB 已保存配置。`RELAY_IDLE_CONN_TIMEOUT` 只控制连接池空闲连接，不参与请求超时。若 DB 没有对应配置，响应默认取 `STREAMING_TIMEOUT`，总时长默认取 `RELAY_TIMEOUT`；这些默认值只用于已经配置了至少一个非零用户覆盖的用户。
+启动顺序为：代码默认值 → 环境变量回退 → DB 已保存配置。`RELAY_IDLE_CONN_TIMEOUT` 只控制连接池空闲连接，不参与请求超时。若 DB 没有对应配置，响应默认取 `STREAMING_TIMEOUT`，总时长默认取 `RELAY_TIMEOUT`；总开关开启时，所有调用启动点的请求均采用这套默认值和用户覆盖规则。
 
 每个用户字段的取值规则：
 
-- 四个时长字段全部为 `0`：该用户不启用新功能，完整沿用原 `STREAMING_TIMEOUT`、`RELAY_TIMEOUT`、HTTP Client 和流扫描逻辑；
-- 任一时长字段非 `0` 后，其余值为 `0` 的时长字段继承当前热更新全局默认值；
+- `0`：继承当前请求快照的全局默认值，四项全零也一样；
 - `-1`：明确关闭该用户的对应限制；
 - `1..604800`：使用用户值，单位秒。
 
@@ -55,9 +96,9 @@ RELAY_IDLE_CONN_TIMEOUT=90
 - `first_output`：默认值。`stream_response_timeout` 只限制首包/首次有效输出等待时间，首次有效输出后停止响应 timer。
 - `idle`：连续静默超时。`stream_response_timeout` 在首次有效输出后继续作为“距离上一次有效输出的最长静默时间”，每次有效输出都会重置 deadline。
 
-兼容性要求：该模式字段本身不算“启用用户超时”的非零覆盖。只有四个时长字段任一非 `0` 时才进入新超时托管分支；否则仍完整沿用旧链路，避免只保存模式选择就剥离旧 `STREAMING_TIMEOUT`/`RELAY_TIMEOUT` 保护。
+模式字段对所有受管流式请求生效，包括四个时长字段全零的用户。
 
-**接管前提**：托管一个请求会同时关掉它的旧保护——流扫描器不再创建 `STREAMING_TIMEOUT` ticker，共享 HTTP Client 的 `RELAY_TIMEOUT` 也被剥离。因此只有在当前模式确实有东西可执行时才接管：解析出的响应超时和总时长同时为 `0` 时，除非该模式的用户字段里显式出现 `-1`，否则不创建控制器、不包装 writer，完整回退旧链路。这挡住两类隐式空档：用户只配置了另一种模式；或全局默认被设为 `0` 而用户对应字段是继承的 `0`。显式 `-1` 是用户主动要求不限制，此时照常接管但不装任何 timer。
+**接管前提**：总开关开启且 controller 调用启动点。托管请求不再创建旧 `STREAMING_TIMEOUT` ticker，并移除共享 HTTP Client 的 `RELAY_TIMEOUT`。两个有效时长都为 `0` 时，仍创建控制器和 writer，但不安装 timer，以兑现“不限制”的配置。只有总开关关闭或不在启动范围内的请求沿用旧链路。
 
 ## 3. 流式与非流式语义
 
@@ -92,7 +133,7 @@ NonStreamTotalTimeout    int `json:"non_stream_total_timeout" gorm:"type:int;not
 
 字段不参与筛选、排序或关联，不新增索引。沿用现有 UserBase Redis 缓存；未启用 Redis 时仍走原有 DB 读取，不新增进程内用户缓存。缺失时长字段按 `0` 处理，缺失模式字段按 `first_output` 处理。此次扩字段不提升基础缓存 schema 版本，避免滚动发布期间新旧实例互相判定缓存失效并制造同步 DB 回源。
 
-旧实例使用逐字段 `HSET` 刷新已有 hash 时不会删除超时字段；只有在 hash 不存在、旧实例从 DB 回源并重新创建缓存时，新字段才会暂时缺失并按默认值处理。全零会回退旧链路，因此未配置用户和滚动发布期间缺失新字段的缓存不会被新功能接管；只有编辑过非零覆盖的用户需要由新实例处理。
+旧实例使用逐字段 `HSET` 刷新已有 hash 时不会删除超时字段；只有在 hash 不存在、旧实例从 DB 回源并重新创建缓存时，新字段才会暂时缺失并按默认值处理。新实例将缺失时长作为 `0` 继承默认值。滚动发布期间旧实例仍可能执行历史退出规则，应完成所有实例升级后再依赖一致的全零继承行为。
 
 兼容性语义需要在发布前显式确认：旧版 `stream_response_timeout` 等价于本设计的 `idle`，而新增列、旧 Redis hash 缺字段和非法缓存值都会归一为 `first_output`。因此已经配置非零流式响应超时的存量用户会默认切换为“仅首包超时”。代码不自动回填；若发布策略要求保留旧语义，必须在启用新版本前把这些用户的 `stream_response_timeout_mode` 预填为 `idle`。
 
@@ -104,15 +145,15 @@ NonStreamTotalTimeout    int `json:"non_stream_total_timeout" gorm:"type:int;not
 
 1. 用户鉴权从现有 UserBase Redis 缓存读取四个时长字段和一个模式字段并写入 Gin context；缓存 miss 或未启用 Redis 时仍沿用原有 DB fallback。
 2. 超时中间件只读取一次全局不可变快照，不提前包装 writer。总开关关闭则直接放行。
-3. 提交类 controller 在请求解析完成并确定 `stream` 后显式启动超时；四个用户时长字段全部为 `0` 时直接回退旧链路；fetch、回调和 Realtime controller 不启动，因此保持原 writer 和原请求逻辑。
-4. 用户任一时长字段非 `0` 时，从当前请求快照选择全局默认并解析对应的两个用户覆盖值，同时读取 `stream_response_timeout_mode`。两个值都解析为 `0` 且该模式没有显式 `-1` 时同样回退旧链路（见 §2 接管前提）；否则创建请求本地控制器，管理响应 timer、总时长 timer、响应 writer 和可取消 request context；上游调用使用与客户端连接脱钩、只在控制器截止时刻取消的 context（`service.BindRelayRequestContext` / `RelayUpstreamContext`）。
+3. 范围内 controller 在请求解析完成并确定 `stream` 后显式启动超时；fetch、回调和 Realtime controller 不启动，因此保持原 writer 和原请求逻辑。
+4. 从当前请求快照选择全局默认并解析当前模式的两个用户覆盖值，同时读取 `stream_response_timeout_mode`。创建请求本地控制器，按正数有效时长安装响应和总时长 timer，并管理 writer 和可取消 request context；上游调用使用与客户端连接脱钩、只在控制器截止时刻取消的 context（`service.BindRelayRequestContext` / `RelayUpstreamContext`）。
 5. 主上游请求继承该 context；流式有效输出按模式停止或重置响应 timer，非流式首响应停止响应 timer。
 6. 可重试的非流式请求在下一次尝试前重启响应 timer；总时长 timer 始终不重置。
 7. 任一 timer 到期取消上游并记录 `response_timeout` 或 `total_timeout`；响应包装器拒绝到期后的业务输出，并通过请求本地放行门闩允许 controller 穿过后续 writer 包装层写入标准化超时响应；handler 结束时停止 timer。
 
 ## 6. API 与界面
 
-不新增 endpoint。用户超时字段沿用管理员用户读取/更新接口：省略保留原值；四个时长字段全 `0` 沿用旧逻辑；已启用用户的单项时长 `0` 继承、`-1` 关闭；非法值返回现有参数错误。`stream_response_timeout_mode` 在用户超时配置区提供二选一控件：
+不新增 endpoint。用户超时字段沿用管理员用户读取/更新接口：省略保留原值；单项时长 `0` 继承、`-1` 关闭、正数覆盖，全零也继承；非法值返回现有参数错误。`stream_response_timeout_mode` 在用户超时配置区提供二选一控件：
 
 - 首包超时：保存 `first_output`，前端文案说明“只等待首次有效流式输出，之后不再按静默时间断开”。
 - 连续静默超时：保存 `idle`，前端文案说明“每次有效流式输出都会重新计时，静默超过该秒数后断开”。
@@ -132,7 +173,7 @@ NonStreamTotalTimeout    int `json:"non_stream_total_timeout" gorm:"type:int;not
 
 ## 8. 与现有 HTTP Client 的关系
 
-功能开启且请求已托管时，AI relay 主调用通过只受控制器截止时刻约束的上游 context 实施每用户总时长，浅拷贝 client 并移除共享 `Client.Timeout`，但继续复用同一 Transport/连接池。准备性调用继承同一个可取消 context，明确设置 `-1` 即允许关闭限制。总开关关闭、用户四项全为 `0` 或非 relay 调用时，完整保留共享 Client 的旧行为。
+功能开启且请求已托管时，AI relay 主调用通过只受控制器截止时刻约束的上游 context 实施每用户总时长，浅拷贝 client 并移除共享 `Client.Timeout`，但继续复用同一 Transport/连接池。准备性调用继承同一个可取消 context。总开关关闭或未托管调用时，完整保留共享 Client 的旧行为。
 
 仅非流式、仍在等待首字节的主上游请求安装首字节回调；受管请求（流式与非流式）的主上游请求另装 `WroteRequest` 回调，记录请求是否已完整写给上游（我方超时时据此决定是否计费，见 relay-timeout-cost-bearing.md §15）。未受管请求与非主调用不创建 trace。
 
@@ -145,7 +186,7 @@ NonStreamTotalTimeout    int `json:"non_stream_total_timeout" gorm:"type:int;not
 
 ## 9. Main Chain Impact
 
-同步热路径新增：鉴权沿用现有 `UserBase.WriteContext`，每个认证请求多写一个请求本地模式字符串到 Gin context，不增加 DB/Redis 调用；每请求仍只读取一次原子配置快照。只有提交类 controller 显式启动后，才读取四个缓存整数和一个模式字符串。四个时长字段全为 `0` 时立即返回，完全沿用旧超时链路；任一时长字段非 `0` 时，才判断流式模式并创建最多两个 Go runtime timer。响应包装器也只在该用户的新分支启动点安装，并通过原子指针一次性发布不可变的请求本地状态，不在每个分片上查询 Gin context；流式有效输出执行零分配行分类。`first_output` 模式在首次有效输出时用一次请求本地锁停止响应 timer，后续分片因原子状态已 settled 不再进入 timer 更新路径。`idle` 模式下每次有效输出进入一次请求本地短临界区更新 deadline 并 reset 既有 timer，不创建新 timer、不做 I/O。非流式首响应完成后使用原子 settled 状态跳过后续分片扫描。总开关关闭、用户四个时长字段全为 `0`，以及未调用启动点的 fetch/Realtime 请求均不包装 writer、不创建 timer。
+同步热路径：鉴权沿用现有 `UserBase.WriteContext`，不增加 DB/Redis 调用；每请求读取一次原子配置快照。controller 显式启动后读取当前模式两个整数和一个模式字符串，创建控制器和最多两个 Go runtime timer。响应包装器通过原子指针发布请求本地状态，不在每个分片上查询 Gin context；流式有效输出执行零分配行分类。`first_output` 首次有效输出停止响应 timer，后续分片不更新 timer；`idle` 每次有效输出进入请求本地短临界区更新 deadline 并 reset 既有 timer，不做 I/O。总开关关闭以及未调用启动点的 fetch/Realtime 等请求不包装 writer、不创建 timer。
 
 没有请求级 DB 查询、新 Redis 往返、分布式锁或无界 goroutine。超时处理不向计费链增加同步逻辑。Xunfei 使用原有每连接读取协程，但请求取消必定关闭连接并允许协程退出。
 
@@ -170,8 +211,8 @@ NonStreamTotalTimeout    int `json:"non_stream_total_timeout" gorm:"type:int;not
 - 新增 DB：`0 / 请求`；新增 Redis：`0 / 请求`；
 - 配置读取：`1 次 atomic load / 请求`；
 - 主动新增 goroutine：`0 / 请求`；timer 到期仅运行 Go runtime 短回调；
-- 鉴权 context：每个认证请求新增 `1` 次请求本地字符串写入；提交请求读取 `4` 个缓存整数和 `1` 个模式字符串；四个时长字段全为 `0` 时立即回到旧链路；
-- timer：最多 `2 / 已启用用户的活跃请求`；总开关关闭或用户四项全为 `0` 时为 `0`；
+- 鉴权 context：每个认证请求新增 `1` 次请求本地字符串写入；启动时读取当前模式 `2` 个整数和 `1` 个模式字符串；
+- timer：最多 `2 / 受管活跃请求`；总开关关闭或两个有效时长均为 `0` 时为 `0`；
 - 锁：仅请求本地控制器短临界区，不跨请求竞争，不持锁执行 I/O；
 - 流式有效输出仍做零分配扫描；`first_output` 首次有效输出停止响应 timer，后续有效输出不再更新 deadline 或 reset timer；`idle` 每次有效输出 reset 同一个响应 timer，成本为一次请求本地锁和一次 runtime timer reset。
 
@@ -180,14 +221,14 @@ NonStreamTotalTimeout    int `json:"non_stream_total_timeout" gorm:"type:int;not
 已覆盖：
 
 - 热配置三个字段的边界校验、保存后快照更新、环境变量启动回退；
-- 总开关关闭或用户四项全为 `0` 时不托管请求，原 HTTP Client/stream scanner 行为保留；
-- 四个用户字段任一非 `0` 时只为该用户启用新分支，其余 `0` 字段继承全局热配置；
-- 覆盖只作用于另一种模式、或全局默认为 `0` 导致当前模式两个值都解析为 `0` 时不托管，`RELAY_TIMEOUT` 与 `STREAMING_TIMEOUT` 保持生效；同样场景下用户显式填 `-1` 则照常托管且不装 timer；
+- 总开关关闭时不托管请求，原 HTTP Client/stream scanner 行为保留；
+- 四个用户字段全零或缺失时继承全局热配置；正数覆盖、`-1` 不限制；
+- 两个有效时长均为 `0` 时照常托管且不装 timer，不重新启用旧环境变量限制；
 - 四个用户字段的 `-1 / 0 / 正数 / 非法值` 和流式/非流式选择；
 - 响应 timer 与总时长 timer 独立、流式首次有效输出停止响应 timer、非流式重试重启；
 - `stream_response_timeout_mode=idle` 时，流式首次和后续有效输出会重置响应 timer，连续静默超过 `stream_response_timeout` 会以 `response_timeout` 终止；
 - `stream_response_timeout_mode=first_output` 时，保持首次有效输出后不再按静默断开的行为；
-- 仅修改 `stream_response_timeout_mode` 且四个时长字段全为 `0` 时，不托管请求，旧链路保持生效；
+- 仅修改 `stream_response_timeout_mode` 且四个时长字段全为 `0` 时，使用指定模式和全局默认时长；
 - SSE 注释/心跳/空行不停止或重置响应 timer；业务输出在 `first_output` 模式停止 timer，在 `idle` 模式重置 timer；
 - Midjourney 超时 `code` 保持整数；
 - HTTP 首字节 trace 只捕获请求本地 marker，不捕获可能被 Gin 池复用的 Context；

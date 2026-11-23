@@ -115,9 +115,17 @@ export function CacheGuidance(props: Props) {
                     variant='outline'
                     size='sm'
                     disabled={
-                      disabled || (kind !== 'memory' && props.pathChanged)
+                      disabled ||
+                      (kind !== 'memory' && props.pathChanged) ||
+                      (kind === 'memory' && recommendation.below_usage)
                     }
                     onClick={() => {
+                      if (
+                        kind === 'memory' &&
+                        recommendation.below_usage
+                      ) {
+                        return
+                      }
                       if (Date.now() - props.receivedAt < 30000 && !disabled) {
                         props.onApply(kind, value)
                       }

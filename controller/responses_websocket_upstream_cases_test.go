@@ -21,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -312,11 +313,11 @@ func (fixture *responsesWSBillingTest) closeAndWait(t *testing.T) {
 
 // waitPerfCounters waits for the asynchronous health samples of the fixture
 // model to reach wantRequests and returns the request and success counters.
-func waitPerfCounters(t *testing.T, wantRequests int64) (requests, successes int64) {
+func waitPerfCounters(t *testing.T, fixture *responsesWSBillingTest, wantRequests int64) (requests, successes int64) {
 	t.Helper()
 	require.Eventually(t, func() bool {
 		requests, successes = 0, 0
-		keys, err := common.RDB.Keys(context.Background(), "perf:ws-billing:*").Result()
+		keys, err := common.RDB.Keys(context.Background(), "perf:ws-billing:"+fixture.user.Group+":*").Result()
 		if err != nil {
 			return false
 		}
@@ -334,6 +335,10 @@ func waitPerfCounters(t *testing.T, wantRequests int64) (requests, successes int
 func newResponsesWSBillingTest(t *testing.T, expression string, handle func(*websocket.Conn, *http.Request), httpEvents ...string) *responsesWSBillingTest {
 	t.Helper()
 	user, token := setupResponsesWSRequestTest(t)
+	// Batched health samples outlive a fixture's Redis client. Isolate their
+	// model/group bucket as well as the database and Redis server.
+	user.Group = fmt.Sprintf("responses-ws-%d", user.Id)
+	require.NoError(t, model.DB.Model(user).Update("group", user.Group).Error)
 	previousTimeout := constant.StreamingTimeout
 	constant.StreamingTimeout = 30
 	t.Cleanup(func() { constant.StreamingTimeout = previousTimeout })
@@ -353,10 +358,12 @@ func newResponsesWSBillingTest(t *testing.T, expression string, handle func(*web
 	})
 	expressions, err := common.Marshal(map[string]string{"ws-billing": expression})
 	require.NoError(t, err)
+	groupRatios, err := common.Marshal(map[string]int{user.Group: 1})
+	require.NoError(t, err)
 	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
 		"billing_setting.billing_mode":    `{"ws-billing":"tiered_expr"}`,
 		"billing_setting.billing_expr":    string(expressions),
-		"group_ratio_setting.group_ratio": `{"default":1}`,
+		"group_ratio_setting.group_ratio": string(groupRatios),
 		"perf_metrics_setting.enabled":    "true",
 	}))
 	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Ability{}))
@@ -393,7 +400,7 @@ func newResponsesWSBillingTest(t *testing.T, expression string, handle func(*web
 		handle(ws, r)
 	}))
 	t.Cleanup(upstream.Close)
-	channel := &model.Channel{Name: "responses-ws-upstream", Key: "upstream-first\nupstream-second", Status: common.ChannelStatusEnabled, Type: constant.ChannelTypeOpenAI, Group: "default", Models: "ws-billing", BaseURL: &upstream.URL,
+	channel := &model.Channel{Name: "responses-ws-upstream", Key: "upstream-first\nupstream-second", Status: common.ChannelStatusEnabled, Type: constant.ChannelTypeOpenAI, Group: user.Group, Models: "ws-billing", BaseURL: &upstream.URL,
 		ChannelInfo: model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2, MultiKeyMode: constant.MultiKeyModePolling}}
 	modelMapping := `{"ws-billing":"gpt-4o"}`
 	channel.ModelMapping = &modelMapping
@@ -401,7 +408,7 @@ func newResponsesWSBillingTest(t *testing.T, expression string, handle func(*web
 	channel.SetOtherSettings(dto.ChannelOtherSettings{AllowServiceTier: true})
 	require.NoError(t, model.DB.Create(channel).Error)
 	fixture.channel = channel
-	require.NoError(t, model.DB.Create(&model.Ability{ChannelId: channel.Id, Model: "ws-billing", Group: "default", Enabled: true}).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{ChannelId: channel.Id, Model: "ws-billing", Group: user.Group, Enabled: true}).Error)
 	t.Cleanup(func() {
 		require.NoError(t, model.LOG_DB.Where("token_id = ?", token.Id).Delete(&model.Log{}).Error)
 		require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).Delete(&model.Ability{}).Error)
@@ -491,12 +498,12 @@ func TestResponsesInterruptedStreamHealth(t *testing.T) {
 			fixture.closeAndWait(t)
 			assertResponsesWSAccounting(t, fixture, []int{1000})
 			if scenario == "sse client cancel" {
-				keys, err := common.RDB.Keys(context.Background(), "perf:ws-billing:*").Result()
+				keys, err := common.RDB.Keys(context.Background(), "perf:ws-billing:"+fixture.user.Group+":*").Result()
 				require.NoError(t, err)
 				assert.Empty(t, keys, "client cancellation must not affect model health")
 				return
 			}
-			requests, successes := waitPerfCounters(t, 1)
+			requests, successes := waitPerfCounters(t, fixture, 1)
 			assert.Equal(t, int64(1), requests)
 			assert.Zero(t, successes)
 		})
@@ -749,7 +756,7 @@ func TestResponsesWebSocketDisconnectSettlesDeliveredOutputOnce(t *testing.T) {
 	assert.Equal(t, "hello", delta["delta"])
 	fixture.closeAndWait(t)
 	assertResponsesWSAccounting(t, fixture, []int{1})
-	keys, err := common.RDB.Keys(context.Background(), "perf:ws-billing:*").Result()
+	keys, err := common.RDB.Keys(context.Background(), "perf:ws-billing:"+fixture.user.Group+":*").Result()
 	require.NoError(t, err)
 	assert.Empty(t, keys, "client cancellation must not affect model health")
 }
@@ -1012,7 +1019,7 @@ func TestResponsesStreamOutcomesPreserveAccounting(t *testing.T) {
 				if tc.ignored {
 					expectedRequests--
 				}
-				requests, successes := waitPerfCounters(t, expectedRequests)
+				requests, successes := waitPerfCounters(t, fixture, expectedRequests)
 				assert.Equal(t, expectedRequests, requests)
 				assert.Equal(t, int64(1), successes)
 			})
@@ -1070,12 +1077,12 @@ func TestResponsesHTTPHealthCountsFinalResult(t *testing.T) {
 				assert.Equal(t, http.StatusOK, response.StatusCode)
 			}
 			if tc.ignored {
-				keys, err := common.RDB.Keys(context.Background(), "perf:ws-billing:*").Result()
+				keys, err := common.RDB.Keys(context.Background(), "perf:ws-billing:"+fixture.user.Group+":*").Result()
 				require.NoError(t, err)
 				assert.Empty(t, keys)
 				return
 			}
-			requests, successes := waitPerfCounters(t, 1)
+			requests, successes := waitPerfCounters(t, fixture, 1)
 			assert.Equal(t, int64(1), requests)
 			if tc.success {
 				assert.Equal(t, int64(1), successes)
@@ -1434,6 +1441,9 @@ func TestResponsesWebSocketPreRoutingRejectionsFollowHealthClassification(t *tes
 			fixture := newResponsesWSBillingTest(t, `tier("request", fixed(0.002))`, func(*websocket.Conn, *http.Request) {
 				t.Error("rejected request reached upstream")
 			})
+			// A pending sample from another fixture must not affect this
+			// request's classification when the shared Redis batch is flushed.
+			perfmetrics.Record(perfmetrics.Sample{Model: "ws-billing", Group: "previous-fixture", Success: true})
 			tc.reject(t, fixture)
 			require.NoError(t, fixture.client.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"ws-billing","input":"hi"}`)))
 			rejected := readResponsesWSTestEvent(t, fixture.client)
@@ -1442,12 +1452,12 @@ func TestResponsesWebSocketPreRoutingRejectionsFollowHealthClassification(t *tes
 			fixture.closeAndWait(t)
 			assertResponsesWSAccounting(t, fixture, nil)
 			if !tc.sampled {
-				keys, err := common.RDB.Keys(context.Background(), "perf:ws-billing:*").Result()
+				keys, err := common.RDB.Keys(context.Background(), "perf:ws-billing:"+fixture.user.Group+":*").Result()
 				require.NoError(t, err)
 				assert.Empty(t, keys, "a business rejection must not affect model health")
 				return
 			}
-			requests, successes := waitPerfCounters(t, 1)
+			requests, successes := waitPerfCounters(t, fixture, 1)
 			assert.Equal(t, int64(1), requests)
 			assert.Zero(t, successes)
 		})

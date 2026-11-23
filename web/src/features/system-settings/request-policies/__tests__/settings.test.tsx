@@ -267,10 +267,70 @@ afterEach(() => {
 })
 
 describe('request policy settings', () => {
+  it('only expands the legacy Claude value after an explicit choice', async () => {
+    settings['claude_stream_validation_setting.enabled'] = false
+    settings['stream_protocol_validation_setting.enabled'] = 'null'
+    vi.mocked(api.put).mockResolvedValue({ data: { success: true } })
+    await renderPolicies('/system-settings/request-policies/filtering')
+    const toggle = await screen.findByRole('switch', {
+      name: 'Stream protocol strict validation',
+    })
+    expect(toggle).toBeChecked()
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Disable for all protocols' })
+    )
+    expect(toggle).not.toBeChecked()
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith('/api/option/group', {
+        scope: 'request-policies.filtering',
+        module: 'stream_protocol_validation_setting',
+        values: { enabled: 'false' },
+      })
+    )
+  })
+  it('saves the Claude validation switch through the scoped settings API', async () => {
+    vi.mocked(api.put).mockResolvedValue({
+      data: { success: true, data: { applied: true } },
+    })
+    await renderPolicies('/system-settings/request-policies/filtering')
+    const toggle = await screen.findByRole('switch', {
+      name: 'Stream protocol strict validation',
+    })
+    expect(toggle).toBeChecked()
+    await userEvent.click(toggle)
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith('/api/option/group', {
+        scope: 'request-policies.filtering',
+        module: 'stream_protocol_validation_setting',
+        values: { enabled: 'false' },
+      })
+    )
+    expect(api.patch).not.toHaveBeenCalled()
+  })
+
+  it('keeps the Claude toggle editable after a rejected save', async () => {
+    vi.mocked(api.put).mockResolvedValue({
+      data: { success: false, message: 'Save rejected' },
+    })
+    await renderPolicies('/system-settings/request-policies/filtering')
+    const toggle = await screen.findByRole('switch', {
+      name: 'Stream protocol strict validation',
+    })
+    await userEvent.click(toggle)
+    const save = screen.getByRole('button', { name: 'Save' })
+    await userEvent.click(save)
+    await waitFor(() => expect(save).toBeEnabled())
+    expect(toggle).not.toBeChecked()
+    await userEvent.click(save)
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2))
+  })
+
   it.each([
     ['retry', 'Save Changes'],
     ['health', 'Save Changes'],
-    ['filtering', 'Save sensitive words'],
+    ['filtering', 'Save'],
     ['affinity', 'Save Changes'],
   ])(
     'opening %s and saving unchanged values does not write options',
@@ -325,9 +385,7 @@ describe('request policy settings', () => {
     expect(
       screen.getByRole('textbox', { name: 'Blocked keywords' })
     ).toHaveValue('blocked')
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Save sensitive words' })
-    )
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
       expect(api.patch).toHaveBeenCalledExactlyOnceWith(
         '/api/option/request_policy',

@@ -34,6 +34,7 @@ export function SystemTuningSettings() {
       getSectionContent={getSystemTuningSectionContent}
       getSectionMeta={getSystemTuningSectionMeta}
       loadingMessage='Loading runtime parameter settings...'
+      interactiveReadOnlySections={['relay-error-display']}
     />
   )
 }

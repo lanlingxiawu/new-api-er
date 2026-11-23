@@ -93,6 +93,9 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 		if relayInfo.ConversionDiagnosticsTruncated() {
 			other.SetAdmin("conversion_diagnostics_truncated", true)
 		}
+		if len(relayInfo.UpstreamExchanges) > 0 {
+			other.SetAdmin("upstream_exchange", relayInfo.UpstreamExchanges)
+		}
 	}
 	if common.GetContextKeyBool(ctx, constant.ContextKeyChannelIsMultiKey) {
 		other.SetAdmin("is_multi_key", true)
@@ -211,13 +214,15 @@ func appendStreamLogInfo(info *relaycommon.RelayInfo, other *model.LogOther, ref
 	if info.StreamResult == nil && info.StreamDiagnostic == nil && info.StreamRejectReason == "" {
 		return
 	}
-	diagnostic := info.StreamDiagnostic.Snapshot()
-	if info.StreamStatus != nil && info.StreamStatus.EndError != nil {
-		diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(info.StreamStatus.EndError)
-	}
+	var diagnostic relaycommon.StreamDiagnostic
 	if info.StreamResult != nil {
 		other.SetPublic("stream_result", info.StreamResult)
 		diagnostic = info.StreamResult.Diagnostic
+	} else {
+		diagnostic = info.StreamDiagnostic.Snapshot()
+		if info.StreamStatus != nil && info.StreamStatus.EndError != nil {
+			diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(info.StreamStatus.EndError)
+		}
 	}
 	// Cleanup and WebSocket reader completion can follow the outcome snapshot.
 	// Copy only observation metadata; preserve finalized usage and billing evidence.
@@ -231,6 +236,24 @@ func appendStreamLogInfo(info *relaycommon.RelayInfo, other *model.LogOther, ref
 		other.SetAdmin("reject_reason", diagnostic.RejectReason)
 	}
 	available := info.StreamResult != nil && info.StreamResult.DiagnosticAvailable
+	if info.UseStreamErrors() {
+		other.SetAdmin("stream_protocol_validation", info.StreamValidationPolicy)
+		other.SetAdmin("stream_processing_owner", info.StreamProcessingOwner)
+	}
+	if info.ClaudeStreamPolicyApplied {
+		other.SetAdmin("claude_stream_validation", !info.ClaudeStreamMainMode)
+		other.SetAdmin("claude_stream_validation_source", info.ClaudeStreamValidationSource)
+	}
+	if info.MainStreamMode() || info.StreamProcessingOwner == relaycommon.StreamOwnerNotApplicable {
+		upstreamFailure := false
+		if diagnostic.Termination != nil && diagnostic.Termination.FirstObserved != nil {
+			first := diagnostic.Termination.FirstObserved
+			upstreamFailure = first.Side == "upstream" || (first.Side == "gateway" && first.Operation == "timeout")
+		}
+		available = info.StreamDiagnostic != nil && (upstreamFailure || diagnostic.RejectReason != "" ||
+			(info.StreamStatus.ResponseOutcome() != "" && info.StreamStatus.ResponseOutcome() != string(relaycommon.ResponseOutcomeCompleted)) ||
+			(info.StreamFinalUsage != nil && info.StreamFinalUsage.CompletionTokens == 0))
+	}
 	if available {
 		other.SetPublic("stream_diagnostic_available", true)
 		// 终止 error 可能晚于结果快照写出；日志入队前取得当前正文，避免漏掉补发帧。
@@ -288,17 +311,22 @@ func AppendStreamErrorDiagnostic(c *gin.Context, other *model.LogOther, err erro
 	if capture == nil && reject == "" && !available {
 		return
 	}
-	capture.SetError(err)
 	if capture != nil {
 		capture.Termination.ObserveContext()
 	}
 	diagnostic := capture.Snapshot()
+	if diagnostic.Error == "" && err != nil {
+		// Error-log wrappers are fallback text, not a replacement for the
+		// transport/parser cause already captured by this attempt.
+		capture.SetError(err)
+		diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(err)
+	}
 	if finalized != nil {
 		// Settlement already selected confirmed/estimated usage and its first
 		// terminal cause. A later error attachment must not replace that evidence
 		// with the capture's transport-only snapshot.
 		diagnostic = finalized.Diagnostic
-	} else if session != nil {
+	} else if session != nil && session.ValidationEnabled() {
 		snapshot := session.Snapshot()
 		diagnostic.DeliveryEvidence = snapshot.DeliveryEvidence()
 		diagnostic.UsageEvidence = snapshot.Evidence
@@ -312,7 +340,7 @@ func AppendStreamErrorDiagnostic(c *gin.Context, other *model.LogOther, err erro
 		diagnostic.DownstreamBodyBase64 = capture.DownstreamBody()
 		// 即使采集器缺失也保留错误与尝试编号，使无 body 的诊断可以定位。
 		diagnostic.Attempt = c.GetInt(relaycommon.StreamDiagnosticAttemptKey)
-		if err != nil && finalized == nil {
+		if err != nil && finalized == nil && diagnostic.Error == "" {
 			diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(err)
 		}
 	}
@@ -489,12 +517,15 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other *model.LogOther)
 	// says enough there; the server log keeps the text.
 	privateErrors := relayInfo.RelayFormat == types.RelayFormatClaude || relayInfo.StreamDiagnostic != nil || relayInfo.StreamResult != nil || relayInfo.UpstreamStreamAdapted
 	status := "ok"
-	if !ss.IsNormalEnd() || ss.HasErrors() || ss.ResponseFailed() {
+	if (!ss.IsNormalEnd() && !(relayInfo.MainStreamMode() && ss.EndReason == "")) || ss.EndError != nil || ss.HasErrors() || ss.ResponseFailed() {
 		status = "error"
 	}
 	streamInfo := map[string]any{
 		"status":     status,
 		"end_reason": string(ss.EndReason),
+	}
+	if relayInfo.MainStreamMode() && ss.EndReason == "" {
+		delete(streamInfo, "end_reason")
 	}
 	if outcome := ss.ResponseOutcome(); outcome != "" {
 		streamInfo["response_status"] = outcome

@@ -81,3 +81,30 @@ func TestValidateRelayErrorDisplayFields(t *testing.T) {
 	assert.Error(t, validateRelayErrorDisplayFields(map[string]string{"enabled": "maybe"}))
 	assert.Error(t, validateRelayErrorDisplayFields(map[string]string{"hide_upstream_errors": "2"}))
 }
+
+func TestSaveConfigGroup_RelayErrorDisplayGroupsPersistAndValidateChanges(t *testing.T) {
+	withRelayErrorDisplayRestore(t)
+	rules := `[{"groups":["vip"],"source":"any","action":"replace","message":"Busy"}]`
+	applied, err := SaveConfigGroup("relay_error_display_setting", map[string]string{"enabled": "true", "hide_upstream_errors": "false", "rules": rules})
+	require.NoError(t, err)
+	require.True(t, applied)
+	var stored Option
+	require.NoError(t, DB.Where(commonKeyCol+" = ?", "relay_error_display_setting.rules").First(&stored).Error)
+	require.Equal(t, rules, stored.Value)
+	assert.True(t, operation_setting.DecideRelayError(operation_setting.RelayErrorInput{Group: "vip", Message: "failure"}).Replace)
+	assert.False(t, operation_setting.DecideRelayError(operation_setting.RelayErrorInput{Group: "default", Message: "failure"}).Replace)
+	live := operation_setting.GetRelayErrorDisplaySetting()
+	// Re-publish from persisted JSON, as a settings reload does.
+	live.Rules = stored.Value
+	operation_setting.ReplaceRelayErrorDisplaySetting(live)
+	assert.True(t, operation_setting.DecideRelayError(operation_setting.RelayErrorInput{Group: "vip", Message: "failure"}).Replace)
+	assert.False(t, operation_setting.DecideRelayError(operation_setting.RelayErrorInput{Group: "default", Message: "failure"}).Replace)
+	invalid := `[{"groups":["auto"],"source":"any","action":"replace","message":"Busy"}]`
+	assert.ErrorIs(t, validateOptionValue("relay_error_display_setting.rules", invalid), operation_setting.ErrRelayErrorDisplayInvalid)
+	applied, err = SaveConfigGroup("relay_error_display_setting", map[string]string{"rules": invalid})
+	assert.False(t, applied)
+	assert.ErrorIs(t, err, operation_setting.ErrRelayErrorDisplayInvalid, "a change to groups alone must be validated")
+	assert.Equal(t, live, operation_setting.GetRelayErrorDisplaySetting())
+	require.NoError(t, DB.Where(commonKeyCol+" = ?", "relay_error_display_setting.rules").First(&stored).Error)
+	assert.Equal(t, rules, stored.Value)
+}

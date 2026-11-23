@@ -232,7 +232,7 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 		// set specific parameters for different models
 		// https://ai.google.dev/api/embeddings?hl=zh-cn#method:-models.embedcontent
 		switch info.UpstreamModelName {
-		case "text-embedding-004", "gemini-embedding-exp-03-07", "gemini-embedding-001":
+		case "text-embedding-004", "gemini-embedding-exp-03-07", "gemini-embedding-001", "gemini-embedding-2", "gemini-embedding-2-preview":
 			// Only newer models introduced after 2024 support OutputDimensionality
 			dimensions := lo.FromPtrOr(request.Dimensions, 0)
 			if dimensions > 0 {

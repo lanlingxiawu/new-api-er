@@ -18,12 +18,22 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, Loader2 } from 'lucide-react'
-import { Fragment, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { ErrorState } from '@/components/error-state'
 import { Button } from '@/components/ui/button'
+import { Field, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SettingsSwitchField } from '@/features/system-settings/components/settings-form-layout'
 import { useSettingsSaveConfirmation } from '@/features/system-settings/components/settings-save-confirmation'
@@ -52,64 +62,69 @@ const PROFILE_LABEL_KEYS: Record<string, string> = {
   trace: 'Execution trace',
 }
 
-function ProfileButton(props: {
-  label: string
-  raw: string
-  loading: boolean
-  disabled: boolean
-  onClick: () => void
-}) {
-  return (
-    <Button
-      size='sm'
-      variant='outline'
-      disabled={props.disabled}
-      onClick={props.onClick}
-    >
-      {props.loading ? (
-        <Loader2 className='size-3.5 animate-spin' />
-      ) : (
-        <Download className='size-3.5' />
-      )}
-      {props.label}
-      <span className='text-muted-foreground font-mono text-[11px]'>
-        {props.raw}
-      </span>
-    </Button>
-  )
-}
-
 /**
  * pprof 开关 + profile 下载。开关即时生效（单个布尔值，没必要攒着一起保存），
  * 下载按钮读的是服务端真实状态而不是表单值。
  */
-export function ProfilingControls() {
+export function ProfilingControls({ active = true }: { active?: boolean }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   // Profiling is root-only, outside the delegated performance settings scope.
   const updateOption = useUpdateOption('')
   const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [seconds, setSeconds] = useState('30')
+  const [profile, setProfile] = useState('profile')
+  const profileId = useId()
+  const secondsId = useId()
+  const downloadInFlight = useRef(false)
+  const toggleInFlight = useRef(false)
 
   const statusQuery = useQuery({
     queryKey: ['profiling', 'status'],
     queryFn: getPprofStatus,
+    enabled: active,
   })
 
   const status = statusQuery.data?.data
   const enabled = status?.enabled ?? false
-  const profiles = status?.profiles ?? []
+  const profiles = (status?.profiles ?? []).flatMap((name) =>
+    name === 'goroutine' ? [name, GOROUTINE_TEXT_KEY] : [name]
+  )
+  const selectedProfile = profiles.includes(profile)
+    ? profile
+    : (profiles[0] ?? '')
+  const profileItems = profiles.map((value) => ({
+    value,
+    label:
+      value === GOROUTINE_TEXT_KEY
+        ? t('Goroutine text')
+        : t(PROFILE_LABEL_KEYS[value] ?? value),
+  }))
 
   const toggle = async (checked: boolean) => {
-    if (checked === enabled) return
-
-    await requestSaveConfirmation(async () => {
-      await updateOption.mutateAsync({
-        key: 'pprof_setting.enabled',
-        value: checked,
+    if (
+      !status ||
+      statusQuery.isError ||
+      checked === enabled ||
+      toggleInFlight.current ||
+      downloadInFlight.current
+    ) {
+      return
+    }
+    toggleInFlight.current = true
+    try {
+      await requestSaveConfirmation(async () => {
+        await updateOption.mutateAsync({
+          key: 'pprof_setting.enabled',
+          value: checked,
+        })
+        await queryClient.invalidateQueries({
+          queryKey: ['profiling', 'status'],
+        })
       })
-      await queryClient.invalidateQueries({ queryKey: ['profiling', 'status'] })
-    })
+    } finally {
+      toggleInFlight.current = false
+    }
   }
 
   // key 用 profile 名，但 goroutine 文本变体用合成 key 'goroutine:text' 区分，
@@ -119,24 +134,37 @@ export function ProfilingControls() {
       if (key === GOROUTINE_TEXT_KEY) {
         return downloadProfile('goroutine', { debug: 2 })
       }
-      const value = NEEDS_SECONDS.has(key) ? Number(seconds) || 30 : undefined
+      const value = NEEDS_SECONDS.has(key) ? Number(seconds) : undefined
       return downloadProfile(key, { seconds: value })
     },
     onError: (error: Error) => toast.error(error.message),
+    onSettled: () => {
+      downloadInFlight.current = false
+    },
   })
 
   const startDownload = (key: string) => {
+    if (
+      !enabled ||
+      statusQuery.isError ||
+      !profiles.includes(key) ||
+      downloadInFlight.current ||
+      toggleInFlight.current
+    ) {
+      return
+    }
     if (NEEDS_SECONDS.has(key)) {
       const value = Number(seconds)
-      if (!Number.isFinite(value) || value <= 0 || value > MAX_SECONDS) {
+      if (!Number.isInteger(value) || value <= 0 || value > MAX_SECONDS) {
         toast.error(
-          t('Sampling duration can be at most {{max}} seconds', {
+          t('Enter a whole number of seconds between 1 and {{max}}', {
             max: MAX_SECONDS,
           })
         )
         return
       }
     }
+    downloadInFlight.current = true
     download.mutate(key)
   }
 
@@ -144,20 +172,21 @@ export function ProfilingControls() {
     <div className='space-y-4'>
       <div>
         <h4 className='font-medium'>{t('Profiling (pprof)')}</h4>
-        <p className='text-muted-foreground mt-1 text-xs'>
-          {t(
-            'Download Go pprof profiles for offline analysis with go tool pprof. Takes effect immediately, no restart.'
-          )}
-        </p>
       </div>
 
-      {statusQuery.isLoading ? (
-        <Skeleton className='h-[104px] w-full' />
-      ) : (
+      {statusQuery.isLoading && <Skeleton className='h-[104px] w-full' />}
+      {!statusQuery.isLoading && statusQuery.isError && (
+        <ErrorState
+          className='min-h-36'
+          title={t('Failed to load profiling status')}
+          onRetry={() => void statusQuery.refetch()}
+        />
+      )}
+      {!statusQuery.isLoading && !statusQuery.isError && (
         <>
           <SettingsSwitchField
             checked={enabled}
-            disabled={updateOption.isPending}
+            disabled={updateOption.isPending || download.isPending || !status}
             onCheckedChange={toggle}
             label={t('Enable profiling downloads')}
             description={t(
@@ -166,48 +195,78 @@ export function ProfilingControls() {
           />
 
           <div className='space-y-2'>
-            <div className='flex flex-wrap items-center gap-2'>
-              <Input
-                type='number'
-                min={1}
-                max={MAX_SECONDS}
-                value={seconds}
-                onChange={(event) => setSeconds(event.target.value)}
-                className='w-24'
-                disabled={!enabled}
-                aria-label={t('CPU / trace sampling seconds')}
-              />
-              {profiles.map((name) => {
-                const labelKey = PROFILE_LABEL_KEYS[name]
-                const label = labelKey ? t(labelKey) : name
-                return (
-                  <Fragment key={name}>
-                    <ProfileButton
-                      label={label}
-                      raw={name}
-                      loading={
-                        download.isPending && download.variables === name
-                      }
-                      disabled={!enabled || download.isPending}
-                      onClick={() => startDownload(name)}
-                    />
-                    {/* goroutine 额外给一个文本格式：?debug=2 输出可读全栈，
-                        排查"某几个协程卡死"时比 protobuf 直观 */}
-                    {name === 'goroutine' ? (
-                      <ProfileButton
-                        label={t('Goroutine text')}
-                        raw='debug=2'
-                        loading={
-                          download.isPending &&
-                          download.variables === GOROUTINE_TEXT_KEY
-                        }
-                        disabled={!enabled || download.isPending}
-                        onClick={() => startDownload(GOROUTINE_TEXT_KEY)}
-                      />
-                    ) : null}
-                  </Fragment>
-                )
-              })}
+            <div className='flex flex-col gap-3 sm:flex-row sm:items-end'>
+              <Field className='min-w-0 sm:flex-1'>
+                <FieldLabel htmlFor={profileId}>{t('Profile type')}</FieldLabel>
+                <Select
+                  items={profileItems}
+                  value={selectedProfile}
+                  onValueChange={(value) => {
+                    if (value) setProfile(value)
+                  }}
+                  disabled={
+                    !enabled || download.isPending || updateOption.isPending
+                  }
+                >
+                  <SelectTrigger id={profileId}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {profileItems.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          <span>{item.label}</span>
+                          <span className='text-muted-foreground font-mono text-xs'>
+                            {item.value === GOROUTINE_TEXT_KEY
+                              ? 'debug=2'
+                              : item.value}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              {NEEDS_SECONDS.has(selectedProfile) && (
+                <Field className='sm:w-36'>
+                  <FieldLabel htmlFor={secondsId}>
+                    {t('Sampling seconds')}
+                  </FieldLabel>
+                  <Input
+                    id={secondsId}
+                    type='number'
+                    min={1}
+                    max={MAX_SECONDS}
+                    step={1}
+                    value={seconds}
+                    onChange={(event) => setSeconds(event.target.value)}
+                    disabled={
+                      !enabled || download.isPending || updateOption.isPending
+                    }
+                  />
+                </Field>
+              )}
+              <Button
+                type='button'
+                variant='outline'
+                disabled={
+                  !enabled ||
+                  !selectedProfile ||
+                  download.isPending ||
+                  updateOption.isPending
+                }
+                onClick={() => startDownload(selectedProfile)}
+                aria-busy={download.isPending}
+              >
+                {download.isPending ? (
+                  <Loader2 className='animate-spin' />
+                ) : (
+                  <Download />
+                )}
+                {download.isPending
+                  ? t('Preparing download...')
+                  : t('Download')}
+              </Button>
             </div>
             <p className='text-muted-foreground text-xs'>
               {t(

@@ -1,10 +1,12 @@
 package cohere
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -15,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
@@ -105,21 +108,38 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		return 0, nil, nil
 	})
 	dataChan := make(chan string)
-	stopChan := make(chan bool)
-	go func() {
+	stopChan := make(chan struct{})
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	var cleanupOnce sync.Once
+	cleanup := func() {
+		cleanupOnce.Do(func() {
+			cancel()
+			_ = resp.Body.Close()
+			<-stopChan
+		})
+	}
+	defer cleanup()
+	gopool.Go(func() {
+		defer close(stopChan)
 		for scanner.Scan() {
 			data := scanner.Text()
-			dataChan <- data
+			select {
+			case dataChan <- data:
+			case <-ctx.Done():
+				return
+			}
 		}
-		if err := scanner.Err(); err != nil {
+		if err := scanner.Err(); err != nil && ctx.Err() == nil {
+			info.StreamSession.EndRead(err)
 			logger.LogLegacyStreamError(c, "error reading stream: "+err.Error())
 		}
-		stopChan <- true
-	}()
+	})
 	helper.SetEventStreamHeaders(c)
 	isFirst := true
 	c.Stream(func(w io.Writer) bool {
 		select {
+		case <-ctx.Done():
+			return false
 		case data := <-dataChan:
 			if isFirst {
 				isFirst = false
@@ -129,6 +149,7 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			var cohereResp CohereResponse
 			err := json.Unmarshal([]byte(data), &cohereResp)
 			if err != nil {
+				info.StreamSession.Fail("upstream_json_error", err)
 				logger.LogLegacyStreamError(c, "error unmarshalling stream response: "+err.Error())
 				return true
 			}
@@ -166,6 +187,7 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			}
 			jsonStr, err := json.Marshal(openaiResp)
 			if err != nil {
+				info.StreamSession.Fail("response_conversion_error", err)
 				logger.LogLegacyStreamError(c, "error marshalling stream response: "+err.Error())
 				return true
 			}

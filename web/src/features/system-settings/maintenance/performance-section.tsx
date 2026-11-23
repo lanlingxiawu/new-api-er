@@ -18,25 +18,16 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
 
-import { StatusBadge } from '@/components/status-badge'
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import { ErrorState } from '@/components/error-state'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -48,9 +39,10 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { Progress } from '@/components/ui/progress'
-import { Separator } from '@/components/ui/separator'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ProfilingControls } from '@/features/profiling/components/profiling-controls'
 import { api } from '@/lib/api'
 import { handleServerError } from '@/lib/handle-server-error'
@@ -69,7 +61,9 @@ import { useSettingsSaveConfirmation } from '../components/settings-save-confirm
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { safeNumberFieldProps } from '../utils/numeric-field'
-import { CacheGuidance, type CacheGuidanceData } from './cache-guidance'
+import { CacheGuidance } from './cache-guidance'
+import { PerformanceOverview } from './performance-overview'
+import { formatBytes, type PerformanceStats } from './performance-stats'
 
 /**
  * IMPORTANT: react-hook-form 7 interprets dotted `name` strings as nested
@@ -155,59 +149,8 @@ const normalizeFormValues = (values: PerfFormValues): FlatPerfDefaults => ({
     values.performance_setting.monitor_disk_threshold,
 })
 
-function formatBytes(bytes: number, decimals = 2): string {
-  if (!bytes || Number.isNaN(bytes)) return '0 Bytes'
-  if (bytes === 0) return '0 Bytes'
-  if (bytes < 0) return `-${formatBytes(-bytes, decimals)}`
-  const k = 1024
-  const sizes = ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB']
-  const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k))
-  if (i < 0 || i >= sizes.length) return `${bytes} Bytes`
-  return `${Number.parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${
-    sizes[i]
-  }`
-}
-
 interface Props {
   defaultValues: FlatPerfDefaults
-}
-
-type PerformanceStats = {
-  guidance?: CacheGuidanceData
-  cache_stats?: {
-    body_memory_reserved_bytes: number
-    body_capacity_rejects: number
-    disk_reserved_bytes: number
-    current_disk_usage_bytes: number
-    disk_cache_max_bytes: number
-    active_disk_files: number
-    disk_cache_hits: number
-    current_memory_usage_bytes: number
-    active_memory_buffers: number
-    memory_cache_hits: number
-  }
-  disk_space_info?: {
-    total: number
-    free: number
-    used: number
-    used_percent: number
-  }
-  memory_stats?: {
-    alloc: number
-    total_alloc: number
-    sys: number
-    num_gc: number
-    num_goroutine: number
-  }
-  disk_cache_info?: {
-    path: string
-    file_count: number
-    total_size: number
-  }
-  config?: {
-    is_running_in_container: boolean
-    disk_cache_path: string
-  }
 }
 
 export function PerformanceSection(props: Props) {
@@ -222,7 +165,16 @@ export function PerformanceSection(props: Props) {
   const isRoot = useAuthStore(
     (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
   )
+  const [activeTab, setActiveTab] = useState('overview')
+  const [diagnosticsVisited, setDiagnosticsVisited] = useState(false)
+  const [resetOpen, setResetOpen] = useState(false)
+  const [maintenancePending, setMaintenancePending] = useState<
+    'cleanup' | 'reset' | 'gc' | null
+  >(null)
+  const maintenanceInFlight = useRef(false)
   const [statsLoading, setStatsLoading] = useState(false)
+  const [cleanupOpen, setCleanupOpen] = useState(false)
+  const [cleanupPending, setCleanupPending] = useState(false)
   const [statsFailed, setStatsFailed] = useState(false)
   const [receivedAt, setReceivedAt] = useState(0)
   const statsRequest = useRef(0)
@@ -330,34 +282,53 @@ export function PerformanceSection(props: Props) {
   }
 
   const clearDiskCache = async () => {
+    if (!canEdit || maintenanceInFlight.current) return
+    maintenanceInFlight.current = true
+    setMaintenancePending('cleanup')
+    setCleanupPending(true)
     try {
       const res = await api.delete('/api/performance/disk_cache')
       if (res.data.success) {
         toast.success(t('Disk cache cleared'))
+        setCleanupOpen(false)
         fetchStats()
       } else {
         handleServerError(res.data)
       }
     } catch (error) {
       handleServerError(error, t('Cleanup failed'))
+    } finally {
+      maintenanceInFlight.current = false
+      setMaintenancePending(null)
+      setCleanupPending(false)
     }
   }
 
   const resetStats = async () => {
+    if (!canEdit || maintenanceInFlight.current) return
+    maintenanceInFlight.current = true
+    setMaintenancePending('reset')
     try {
       const res = await api.post('/api/performance/reset_stats')
       if (res.data.success) {
         toast.success(t('Statistics reset'))
+        setResetOpen(false)
         fetchStats()
       } else {
         handleServerError(res.data)
       }
     } catch (error) {
       handleServerError(error, t('Reset failed'))
+    } finally {
+      maintenanceInFlight.current = false
+      setMaintenancePending(null)
     }
   }
 
   const forceGC = async () => {
+    if (!canEdit || maintenanceInFlight.current) return
+    maintenanceInFlight.current = true
+    setMaintenancePending('gc')
     try {
       const res = await api.post('/api/performance/gc')
       if (res.data.success) {
@@ -368,6 +339,9 @@ export function PerformanceSection(props: Props) {
       }
     } catch (error) {
       handleServerError(error, t('GC execution failed'))
+    } finally {
+      maintenanceInFlight.current = false
+      setMaintenancePending(null)
     }
   }
 
@@ -388,525 +362,497 @@ export function PerformanceSection(props: Props) {
     maxCacheSizeMb > 0 &&
     stats.disk_space_info.free < maxCacheSizeMb * 1024 * 1024
 
-  const diskCachePercent =
-    stats?.cache_stats?.disk_cache_max_bytes &&
-    stats.cache_stats.disk_cache_max_bytes > 0
-      ? Math.round(
-          (stats.cache_stats.current_disk_usage_bytes /
-            stats.cache_stats.disk_cache_max_bytes) *
-            100
-        )
-      : 0
-
   return (
     <SettingsSection
       title={t('Performance Settings')}
       className='w-full min-w-0'
     >
-      <Form {...form}>
-        <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
-          <SettingsPageFormActions
-            onSave={form.handleSubmit(onSubmit)}
-            isSaving={updateOption.isPending}
-          />
-          {/* Disk Cache Settings */}
-          <div>
-            <h4 className='font-medium'>{t('Disk Cache Settings')}</h4>
-            <p className='text-muted-foreground mt-1 text-xs'>
-              {t(
-                'Request bodies are kept for forwarding and retries, then released when requests finish. This is not model prompt caching and does not change upstream cache-token billing.'
-              )}
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => {
+          setActiveTab(String(value))
+          if (value === 'diagnostics') setDiagnosticsVisited(true)
+        }}
+        className='gap-5'
+      >
+        <div className='flex flex-wrap items-center justify-between gap-2'>
+          <div className='max-w-full min-w-0 overflow-x-auto overflow-y-hidden pb-1'>
+            <TabsList className='min-h-9 w-max'>
+              <TabsTrigger value='overview'>
+                {t('Runtime overview')}
+              </TabsTrigger>
+              <TabsTrigger value='configuration'>
+                {t('Cache & protection')}
+              </TabsTrigger>
+              <TabsTrigger value='diagnostics'>
+                {t('Diagnostics & maintenance')}
+              </TabsTrigger>
+            </TabsList>
+          </div>
+          {form.formState.isDirty && (
+            <span className='text-muted-foreground text-xs'>
+              {t('Unsaved changes')}
+            </span>
+          )}
+        </div>
+        <TabsContent value='overview' className='space-y-4'>
+          <div className='flex flex-wrap items-center justify-between gap-2'>
+            <p className='text-muted-foreground text-xs' role='status'>
+              {receivedAt > 0
+                ? t('Updated at {{time}}', {
+                    time: new Date(receivedAt).toLocaleTimeString(),
+                  })
+                : t('Performance Monitor')}
             </p>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={fetchStats}
+              disabled={statsLoading}
+            >
+              <RefreshCw
+                className={statsLoading ? 'animate-spin' : undefined}
+              />
+              {t('Refresh Stats')}
+            </Button>
           </div>
-
-          <div className='grid grid-cols-1 items-start gap-x-6 gap-y-4 md:grid-cols-2'>
-            <FormField
-              control={form.control}
-              name='performance_setting.body_governance_enabled'
-              render={({ field }) => (
-                <SettingsSwitchItem className='max-w-sm self-start'>
-                  <SettingsSwitchContent>
-                    <FormLabel>{t('Enable body cache protection')}</FormLabel>
-                  </SettingsSwitchContent>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                      disabled={!canEdit}
-                    />
-                  </FormControl>
-                </SettingsSwitchItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name='performance_setting.body_memory_budget_mb'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Body memory budget (MiB)')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={0}
-                      step={1}
-                      {...safeNumberFieldProps(field)}
-                      disabled={!canEdit}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'Limits reserved body-cache buffers, not total process memory. When capacity is exhausted, new allocations may be rejected; active requests are not cleared.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-          <div className='grid grid-cols-1 items-start gap-x-6 gap-y-4 md:grid-cols-2'>
-            <FormField
-              control={form.control}
-              name='performance_setting.disk_cache_enabled'
-              render={({ field }) => (
-                <SettingsSwitchItem className='max-w-sm md:col-span-2'>
-                  <SettingsSwitchContent>
-                    <FormLabel>{t('Enable Disk Cache')}</FormLabel>
-                  </SettingsSwitchContent>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </SettingsSwitchItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name='performance_setting.disk_cache_threshold_mb'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Disk cache threshold (MiB)')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={1}
-                      step={1}
-                      {...safeNumberFieldProps(field)}
-                      disabled={!diskEnabled}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'Bodies reaching this size use disk. Lower values reduce retained memory but increase disk I/O. Units are MiB (1024 KiB).'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name='performance_setting.disk_cache_max_size_mb'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Disk cache budget (MiB)')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={100}
-                      step={1}
-                      {...safeNumberFieldProps(field)}
-                      disabled={!diskEnabled}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'Leave space for databases, logs and files left by previous processes.'
-                    )}
-                  </FormDescription>
-                  {stats?.disk_space_info &&
-                    stats.disk_space_info.total > 0 && (
-                      <FormDescription>
-                        {t('Free: {{free}} / Total: {{total}}', {
-                          free: formatBytes(stats.disk_space_info.free),
-                          total: formatBytes(stats.disk_space_info.total),
-                        })}
-                      </FormDescription>
-                    )}
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-
-          {lowDiskSpace && (
+          {statsFailed && stats && (
             <Alert variant='destructive'>
               <AlertDescription>
-                {`${t('Warning')}: ${t('Available disk space')} (${formatBytes(stats?.disk_space_info?.free ?? 0)}) ${t('is less than the configured maximum cache size')} (${maxCacheSizeMb} MB). ${t('This may cause cache failures.')}`}
+                {t('Refresh failed. Showing the last available data.')}
               </AlertDescription>
             </Alert>
           )}
-
-          {!stats?.config?.is_running_in_container && (
-            <FormField
-              control={form.control}
-              name='performance_setting.disk_cache_path'
-              render={({ field }) => (
-                <FormItem className='max-w-md'>
-                  <FormLabel>{t('Cache Directory')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder={t(
-                        'Leave empty to use system temp directory'
-                      )}
-                      value={field.value ?? ''}
-                      onChange={(event) => field.onChange(event.target.value)}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      ref={field.ref}
-                      disabled={!diskEnabled}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
+          {!stats && statsFailed && (
+            <ErrorState
+              title={t('Failed to load performance data')}
+              onRetry={fetchStats}
             />
           )}
-
-          <p className='text-muted-foreground max-w-3xl text-xs leading-relaxed'>
-            {t(
-              'With disk cache enabled, memory allocation failures can spill to disk. If the read buffer or disk capacity is unavailable, the request is rejected.'
-            )}
-          </p>
-          <CacheGuidance
-            guidance={stats?.guidance}
-            receivedAt={receivedAt}
-            loading={statsLoading}
-            failed={statsFailed}
-            canEdit={canEdit}
-            pathChanged={
-              form.watch('performance_setting.disk_cache_path') !==
-              (stats?.config?.disk_cache_path ??
-                baselineRef.current['performance_setting.disk_cache_path'])
-            }
-            onRefresh={fetchStats}
-            onApply={(kind, value) => {
-              const fields = {
-                memory: 'body_memory_budget_mb',
-                disk: 'disk_cache_max_size_mb',
-                threshold: 'disk_cache_threshold_mb',
-              } as const
-              form.setValue(`performance_setting.${fields[kind]}`, value, {
-                shouldDirty: true,
-                shouldValidate: true,
-              })
-            }}
-          />
-
-          <Separator />
-
-          {/* System Performance Monitor */}
-          <div>
-            <h4 className='font-medium'>
-              {t('System Performance Monitoring')}
-            </h4>
-            <p className='text-muted-foreground mt-1 text-xs'>
-              {t(
-                'When performance monitoring is enabled and system resource usage exceeds the set threshold, new Relay requests will be rejected.'
-              )}
-            </p>
-          </div>
-
-          <div className='grid grid-cols-1 items-start gap-x-6 gap-y-4 md:grid-cols-3'>
-            <FormField
-              control={form.control}
-              name='performance_setting.monitor_enabled'
-              render={({ field }) => (
-                <SettingsSwitchItem className='max-w-sm md:col-span-3'>
-                  <SettingsSwitchContent>
-                    <FormLabel>{t('Enable Performance Monitoring')}</FormLabel>
-                  </SettingsSwitchContent>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </SettingsSwitchItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name='performance_setting.monitor_cpu_threshold'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('CPU Threshold (%)')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={0}
-                      step={1}
-                      {...safeNumberFieldProps(field)}
-                      disabled={!monitorEnabled}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name='performance_setting.monitor_memory_threshold'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Memory Threshold (%)')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={0}
-                      max={100}
-                      step={1}
-                      {...safeNumberFieldProps(field)}
-                      disabled={!monitorEnabled}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'System memory usage threshold, not the body-cache budget. This does not guarantee prevention of OOM.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name='performance_setting.monitor_disk_threshold'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Disk Threshold (%)')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={0}
-                      max={100}
-                      step={1}
-                      {...safeNumberFieldProps(field)}
-                      disabled={!monitorEnabled}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-        </SettingsForm>
-      </Form>
-
-      {/* pprof 开关与 profile 下载：开关即时生效，不跟随上方表单的保存按钮。
-          heap/goroutine dump 可能带出内存中的上游凭据与用户数据，仅对 root 可见，
-          普通管理员即使拥有性能设置权限也不渲染该区域、不请求 pprof 状态接口。 */}
-      {isRoot && (
-        <>
-          <Separator />
-          <ProfilingControls />
-        </>
-      )}
-
-      <Separator />
-
-      {/* Performance Stats Dashboard */}
-      <div className='space-y-4'>
-        <div className='flex items-center gap-2'>
-          <h4 className='font-medium'>{t('Performance Monitor')}</h4>
-          <Button variant='outline' size='sm' onClick={fetchStats}>
-            {t('Refresh Stats')}
-          </Button>
-          <AlertDialog>
-            <AlertDialogTrigger render={<Button variant='outline' size='sm' />}>
-              {t('Clean up inactive cache')}
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>
-                  {t('Confirm cleanup of inactive disk cache?')}
-                </AlertDialogTitle>
-                <AlertDialogDescription>
-                  {t(
-                    'Only closed cache files owned by this process are cleaned. Active files and files left by earlier processes are not deleted.'
-                  )}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
-                <AlertDialogAction
-                  variant='destructive'
-                  onClick={clearDiskCache}
-                >
-                  {t('Confirm')}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-          <Button variant='outline' size='sm' onClick={resetStats}>
-            {t('Reset Stats')}
-          </Button>
-          <Button variant='outline' size='sm' onClick={forceGC}>
-            {t('Run GC')}
-          </Button>
-        </div>
-
-        {stats && (
-          <>
-            <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
-              <div className='space-y-2 rounded-lg border p-4'>
-                <p className='text-sm font-medium'>
-                  {t('Request Body Disk Cache')}
-                </p>
-                <Progress value={diskCachePercent} />
-                <div className='text-muted-foreground flex justify-between text-xs'>
-                  <span>
-                    {formatBytes(
-                      stats.cache_stats?.current_disk_usage_bytes ?? 0
-                    )}{' '}
-                    /{' '}
-                    {formatBytes(stats.cache_stats?.disk_cache_max_bytes ?? 0)}
-                  </span>
-                  <span>
-                    {t('Active Files')}:{' '}
-                    {stats.cache_stats?.active_disk_files ?? 0}
-                  </span>
-                </div>
-                <StatusBadge variant='neutral' copyable={false}>
-                  {t('Disk Hits')}: {stats.cache_stats?.disk_cache_hits ?? 0}
-                </StatusBadge>
-              </div>
-              <div className='space-y-2 rounded-lg border p-4'>
-                <p className='text-sm font-medium'>
-                  {t('Request Body Memory Cache')}
-                </p>
-                <div className='text-muted-foreground flex justify-between text-xs'>
-                  <span>
-                    {t('Current Cache Size')}:{' '}
-                    {formatBytes(
-                      stats.cache_stats?.current_memory_usage_bytes ?? 0
-                    )}
-                  </span>
-                  <span>
-                    {t('Active Cache Count')}:{' '}
-                    {stats.cache_stats?.active_memory_buffers ?? 0}
-                  </span>
-                </div>
-                <StatusBadge variant='neutral' copyable={false}>
-                  {t('Memory Hits')}:{' '}
-                  {stats.cache_stats?.memory_cache_hits ?? 0}
-                </StatusBadge>
-                <p className='text-muted-foreground text-xs'>
-                  {t('Reserved body memory')}:{' '}
-                  {formatBytes(
-                    stats.cache_stats?.body_memory_reserved_bytes ?? 0
-                  )}
-                </p>
-                <p className='text-muted-foreground text-xs'>
-                  {t('Reservation failures (including successful fallback)')}:{' '}
-                  {stats.cache_stats?.body_capacity_rejects ?? 0}
-                </p>
-              </div>
+          {!stats && !statsFailed && (
+            <div
+              className='grid gap-4 lg:grid-cols-2'
+              aria-label={t('Loading...')}
+            >
+              <Skeleton className='h-64' />
+              <Skeleton className='h-64' />
+              <Skeleton className='h-48' />
+              <Skeleton className='h-48' />
             </div>
-
-            {stats.disk_space_info && stats.disk_space_info.total > 0 && (
-              <div className='rounded-lg border p-4'>
-                <p className='mb-2 text-sm font-medium'>
-                  {t('Cache Directory Disk Space')}
-                </p>
-                <Progress
-                  value={Math.round(stats.disk_space_info.used_percent)}
+          )}
+          {stats && <PerformanceOverview stats={stats} />}
+        </TabsContent>
+        <TabsContent
+          value='configuration'
+          keepMounted
+          className='w-full min-w-0'
+        >
+          <Form {...form}>
+            <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
+              {activeTab === 'configuration' && (
+                <SettingsPageFormActions
+                  onSave={form.handleSubmit(onSubmit)}
+                  isSaving={
+                    updateOption.isPending || form.formState.isSubmitting
+                  }
                 />
-                <div className='text-muted-foreground mt-2 flex justify-between text-xs'>
-                  <span>
-                    {t('Used')}: {formatBytes(stats.disk_space_info.used)}
-                  </span>
-                  <span>
-                    {t('Available')}: {formatBytes(stats.disk_space_info.free)}
-                  </span>
-                  <span>
-                    {t('Total')}: {formatBytes(stats.disk_space_info.total)}
-                  </span>
-                </div>
-              </div>
-            )}
+              )}
+              <fieldset
+                disabled={!canEdit || updateOption.isPending}
+                className='grid min-w-0 items-start gap-4 xl:grid-cols-2'
+              >
+                <section className='min-w-0 space-y-5 rounded-lg border p-4 sm:p-5'>
+                  {/* Disk Cache Settings */}
+                  <div>
+                    <h4 className='font-medium'>{t('Disk Cache Settings')}</h4>
+                    <p className='text-muted-foreground mt-1 text-xs'>
+                      {t(
+                        'Request bodies are kept for forwarding and retries, then released when requests finish. This is not model prompt caching and does not change upstream cache-token billing.'
+                      )}
+                    </p>
+                  </div>
 
-            {stats.memory_stats && (
-              <div className='rounded-lg border p-4'>
-                <p className='mb-2 text-sm font-medium'>
-                  {t('Go Runtime Memory')}
-                </p>
-                <div className='grid grid-cols-2 gap-2 text-xs md:grid-cols-5'>
-                  <div>
-                    <span className='text-muted-foreground'>
-                      {t('Allocated Memory')}:
-                    </span>{' '}
-                    {formatBytes(stats.memory_stats.alloc)}
+                  <div className='grid grid-cols-1 items-start gap-x-6 gap-y-4 md:grid-cols-2'>
+                    <FormField
+                      control={form.control}
+                      name='performance_setting.body_governance_enabled'
+                      render={({ field }) => (
+                        <SettingsSwitchItem className='self-start'>
+                          <SettingsSwitchContent>
+                            <FormLabel>
+                              {t('Enable body cache protection')}
+                            </FormLabel>
+                          </SettingsSwitchContent>
+                          <FormControl>
+                            <Switch
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                              disabled={!canEdit}
+                            />
+                          </FormControl>
+                        </SettingsSwitchItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name='performance_setting.body_memory_budget_mb'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Body memory budget (MiB)')}</FormLabel>
+                          <FormControl>
+                            <Input
+                              type='number'
+                              min={0}
+                              step={1}
+                              {...safeNumberFieldProps(field)}
+                              disabled={!canEdit}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {t(
+                              'Limits reserved body-cache buffers, not total process memory. When capacity is exhausted, new allocations may be rejected; active requests are not cleared.'
+                            )}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
                   </div>
-                  <div>
-                    <span className='text-muted-foreground'>
-                      {t('Total Allocated')}:
-                    </span>{' '}
-                    {formatBytes(stats.memory_stats.total_alloc)}
+                  <div className='grid grid-cols-1 items-start gap-x-6 gap-y-4 md:grid-cols-2'>
+                    <FormField
+                      control={form.control}
+                      name='performance_setting.disk_cache_enabled'
+                      render={({ field }) => (
+                        <SettingsSwitchItem className='md:col-span-2'>
+                          <SettingsSwitchContent>
+                            <FormLabel>{t('Enable Disk Cache')}</FormLabel>
+                          </SettingsSwitchContent>
+                          <FormControl>
+                            <Switch
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                              disabled={!canEdit}
+                            />
+                          </FormControl>
+                        </SettingsSwitchItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name='performance_setting.disk_cache_threshold_mb'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            {t('Disk cache threshold (MiB)')}
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              type='number'
+                              min={1}
+                              step={1}
+                              {...safeNumberFieldProps(field)}
+                              disabled={!canEdit || !diskEnabled}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {t(
+                              'Bodies reaching this size use disk. Lower values reduce retained memory but increase disk I/O. Units are MiB (1024 KiB).'
+                            )}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name='performance_setting.disk_cache_max_size_mb'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Disk cache budget (MiB)')}</FormLabel>
+                          <FormControl>
+                            <Input
+                              type='number'
+                              min={100}
+                              step={1}
+                              {...safeNumberFieldProps(field)}
+                              disabled={!canEdit || !diskEnabled}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {t(
+                              'Leave space for databases, logs and files left by previous processes.'
+                            )}
+                          </FormDescription>
+                          {stats?.disk_space_info &&
+                            stats.disk_space_info.total > 0 && (
+                              <FormDescription>
+                                {t('Free: {{free}} / Total: {{total}}', {
+                                  free: formatBytes(stats.disk_space_info.free),
+                                  total: formatBytes(
+                                    stats.disk_space_info.total
+                                  ),
+                                })}
+                              </FormDescription>
+                            )}
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
                   </div>
-                  <div>
-                    <span className='text-muted-foreground'>
-                      {t('Go Reserved Memory')}:
-                    </span>{' '}
-                    {formatBytes(stats.memory_stats.sys)}
-                  </div>
-                  <div>
-                    <span className='text-muted-foreground'>
-                      {t('GC Count')}:
-                    </span>{' '}
-                    {stats.memory_stats.num_gc}
-                  </div>
-                  <div>
-                    <span className='text-muted-foreground'>Goroutines:</span>{' '}
-                    {stats.memory_stats.num_goroutine}
-                  </div>
-                </div>
-              </div>
-            )}
 
-            {stats.disk_cache_info && (
-              <div className='rounded-lg border p-4'>
-                <p className='mb-2 text-sm font-medium'>
-                  {t('Cache Directory Info')}
-                </p>
-                <div className='grid grid-cols-3 gap-2 text-xs'>
-                  <div>
-                    <span className='text-muted-foreground'>
-                      {t('Cache Directory')}:
-                    </span>{' '}
-                    <span className='font-mono'>
-                      {stats.disk_cache_info.path}
-                    </span>
-                  </div>
-                  <div>
-                    <span className='text-muted-foreground'>
-                      {t('Directory File Count')}:
-                    </span>{' '}
-                    {stats.disk_cache_info.file_count}
-                  </div>
-                  <div>
-                    <span className='text-muted-foreground'>
-                      {t('Directory Total Size')}:
-                    </span>{' '}
-                    {formatBytes(stats.disk_cache_info.total_size)}
-                  </div>
+                  {lowDiskSpace && (
+                    <Alert variant='destructive'>
+                      <AlertDescription>
+                        {`${t('Warning')}: ${t('Available disk space')} (${formatBytes(stats?.disk_space_info?.free ?? 0)}) ${t('is less than the configured maximum cache size')} (${maxCacheSizeMb} MB). ${t('This may cause cache failures.')}`}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {!stats?.config?.is_running_in_container && (
+                    <FormField
+                      control={form.control}
+                      name='performance_setting.disk_cache_path'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Cache Directory')}</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder={t(
+                                'Leave empty to use system temp directory'
+                              )}
+                              value={field.value ?? ''}
+                              onChange={(event) =>
+                                field.onChange(event.target.value)
+                              }
+                              name={field.name}
+                              onBlur={field.onBlur}
+                              ref={field.ref}
+                              disabled={!canEdit || !diskEnabled}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
+                  <p className='text-muted-foreground text-xs leading-relaxed'>
+                    {t(
+                      'With disk cache enabled, memory allocation failures can spill to disk. If the read buffer or disk capacity is unavailable, the request is rejected.'
+                    )}
+                  </p>
+                </section>
+                <div className='min-w-0 space-y-4'>
+                  <section className='min-w-0 space-y-5 rounded-lg border p-4 sm:p-5'>
+                    {/* System Performance Monitor */}
+                    <div>
+                      <h4 className='font-medium'>
+                        {t('System Performance Monitoring')}
+                      </h4>
+                      <p className='text-muted-foreground mt-1 text-xs'>
+                        {t(
+                          'When performance monitoring is enabled and system resource usage exceeds the set threshold, new Relay requests will be rejected.'
+                        )}
+                      </p>
+                    </div>
+
+                    <div className='grid grid-cols-1 items-start gap-x-6 gap-y-4 md:grid-cols-3'>
+                      <FormField
+                        control={form.control}
+                        name='performance_setting.monitor_enabled'
+                        render={({ field }) => (
+                          <SettingsSwitchItem className='md:col-span-3'>
+                            <SettingsSwitchContent>
+                              <FormLabel>
+                                {t('Enable Performance Monitoring')}
+                              </FormLabel>
+                            </SettingsSwitchContent>
+                            <FormControl>
+                              <Switch
+                                checked={field.value}
+                                onCheckedChange={field.onChange}
+                                disabled={!canEdit}
+                              />
+                            </FormControl>
+                          </SettingsSwitchItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name='performance_setting.monitor_cpu_threshold'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('CPU Threshold (%)')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                type='number'
+                                min={0}
+                                step={1}
+                                {...safeNumberFieldProps(field)}
+                                disabled={!canEdit || !monitorEnabled}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name='performance_setting.monitor_memory_threshold'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Memory Threshold (%)')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                type='number'
+                                min={0}
+                                max={100}
+                                step={1}
+                                {...safeNumberFieldProps(field)}
+                                disabled={!canEdit || !monitorEnabled}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t(
+                                'System memory usage threshold, not the body-cache budget. This does not guarantee prevention of OOM.'
+                              )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name='performance_setting.monitor_disk_threshold'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Disk Threshold (%)')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                type='number'
+                                min={0}
+                                max={100}
+                                step={1}
+                                {...safeNumberFieldProps(field)}
+                                disabled={!canEdit || !monitorEnabled}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                  </section>
+                  <CacheGuidance
+                    guidance={stats?.guidance}
+                    receivedAt={receivedAt}
+                    loading={statsLoading}
+                    failed={statsFailed}
+                    canEdit={canEdit}
+                    pathChanged={
+                      form.watch('performance_setting.disk_cache_path') !==
+                      (stats?.config?.disk_cache_path ??
+                        baselineRef.current[
+                          'performance_setting.disk_cache_path'
+                        ])
+                    }
+                    onRefresh={fetchStats}
+                    onApply={(kind, value) => {
+                      const fields = {
+                        memory: 'body_memory_budget_mb',
+                        disk: 'disk_cache_max_size_mb',
+                        threshold: 'disk_cache_threshold_mb',
+                      } as const
+                      form.setValue(
+                        `performance_setting.${fields[kind]}`,
+                        value,
+                        {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        }
+                      )
+                    }}
+                  />
                 </div>
-              </div>
-            )}
-          </>
+              </fieldset>
+            </SettingsForm>
+          </Form>
+        </TabsContent>
+        <TabsContent
+          value='diagnostics'
+          keepMounted
+          className={
+            isRoot
+              ? 'grid w-full min-w-0 items-start gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]'
+              : 'w-full min-w-0'
+          }
+        >
+          {isRoot && diagnosticsVisited && (
+            <section className='min-w-0 rounded-lg border p-4 sm:p-5'>
+              <ProfilingControls active={activeTab === 'diagnostics'} />
+            </section>
+          )}
+          <div className='min-w-0 space-y-4 rounded-lg border p-4 sm:p-5'>
+            <h4 className='text-sm font-medium'>{t('Maintenance')}</h4>
+            <div className='flex flex-wrap items-center gap-2'>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                disabled={!canEdit || !!maintenancePending}
+                onClick={() => setCleanupOpen(true)}
+              >
+                {t('Clean up inactive cache')}
+              </Button>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                disabled={!canEdit || !!maintenancePending}
+                onClick={() => setResetOpen(true)}
+              >
+                {t('Reset cache hit counters')}
+              </Button>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                disabled={!canEdit || !!maintenancePending}
+                onClick={forceGC}
+              >
+                {maintenancePending === 'gc' && <Spinner />}
+                {t('Run GC')}
+              </Button>
+            </div>
+          </div>
+        </TabsContent>
+      </Tabs>
+      <ConfirmDialog
+        open={cleanupOpen}
+        onOpenChange={setCleanupOpen}
+        title={t('Confirm cleanup of inactive disk cache?')}
+        desc={t(
+          'Only closed cache files owned by this process are cleaned. Active files and files left by earlier processes are not deleted.'
         )}
-      </div>
+        confirmText={t('Confirm')}
+        destructive
+        isLoading={cleanupPending}
+        disabled={!canEdit}
+        handleConfirm={clearDiskCache}
+      />
+      <ConfirmDialog
+        open={resetOpen}
+        onOpenChange={setResetOpen}
+        title={t('Reset cache hit counters')}
+        desc={t(
+          'Reset memory and disk cache hit counts for this process. Cached data and other runtime statistics are kept.'
+        )}
+        confirmText={t('Reset')}
+        isLoading={maintenancePending === 'reset'}
+        disabled={!canEdit}
+        handleConfirm={resetStats}
+      />
     </SettingsSection>
   )
 }

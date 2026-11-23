@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -36,6 +37,76 @@ func errorDisplayCtx() *gin.Context {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	return c
+}
+
+func TestPresentRelayError_RequestGroupsAcrossOutputs(t *testing.T) {
+	withRelayErrorDisplay(t, operation_setting.RelayErrorDisplaySetting{Enabled: true, Rules: `[
+		{"groups":["vip","premium"],"source":"any","keywords":["quota"],"action":"replace","message":"VIP busy","status_code":503},
+		{"groups":["raw"],"source":"any","action":"keep"},
+		{"source":"any","action":"replace","message":"Other groups"}
+	]`})
+	for _, tc := range []struct{ name, group, autoGroup, want string }{
+		{"fixed request group", "vip", "", "VIP busy"},
+		{"second group", "premium", "", "VIP busy"},
+		{"different from registered group", "default", "", "Other groups"},
+		{"case sensitive", "VIP", "", "Other groups"},
+		{"actual auto attempt", "auto", "vip", "VIP busy"},
+		{"next auto attempt", "auto", "default", "Other groups"},
+		{"unresolved auto", "auto", "", "Other groups"},
+		{"before authentication", "", "", "Other groups"},
+		{"group keep stops evaluation", "raw", "", ""},
+	} {
+		for _, output := range []string{"http", "local", "stream", "realtime"} {
+			t.Run(tc.name+"/"+output, func(t *testing.T) {
+				c := errorDisplayCtx()
+				common.SetContextKey(c, constant.ContextKeyUserGroup, "vip")
+				common.SetContextKey(c, constant.ContextKeyUsingGroup, tc.group)
+				common.SetContextKey(c, constant.ContextKeyAutoGroupIndex, 99)
+				if tc.autoGroup != "" {
+					common.SetContextKey(c, constant.ContextKeyAutoGroup, tc.autoGroup)
+				}
+				switch output {
+				case "http":
+					original := types.WithOpenAIError(types.OpenAIError{Message: "quota raw", Code: "quota"}, 403)
+					out, message := PresentRelayError(c, original, "quota raw", "r-group")
+					if tc.want == "" {
+						assert.Same(t, original, out)
+						assert.Equal(t, "quota raw", message)
+					} else {
+						assert.Equal(t, tc.want+" (request id: r-group)", message)
+						if tc.want == "VIP busy" {
+							assert.Equal(t, 503, out.StatusCode)
+						}
+					}
+				case "local":
+					status, message, code := PresentLocalRelayAbort(c, true, 403, "quota raw", "quota")
+					assert.Equal(t, "quota", code)
+					if tc.want == "" {
+						assert.Equal(t, "quota raw", message)
+					} else {
+						assert.Equal(t, tc.want, message)
+					}
+					if tc.want == "VIP busy" {
+						assert.Equal(t, 503, status)
+					}
+				case "stream":
+					message, forward := PresentStreamTerminalMessage(c, []byte(`{"error":{"message":"quota raw"}}`), "fallback")
+					assert.Equal(t, tc.want == "", forward)
+					if tc.want != "" {
+						assert.Equal(t, tc.want, message)
+					}
+				case "realtime":
+					event := []byte(`{"type":"error","error":{"type":"invalid_request_error","message":"quota raw"}}`)
+					out := PresentRealtimeErrorEvent(c, event, false)
+					if tc.want == "" {
+						assert.Equal(t, event, out)
+					} else {
+						assert.Contains(t, string(out), `"message":"`+tc.want+`"`)
+					}
+				}
+			})
+		}
+	}
 }
 
 // An upstream new-api answering "no channel" — the exact leak seen against a real upstream.

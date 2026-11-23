@@ -31,6 +31,8 @@ type PerformanceStats struct {
 	SystemStatus SystemStatusInfo `json:"system_status"`
 	// 配置信息
 	Config PerformanceConfig `json:"config"`
+	// RedisPool is this process's shared Redis pool. It is empty when Redis is off.
+	RedisPool common.RedisPoolStats `json:"redis_pool"`
 }
 
 // SystemStatusInfo 主机级资源使用率快照
@@ -154,7 +156,8 @@ func GetPerformanceStats(c *gin.Context) {
 			MemoryUsage: systemStatus.MemoryUsage,
 			DiskUsage:   systemStatus.DiskUsage,
 		},
-		Config: config,
+		Config:    config,
+		RedisPool: common.GetRedisPoolStats(),
 	}
 
 	c.JSON(http.StatusOK, gin.H{

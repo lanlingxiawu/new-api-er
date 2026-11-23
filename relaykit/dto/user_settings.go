@@ -1,9 +1,12 @@
 package dto
 
 type UserSetting struct {
+	StreamProtocolValidation         *bool   `json:"stream_protocol_validation,omitempty"`
+	ClaudeStreamValidation           *bool   `json:"claude_stream_validation,omitempty"`             // Administrator override; nil inherits channel/global.
 	NotifyType                       string  `json:"notify_type,omitempty"`                          // QuotaWarningType 额度预警类型
 	QuotaWarningThreshold            float64 `json:"quota_warning_threshold,omitempty"`              // QuotaWarningThreshold 额度预警阈值
 	QuotaWarningEnabled              *bool   `json:"quota_warning_enabled,omitempty"`                // 是否接收余额不足提醒，未设置时接收
+	AccountSecurityNotifyEnabled     *bool   `json:"account_security_notify_enabled,omitempty"`      // Explicit opt-in; absent means off.
 	WebhookUrl                       string  `json:"webhook_url,omitempty"`                          // WebhookUrl webhook地址
 	WebhookSecret                    string  `json:"webhook_secret,omitempty"`                       // WebhookSecret webhook密钥
 	NotificationEmail                string  `json:"notification_email,omitempty"`                   // NotificationEmail 通知邮箱地址

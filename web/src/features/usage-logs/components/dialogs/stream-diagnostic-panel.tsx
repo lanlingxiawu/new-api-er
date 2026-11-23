@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -16,6 +34,12 @@ import {
  * 所有渠道共用原诊断接口；上游异常、拒绝和最终零输出日志可提供诊断，历史数据中响应字段可能为空。
  */
 interface StreamDiagnostic {
+  validation?: {
+    enabled: boolean
+    source: string
+    config_origin: string
+    applicable?: boolean
+  }
   termination?: StreamTermination // 网关实际观察到的终止信号，不确定远端发起主体；旧记录缺失。
   // 实际写出的下游 body；缺失为未保存（未采集或未满足保存条件），空串为零字节，超 2 KiB 时仅保留首尾各 1 KiB。
   downstream_body_base64?: string
@@ -99,6 +123,7 @@ function isEmptyEvidence(value: unknown): boolean {
 function compactEvidence(detail: StreamDiagnostic): Record<string, unknown> {
   const hasUsage = !isEmptyEvidence(detail.usage_evidence)
   const entries: Array<[string, unknown]> = [
+    ['validation', detail.validation],
     ['error', detail.error],
     ['read_error', detail.read_error],
     ['attempt', detail.attempt || undefined],
@@ -131,7 +156,13 @@ export function StreamDiagnosticPanel(props: {
   const [requested, setRequested] = useState(false) // 用户首次主动点击后才请求私有数据。
   const query = useQuery({
     // 同一请求的不同重试及不同登录账号分别缓存，避免混用诊断。
-    queryKey: ['stream-diagnostic', user?.id, props.requestId, props.createdAt, props.attempt],
+    queryKey: [
+      'stream-diagnostic',
+      user?.id,
+      props.requestId,
+      props.createdAt,
+      props.attempt,
+    ],
     enabled: requested && (user?.role ?? 0) >= 100, // 仅用户主动请求且为超级管理员时启用。
     retry: false, // 查询失败由用户明确重试，不后台重复读取私有数据。
     gcTime: 0, // 最后一个组件观察者卸载后立即清除缓存。
@@ -142,7 +173,11 @@ export function StreamDiagnosticPanel(props: {
         success: boolean
         data?: StreamDiagnostic
       }>('/api/log/claude-diagnostic', {
-        params: { request_id: props.requestId, created_at: props.createdAt, attempt: props.attempt },
+        params: {
+          request_id: props.requestId,
+          created_at: props.createdAt,
+          attempt: props.attempt,
+        },
         signal,
       })
       if (!response.data.success || !response.data.data) {
@@ -153,6 +188,25 @@ export function StreamDiagnosticPanel(props: {
   })
   if ((user?.role ?? 0) < 100) return null
   const detail = query.data
+  function observedBoolean(value: boolean | undefined) {
+    if (value === undefined) return t('Unknown')
+    return value ? t('Yes') : t('No')
+  }
+  let validationLabel = detail?.validation?.enabled
+    ? t('Enabled')
+    : t('Disabled')
+  if (detail?.validation?.applicable === false) {
+    validationLabel = t('Not applicable')
+  }
+  let completionLabel = observedBoolean(
+    detail?.delivery_evidence?.protocol_complete
+  )
+  if (
+    detail?.delivery_evidence?.protocol_complete === undefined &&
+    detail?.validation?.enabled === false
+  ) {
+    completionLabel = t('Not validated')
+  }
   const captured = detail ? hasCapturedResponse(detail) : false
   const evidence = detail ? compactEvidence(detail) : {}
   const hasEvidence = Object.keys(evidence).length > 0
@@ -189,56 +243,65 @@ export function StreamDiagnosticPanel(props: {
       {detail && (
         <div className='bg-muted/30 min-w-0 space-y-2 rounded-md border p-2.5'>
           <StreamTerminationEvidence termination={detail.termination} />
+          {detail.validation && (
+            <p className='text-xs'>
+              {t('Stream protocol strict validation')}
+              {': '}
+              {validationLabel}
+            </p>
+          )}
           {detail.delivery_evidence && (
             <div className='bg-background/60 space-y-1 rounded border p-2 text-xs'>
               <p className='font-semibold'>{t('Delivery decision')}</p>
               <p>
                 {t('Upstream response accepted')}
                 {': '}
-                {detail.delivery_evidence.accepted ? t('Yes') : t('No')}
+                {observedBoolean(detail.delivery_evidence.accepted)}
               </p>
               <p>
                 {t('Business response received')}
                 {': '}
-                {detail.delivery_evidence.received_response
-                  ? t('Yes')
-                  : t('No')}
+                {observedBoolean(detail.delivery_evidence.received_response)}
               </p>
               <p>
                 {t('Protocol complete')}
                 {': '}
-                {detail.delivery_evidence.protocol_complete
-                  ? t('Yes')
-                  : t('No')}
+                {completionLabel}
               </p>
               <p>
                 {t('Effective content delivered')}
                 {': '}
-                {detail.delivery_evidence.effective ? t('Yes') : t('No')}
+                {observedBoolean(detail.delivery_evidence.effective)}
               </p>
               <p>
                 {t('Received output estimate')}
                 {': '}
-                {detail.delivery_evidence.received_output_estimate ?? 0}
+                {detail.delivery_evidence.received_output_estimate ??
+                  t('Unknown')}
               </p>
               <p>
                 {t('Written output estimate')}
                 {': '}
-                {detail.delivery_evidence.delivered_output_estimate ?? 0}
+                {detail.delivery_evidence.delivered_output_estimate ??
+                  t('Unknown')}
               </p>
             </div>
           )}
           {captured ? (
             <>
               <p className='text-muted-foreground text-xs'>
-                {t('Observed {{count}} bytes', { count: detail.observed_bytes ?? 0 })}
+                {t('Observed {{count}} bytes', {
+                  count: detail.observed_bytes ?? 0,
+                })}
                 {' · '}
                 {detail.read_eof
                   ? t('Upstream EOF observed')
                   : t('Only bytes read are shown')}
               </p>
               {detail.headers_truncated && (
-                <p className='text-xs'>{t('Response headers were truncated')}</p>
+                <p className='text-xs'>
+                  {t('Response headers were truncated')}
+                </p>
               )}
               <p className='text-xs font-semibold'>
                 {t('Upstream response headers')}
@@ -246,7 +309,9 @@ export function StreamDiagnosticPanel(props: {
               <pre className='bg-background/60 max-h-48 overflow-auto rounded border p-2 font-mono text-xs break-all whitespace-pre-wrap'>
                 {JSON.stringify(detail.response_headers ?? {}, null, 2)}
               </pre>
-              <p className='text-xs font-semibold'>{t('Upstream response body')}</p>
+              <p className='text-xs font-semibold'>
+                {t('Upstream response body')}
+              </p>
               <pre className='bg-background/60 max-h-72 overflow-auto rounded border p-2 font-mono text-xs break-all whitespace-pre-wrap'>
                 {body}
               </pre>
@@ -257,7 +322,9 @@ export function StreamDiagnosticPanel(props: {
               {t('No upstream response was captured for this request.')}
             </p>
           )}
-          <p className='text-xs font-semibold'>{t('Downstream response body')}</p>
+          <p className='text-xs font-semibold'>
+            {t('Downstream response body')}
+          </p>
           {detail.downstream_body_base64 === undefined && (
             <p className='text-muted-foreground text-xs'>
               {t('No downstream response body was captured.')}
@@ -268,16 +335,17 @@ export function StreamDiagnosticPanel(props: {
               {t('No body bytes were written to the downstream.')}
             </p>
           )}
-          {typeof detail.downstream_body_base64 === 'string' && detail.downstream_body_base64 !== '' && (
-            <>
-              <pre className='bg-background/60 max-h-72 overflow-auto rounded border p-2 font-mono text-xs break-all whitespace-pre-wrap'>
-                {decodeBody(detail.downstream_body_base64)}
-              </pre>
-              <p className='text-muted-foreground text-xs'>
-                {t('Bodies over 2 KiB retain only the first and last 1 KiB.')}
-              </p>
-            </>
-          )}
+          {typeof detail.downstream_body_base64 === 'string' &&
+            detail.downstream_body_base64 !== '' && (
+              <>
+                <pre className='bg-background/60 max-h-72 overflow-auto rounded border p-2 font-mono text-xs break-all whitespace-pre-wrap'>
+                  {decodeBody(detail.downstream_body_base64)}
+                </pre>
+                <p className='text-muted-foreground text-xs'>
+                  {t('Bodies over 2 KiB retain only the first and last 1 KiB.')}
+                </p>
+              </>
+            )}
           {hasEvidence && (
             <>
               <p className='text-xs font-semibold'>
@@ -290,7 +358,9 @@ export function StreamDiagnosticPanel(props: {
           )}
           {!!detail.previous_responses?.length && (
             <>
-              <p className='text-xs font-semibold'>{t('Previous upstream responses')}</p>
+              <p className='text-xs font-semibold'>
+                {t('Previous upstream responses')}
+              </p>
               <pre className='bg-background/60 max-h-72 overflow-auto rounded border p-2 font-mono text-xs break-all whitespace-pre-wrap'>
                 {JSON.stringify(detail.previous_responses, null, 2)}
               </pre>

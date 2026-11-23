@@ -449,6 +449,7 @@ func strictClaudeStream(c *gin.Context, resp *http.Response, info *relaycommon.R
 	upstreamCompatibility := operation_setting.ClaudeStreamUpstreamCompatibilityEnabled()
 	// 原生协议由本处理器唯一管理；禁用通用观察，解除透明读取包装，避免重复采集和终止。
 	info.StreamSession.Disable()
+	info.StreamProcessingOwner = relaycommon.StreamOwnerClaude
 	if resp != nil {
 		if body, ok := resp.Body.(interface{ UnwrapStream() io.ReadCloser }); ok {
 			resp.Body = body.UnwrapStream()

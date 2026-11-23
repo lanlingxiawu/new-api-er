@@ -1,5 +1,7 @@
 package common
 
+import hostcommon "github.com/QuantumNous/new-api/common"
+
 // StreamHandledKey 标记严格流式流程已接管终止响应及结算，供控制器跳过重复重试、退款和错误写出。
 const StreamHandledKey = "stream_handled"
 
@@ -55,6 +57,7 @@ func (s *ResponseCapture) Bytes() ([]byte, []byte) {
 
 // StreamDiagnostic 汇总一次中转尝试的原始响应、底层错误与用量证据，仅经超级管理员接口读取。
 type StreamDiagnostic struct {
+	Validation             *StreamValidationPolicy      `json:"validation,omitempty"`
 	DeliveryEvidence       *StreamDeliveryEvidence      `json:"delivery_evidence,omitempty"`      // Observed receive/write state; nil on historical records without this snapshot.
 	Termination            *StreamTerminationDiagnostic `json:"termination,omitempty"`            // Gateway observations only; never changes terminal ownership or billing.
 	DownstreamBodyBase64   *string                      `json:"downstream_body_base64,omitempty"` // 下游实际接受的正文首尾字节；nil 表示未保存（未采集或无异常资格），空串表示采集开启但未写出。仅异常入日志前赋值。
@@ -69,6 +72,20 @@ type StreamDiagnostic struct {
 	RejectReason           string                       `json:"reject_reason,omitempty"`      // 诊断内策略原因；普通日志单独保留同名字段。
 	UsageFinal             bool                         `json:"usage_final"`                  // 处理器确认的用量/协议结束状态；Claude 专用路径检查 message_stop，通用路径沿用对应协议的 Complete。
 	SettlementError        string                       `json:"settlement_error,omitempty"`   // 资金或令牌结算错误，与上游流式错误分别记录。
+}
+
+// MarshalJSON preserves historical strict fields without inventing finality
+// evidence when the protocol validator did not run.
+func (d StreamDiagnostic) MarshalJSON() ([]byte, error) {
+	type diagnostic StreamDiagnostic
+	final := &d.UsageFinal
+	if d.Validation != nil && (!d.Validation.Enabled || (d.Validation.Applicable != nil && !*d.Validation.Applicable)) {
+		final = nil
+	}
+	return hostcommon.Marshal(struct {
+		diagnostic
+		UsageFinal *bool `json:"usage_final,omitempty"`
+	}{diagnostic(d), final})
 }
 
 // StreamOutcome 由响应处理阶段生成，再由终止结算阶段更新；入队前序列化，异步日志工作者不再修改它。

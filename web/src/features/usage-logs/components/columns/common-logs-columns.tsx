@@ -892,6 +892,8 @@ export function useCommonLogsColumns(
               <DetailsDialog
                 log={log}
                 isAdmin={canUseAdminActions}
+                canViewPolicyDecisions={showAdminFields}
+                canViewUpstreamExchange={showAdminFields}
                 isRoot={isRoot}
                 open={dialogOpen}
                 onOpenChange={setDialogOpen}

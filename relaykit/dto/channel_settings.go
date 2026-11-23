@@ -12,6 +12,8 @@ import (
 )
 
 type ChannelSettings struct {
+	ClaudeStreamValidation    *bool  `json:"claude_stream_validation,omitempty"`
+	StreamProtocolValidation  *bool  `json:"stream_protocol_validation,omitempty"`
 	TaskPluginKey             string `json:"task_plugin_key,omitempty"`
 	ForceFormat               bool   `json:"force_format,omitempty"`
 	ThinkingToContent         bool   `json:"thinking_to_content,omitempty"`

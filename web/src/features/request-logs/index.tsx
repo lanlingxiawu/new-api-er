@@ -326,11 +326,13 @@ export function RequestLogs() {
           tableHeaderClassName='bg-muted/30 sticky top-0 z-10'
         />
 
-        <RequestLogDetailDialog
-          id={detailId}
-          open={detailId !== null}
-          onOpenChange={(open) => !open && setDetailId(null)}
-        />
+        {canViewDetail && (
+          <RequestLogDetailDialog
+            id={detailId}
+            open={detailId !== null}
+            onOpenChange={(open) => !open && setDetailId(null)}
+          />
+        )}
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )

@@ -27,34 +27,35 @@ import { cn } from '@/lib/utils'
 export const LOG_DETAIL_ROW = {
   heading: 1,
   overview: 2,
-  conversion: 3,
-  quotaSaturation: 4,
-  rejectReason: 5,
-  violation: 6,
-  refund: 7,
-  taskPlugin: 8,
-  rootDiagnostics: 9,
-  topupAudit: 10,
-  quotaOperation: 11,
-  manageOperator: 12,
-  manageTarget: 13,
-  manageAudit: 14,
-  loginAudit: 15,
-  audioTokens: 16,
-  reasoningEffort: 17,
-  systemPrompt: 18,
-  modelMapping: 19,
-  tokens: 20,
-  billing: 21,
-  dynamicPricing: 22,
-  billingPath: 23,
-  streamStatus: 24,
-  streamBilling: 25,
-  streamDiagnostic: 26,
-  subscription: 27,
-  paramOverride: 28,
-  content: 29,
-  footer: 30,
+  upstreamExchange: 3,
+  conversion: 4,
+  quotaSaturation: 5,
+  rejectReason: 6,
+  violation: 7,
+  refund: 8,
+  taskPlugin: 9,
+  rootDiagnostics: 10,
+  topupAudit: 11,
+  quotaOperation: 12,
+  manageOperator: 13,
+  manageTarget: 14,
+  manageAudit: 15,
+  loginAudit: 16,
+  audioTokens: 17,
+  reasoningEffort: 18,
+  systemPrompt: 19,
+  modelMapping: 20,
+  tokens: 21,
+  billing: 22,
+  dynamicPricing: 23,
+  billingPath: 24,
+  streamStatus: 25,
+  streamBilling: 26,
+  streamDiagnostic: 27,
+  subscription: 28,
+  paramOverride: 29,
+  content: 30,
+  footer: 31,
 } as const
 
 export type LogDetailRow = keyof typeof LOG_DETAIL_ROW
@@ -79,4 +80,38 @@ export function compareCellStyle(
   return {
     '--log-detail-row': span ? `${start} / span ${span}` : String(start),
   } as CSSProperties
+}
+
+export type LogDetailSection = 'billing' | 'diagnostics'
+
+const DIAGNOSTIC_ROWS = new Set<LogDetailRow>([
+  'upstreamExchange',
+  'conversion',
+  'rejectReason',
+  'taskPlugin',
+  'rootDiagnostics',
+  'reasoningEffort',
+  'systemPrompt',
+  'modelMapping',
+  'streamStatus',
+  'streamDiagnostic',
+  'paramOverride',
+])
+const SHARED_ROWS = new Set<LogDetailRow>([
+  'heading',
+  'overview',
+  'content',
+  'footer',
+  'quotaSaturation',
+])
+
+export function isLogDetailSectionRow(
+  row: LogDetailRow,
+  section?: LogDetailSection
+): boolean {
+  return (
+    !section ||
+    SHARED_ROWS.has(row) ||
+    DIAGNOSTIC_ROWS.has(row) === (section === 'diagnostics')
+  )
 }

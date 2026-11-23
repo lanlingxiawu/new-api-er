@@ -71,7 +71,7 @@ func TestRelayErrorEdit_RequestIdsAreRemovedBeforeEditing(t *testing.T) {
 
 	relayErrorDisplaySnapshot.Publish(*view)
 	t.Cleanup(func() { relayErrorDisplaySnapshot.Publish(relayErrorDisplayView{}) })
-	message, _ := MaskRelayStreamErrorForUser("stream cut (request id: up-2)", "")
+	message, _ := MaskRelayStreamErrorForUser("stream cut (request id: up-2)", "", "")
 	assert.Equal(t, "stream cut", message, "the stream frame carries no upstream id either")
 }
 

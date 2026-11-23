@@ -27,6 +27,38 @@ func RedisKeyCacheSeconds() int {
 	return SyncFrequency
 }
 
+// RedisPoolStats is the process-local go-redis pool. Timeouts accumulate since
+// process start. PoolSize is the configured cap, not the current connection count.
+type RedisPoolStats struct {
+	Enabled    bool   `json:"enabled"`
+	PoolSize   int    `json:"pool_size"`
+	TotalConns uint32 `json:"total_conns"`
+	IdleConns  uint32 `json:"idle_conns"`
+	StaleConns uint32 `json:"stale_conns"`
+	Hits       uint32 `json:"hits"`
+	Misses     uint32 `json:"misses"`
+	Timeouts   uint32 `json:"timeouts"`
+}
+
+func GetRedisPoolStats() RedisPoolStats {
+	if !RedisEnabled || RDB == nil {
+		return RedisPoolStats{}
+	}
+	stats := RedisPoolStats{Enabled: true}
+	if options := RDB.Options(); options != nil {
+		stats.PoolSize = options.PoolSize
+	}
+	if pool := RDB.PoolStats(); pool != nil {
+		stats.TotalConns = pool.TotalConns
+		stats.IdleConns = pool.IdleConns
+		stats.StaleConns = pool.StaleConns
+		stats.Hits = pool.Hits
+		stats.Misses = pool.Misses
+		stats.Timeouts = pool.Timeouts
+	}
+	return stats
+}
+
 // InitRedisClient This function is called after init()
 func InitRedisClient() (err error) {
 	if os.Getenv("REDIS_CONN_STRING") == "" {

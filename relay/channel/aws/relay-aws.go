@@ -292,6 +292,8 @@ func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types
 // 参数 c 为请求，info 保存会话/确认用量，a 提供已准备的 SDK 调用；返回中转错误与原计量对象。
 // 未识别的 SDK 事件显式登记为上游协议错误，日志仅输出定位信息。
 func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
+	// SDK events use the protocol policy, never the historical Claude-only key.
+	info.ClaudeStreamMainMode = info.MainStreamMode()
 	requestContext := c.Request.Context()
 	ctx, cancel := newAwsInvokeContext(service.RelayResponseTraceContext(c, requestContext), service.IsRelayTimeoutManaged(c))
 	defer cancel()
@@ -315,7 +317,7 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 	// Early returns below still owe the client a stream terminator; without it a
 	// Claude-format caller waits on a stream that never closes.
 	finalizeClaudeOnError := func() {
-		if info.RelayFormat == types.RelayFormatClaude {
+		if info.RelayFormat == types.RelayFormatClaude && !info.MainStreamMode() {
 			claude.HandleStreamFinalResponse(c, info, claudeInfo)
 		}
 	}
@@ -349,21 +351,13 @@ streamLoop:
 					return respErr, nil
 				}
 			case *bedrockruntimeTypes.UnknownUnionMember:
-				if info.StreamSession.Active() {
-					info.StreamSession.Fail("upstream_protocol_error", fmt.Errorf("unknown SDK tag: %s", v.Tag))
-					logger.LogLegacyStreamError(c, "unknown SDK tag: "+v.Tag)
-				} else {
-					fmt.Println("unknown tag:", v.Tag)
-				}
+				info.StreamSession.Fail("upstream_protocol_error", fmt.Errorf("unknown SDK tag: %s", v.Tag))
+				logger.LogLegacyStreamError(c, "unknown SDK tag: "+v.Tag)
 				finalizeClaudeOnError()
 				return types.NewError(errors.New("unknown response type"), types.ErrorCodeInvalidRequest), nil
 			default:
-				if info.StreamSession.Active() {
-					info.StreamSession.Fail("upstream_protocol_error", errors.New("nil or unknown SDK response type"))
-					logger.LogLegacyStreamError(c, "nil or unknown SDK response type")
-				} else {
-					fmt.Println("union is nil or unknown type")
-				}
+				info.StreamSession.Fail("upstream_protocol_error", errors.New("nil or unknown SDK response type"))
+				logger.LogLegacyStreamError(c, "nil or unknown SDK response type")
 				finalizeClaudeOnError()
 				return types.NewError(errors.New("nil or unknown response type"), types.ErrorCodeInvalidRequest), nil
 			}
@@ -371,12 +365,10 @@ streamLoop:
 	}
 
 	_ = stream.Close()
-	if info.StreamSession.Active() {
-		if stream.Err() != nil {
-			info.StreamSession.EndRead(stream.Err())
-		} else {
-			info.StreamSession.EndRead(io.EOF)
-		}
+	if stream.Err() != nil {
+		info.StreamSession.EndRead(stream.Err())
+	} else {
+		info.StreamSession.EndRead(io.EOF)
 	}
 	claude.HandleStreamFinalResponse(c, info, claudeInfo)
 	return nil, claudeInfo.Usage

@@ -31,6 +31,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { getRequestLogDetail } from './api'
 import {
@@ -110,6 +117,14 @@ const Block = memo(function Block({
 
 export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
   const { t } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
+  const canViewDetail =
+    (user?.role ?? ROLE.GUEST) >= ROLE.ADMIN &&
+    hasPermission(
+      user,
+      ADMIN_PERMISSION_RESOURCES.REQUEST_LOGS,
+      ADMIN_PERMISSION_ACTIONS.VIEW_DETAIL
+    )
   const [isDownloading, setIsDownloading] = useState(false)
   const downloadController = useRef<AbortController | null>(null)
   useEffect(() => {
@@ -118,14 +133,21 @@ export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
       downloadController.current?.abort()
       downloadController.current = null
     }
-  }, [id, open])
+  }, [id, open, user?.id, user?.role, canViewDetail])
   const { data, isLoading, isFetching, isError, error } = useQuery({
-    queryKey: ['request-log-detail', open ? id : null],
+    queryKey: [
+      'request-log-detail',
+      user?.id,
+      user?.role,
+      canViewDetail,
+      open ? id : null,
+    ],
     queryFn: ({ signal }) => getRequestLogDetail(id as number, signal),
     gcTime: 0,
-    enabled: open && id !== null,
+    enabled: canViewDetail && open && id !== null,
   })
   const canDownload =
+    canViewDetail &&
     open &&
     id !== null &&
     data?.id === id &&
@@ -133,6 +155,8 @@ export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
     !isFetching &&
     !isError &&
     !isDownloading
+
+  if (!canViewDetail) return null
 
   const handleDownload = async () => {
     if (!canDownload || !data) return

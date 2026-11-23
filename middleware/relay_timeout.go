@@ -500,27 +500,12 @@ func StartRelayRequestTimeout(c *gin.Context, isStream bool) {
 	if _, exists := common.GetContextKey(c, constant.ContextKeyRelayTimeoutControl); exists {
 		return
 	}
-	if common.GetContextKeyInt(c, constant.ContextKeyUserStreamResponseTimeout) == 0 &&
-		common.GetContextKeyInt(c, constant.ContextKeyUserStreamTotalTimeout) == 0 &&
-		common.GetContextKeyInt(c, constant.ContextKeyUserNonStreamResponseTimeout) == 0 &&
-		common.GetContextKeyInt(c, constant.ContextKeyUserNonStreamTotalTimeout) == 0 {
-		return
-	}
 	common.SetContextKey(c, constant.ContextKeyIsStream, isStream)
 	responseSeconds, totalSeconds := effectiveRelayTimeouts(c, isStream)
-	// Taking the request over disables the legacy guards for it: the stream
-	// scanner drops its STREAMING_TIMEOUT ticker and the shared client loses
-	// RELAY_TIMEOUT. So only take over when this mode actually enforces
-	// something, or when the user explicitly asked for no limit with -1.
-	// Otherwise a user whose override applies to the *other* mode — or whose
-	// inherited global default is 0 — would end up with no time bound at all,
-	// which is strictly weaker than not having the feature.
-	if responseSeconds == 0 && totalSeconds == 0 {
-		userResponse, userTotal := relayTimeoutUserOverrides(c, isStream)
-		if userResponse != service.RelayTimeoutUnlimited && userTotal != service.RelayTimeoutUnlimited {
-			return
-		}
-	}
+	// An enabled snapshot owns the timeout policy for every eligible request.
+	// Zero user values inherit its defaults. Even when both resolved limits
+	// are unlimited, keep the request managed so legacy environment limits
+	// cannot silently override the configured policy.
 	ctx, control := newRelayTimeoutControl(
 		c.Request.Context(),
 		time.Duration(responseSeconds)*time.Second,

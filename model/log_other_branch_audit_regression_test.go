@@ -29,7 +29,7 @@ func TestBranchAuditErrorMaskingPreservesUnrelatedNumbers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			log := &Log{Type: tc.kind, Content: "upstream unavailable", Other: tc.other}
 			// Supply language directly: metadata projection does not need a DB read.
-			maskProjectedLogForUser(log, nil, func(int) string { return "en" })
+			maskProjectedLogForUser(log, nil, "", func(int) string { return "en" })
 			var got map[string]json.RawMessage
 			require.NoError(t, common.UnmarshalJsonStr(log.Other, &got))
 			assert.Equal(t, "9007199254740993", string(got["amount"]), "masking error text must preserve unrelated exact integers, as main's RawMessage projection does")

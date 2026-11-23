@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -22,6 +23,16 @@ import (
 
 // maskedUpstreamErrorCode replaces an upstream's own error code once masked.
 const maskedUpstreamErrorCode types.ErrorCode = "upstream_error"
+
+func relayErrorGroup(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	return operation_setting.ResolveRelayErrorGroup(
+		common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+		common.GetContextKeyString(c, constant.ContextKeyAutoGroup),
+	)
+}
 
 // IsUpstreamRelayError reports whether err was built from an upstream response.
 func IsUpstreamRelayError(err *types.NewAPIError) bool {
@@ -47,6 +58,7 @@ func PresentRelayError(c *gin.Context, err *types.NewAPIError, responseMessage, 
 	}()
 	upstream := IsUpstreamRelayError(err)
 	decision := operation_setting.DecideRelayError(operation_setting.RelayErrorInput{
+		Group:      relayErrorGroup(c),
 		Upstream:   upstream,
 		StatusCode: err.StatusCode,
 		ErrorCode:  string(err.GetErrorCode()),
@@ -88,6 +100,7 @@ func PresentLocalRelayAbort(c *gin.Context, isRelay bool, statusCode int, messag
 		}
 	}()
 	decision := decideRelayError(operation_setting.RelayErrorInput{
+		Group:      relayErrorGroup(c),
 		StatusCode: statusCode,
 		ErrorCode:  code,
 		Message:    message,
@@ -248,6 +261,7 @@ const streamTerminalRelayErrorInputKey = "relay_error_display_stream_input"
 func streamTerminalRelayErrorInput(c *gin.Context, upstreamPayload []byte, fallback string) operation_setting.RelayErrorInput {
 	timedOut := IsRelayRequestTimeout(c)
 	in := operation_setting.StreamFailureRelayErrorInput(timedOut, fallback)
+	in.Group = relayErrorGroup(c)
 	if !timedOut && len(upstreamPayload) > 0 {
 		v := gjson.ParseBytes(upstreamPayload)
 		// Chat Completions / Claude frames carry error.*, Responses frames a

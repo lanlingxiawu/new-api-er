@@ -40,6 +40,10 @@ func (w *DownstreamCaptureWriter) Write(p []byte) (int, error) {
 			observed = io.ErrShortWrite
 		}
 		w.capture.Termination.Observe("downstream", "write", observed)
+		if observed != nil {
+			w.capture.SetError(observed)
+			w.capture.PassiveStatus.RecordError("downstream write failed")
+		}
 	}
 	if n > 0 {
 		w.capture.WriteDownstreamPayload(p[:min(n, len(p))])
@@ -49,3 +53,32 @@ func (w *DownstreamCaptureWriter) Write(p []byte) (int, error) {
 
 // WriteString 将字符串 s 交给同一观察边界，避免 Gin 的字符串快捷路径漏采集。
 func (w *DownstreamCaptureWriter) WriteString(s string) (int, error) { return w.Write([]byte(s)) }
+
+// FlushError observes only the flush requested by the handler; it adds no I/O.
+func (w *DownstreamCaptureWriter) FlushError() error {
+	// Preserve Gin's header commit while reaching a transport FlushError that
+	// Gin.Flush otherwise discards. Do not perform a second flush.
+	w.ResponseWriter.WriteHeaderNow()
+	var writer http.ResponseWriter = w.ResponseWriter
+	for range 16 {
+		if _, ok := writer.(interface{ FlushError() error }); ok {
+			break
+		}
+		unwrapper, ok := writer.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		writer = unwrapper.Unwrap()
+	}
+	err := http.NewResponseController(writer).Flush()
+	if w.capture != nil {
+		w.capture.Termination.Observe("downstream", "flush", err)
+		if err != nil {
+			w.capture.SetError(err)
+			w.capture.PassiveStatus.RecordError("downstream flush failed")
+		}
+	}
+	return err
+}
+
+func (w *DownstreamCaptureWriter) Flush() { _ = w.FlushError() }

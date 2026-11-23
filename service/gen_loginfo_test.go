@@ -76,6 +76,29 @@ func TestLoginfoGenerateTextOtherInfo_BasicRatios(t *testing.T) {
 	assert.NotContains(t, other, "is_system_prompt_overwritten")
 	assert.NotContains(t, adminInfo, "is_multi_key")
 	assert.NotContains(t, adminInfo, "local_count_tokens")
+	assert.NotContains(t, adminInfo, "upstream_exchange")
+}
+
+func TestLoginfoAppendRelayLogAdminInfo_RecordsUpstreamExchange(t *testing.T) {
+	conn := int64(40)
+	wrote := int64(1200)
+	first := int64(800000)
+	end := int64(810000)
+	info := loginfoBaseRelayInfo()
+	info.AppendUpstreamExchange(relaycommon.UpstreamExchangeMark{
+		ConnMs: &conn, WroteMs: &wrote, FirstByteMs: &first, EndMs: &end,
+	})
+	other := model.NewLogOther()
+	AppendRelayLogAdminInfo(loginfoNewCtx(), info, other)
+	adminInfo, ok := other.Snapshot()["admin_info"].(map[string]any)
+	require.True(t, ok)
+	attempts, ok := adminInfo["upstream_exchange"].([]relaycommon.UpstreamExchangeMark)
+	require.True(t, ok)
+	require.Len(t, attempts, 1)
+	require.EqualValues(t, 40, *attempts[0].ConnMs)
+	require.EqualValues(t, 1200, *attempts[0].WroteMs)
+	require.EqualValues(t, 800000, *attempts[0].FirstByteMs)
+	require.EqualValues(t, 810000, *attempts[0].EndMs)
 }
 
 // 渠道名快照必须随每条中继日志落库：渠道删除后 channels 表答不出这条日志跑在

@@ -49,9 +49,7 @@ func EnqueueConsumeLogWithCost(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		snapshot.ChannelID = params.ChannelId
 	}
 	payload := snapshot.accountingPayload()
-	if !model.EnqueueConsumeLog(ctx, relayInfo.UserId, params, &payload) {
-		model.DispatchRelayLogAccounting(payload, 0)
-	}
+	enqueueStreamConsumeLog(ctx, relayInfo, params, payload)
 }
 
 // FinalizeConsumptionSettlement runs the post-consume side effects shared by
@@ -124,6 +122,7 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 			if stream.Failed && !stream.ClientGone {
 				timedOut := streamFailureTimedOut(ctx)
 				if in, ok := streamTerminalInput(ctx); ok {
+					params.Other.SetAdmin(operation_setting.RelayErrorGroupKey, in.Group)
 					params.Other.SetAdmin(operation_setting.RelayStreamMatchCodeKey, in.ErrorCode)
 					params.Other.SetAdmin(operation_setting.RelayStreamMatchMessageKey, in.Message)
 					if in.Truncated {
@@ -206,12 +205,7 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 		snapshot.ChannelID = params.ChannelId
 	}
 	payload := snapshot.accountingPayload()
-	if model.EnqueueConsumeLog(ctx, relayInfo.UserId, logParams, &payload) {
-		return
-	}
-	// Intake may only be false during shutdown. Never re-enter either database
-	// from the relay goroutine; the accounting payload is independently queued.
-	model.DispatchRelayLogAccounting(payload, 0)
+	enqueueStreamConsumeLog(ctx, relayInfo, logParams, payload)
 }
 
 // streamFailureConsumeNote is our own note on a charged stream that failed: the
@@ -251,4 +245,22 @@ func appendStreamFailureContent(ctx *gin.Context, content, failureText string) s
 		content += "; "
 	}
 	return content + MessageWithCurrentRequestId(ctx, failureText)
+}
+
+// enqueueStreamConsumeLog postpones only the log snapshot when a WS terminal is pending.
+func enqueueStreamConsumeLog(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, params model.RecordConsumeLogParams, payload model.RelayLogAccountingPayload) {
+	if relayInfo.DeferStreamLog != nil {
+		logContext := ctx.Copy()
+		relayInfo.DeferStreamLog(func() {
+			AppendStreamLogInfo(relayInfo, params.Other)
+			appendStreamStatus(relayInfo, params.Other)
+			if !model.EnqueueConsumeLog(logContext, relayInfo.UserId, params, &payload) {
+				model.DispatchRelayLogAccounting(payload, 0)
+			}
+		})
+		return
+	}
+	if !model.EnqueueConsumeLog(ctx, relayInfo.UserId, params, &payload) {
+		model.DispatchRelayLogAccounting(payload, 0)
+	}
 }

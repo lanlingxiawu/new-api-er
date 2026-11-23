@@ -56,7 +56,7 @@ func TestBranchAuditMaskLogForUser_KeepRuleDoesNotReencode(t *testing.T) {
 	withLiveRelayErrorDisplay(t, operation_setting.RelayErrorDisplaySetting{Enabled: true, HideUpstreamErrors: true, DefaultMessage: "Unavailable", Rules: rules})
 	other := `{"error_type":"openai_error","error_code":"bad_response_status_code","status_code":400,"big":9007199254740993}`
 	log := &Log{Type: LogTypeError, Content: "maximum context length exceeded (request id: r1)", RequestId: "r1", Other: other}
-	maskProjectedLogForUser(log, nil, branchAuditFixedLang)
+	maskProjectedLogForUser(log, nil, "", branchAuditFixedLang)
 	assert.Equal(t, "maximum context length exceeded (request id: r1)", log.Content)
 	assert.Equal(t, other, log.Other)
 }
@@ -68,13 +68,13 @@ func TestBranchAuditMaskLogForUser_LocalErrorKeepsItsCode(t *testing.T) {
 	withLiveRelayErrorDisplay(t, operation_setting.RelayErrorDisplaySetting{Enabled: true, HideUpstreamErrors: true, Rules: rules})
 	other := `{"error_type":"new_api_error","error_code":"model_not_found","status_code":503,"big":9007199254740993}`
 	log := &Log{Type: LogTypeError, Content: "no channel for model x under group vip (request id: r2)", RequestId: "r2", Other: other}
-	maskProjectedLogForUser(log, nil, branchAuditFixedLang)
+	maskProjectedLogForUser(log, nil, "", branchAuditFixedLang)
 	assert.Equal(t, "Model unavailable (request id: r2)", log.Content)
 	assert.Equal(t, other, log.Other, "a local error's metadata is ours and stays as stored")
 
 	// Without any matching rule a local error is never hidden by the upstream fallback.
 	plain := &Log{Type: LogTypeError, Content: "insufficient user quota", Other: `{"error_type":"new_api_error","error_code":"insufficient_user_quota","status_code":403}`}
-	maskProjectedLogForUser(plain, nil, branchAuditFixedLang)
+	maskProjectedLogForUser(plain, nil, "", branchAuditFixedLang)
 	assert.Equal(t, "insufficient user quota", plain.Content)
 }
 
@@ -85,7 +85,7 @@ func TestBranchAuditMaskLogForUser_MissingOrBrokenOther(t *testing.T) {
 	withLiveRelayErrorDisplay(t, operation_setting.RelayErrorDisplaySetting{Enabled: true, HideUpstreamErrors: true, Rules: rules})
 	for _, other := range []string{"", "not-json", `{"status_code":"500"}`} {
 		log := &Log{Type: LogTypeError, Content: "boom", Other: other}
-		require.NotPanics(t, func() { maskProjectedLogForUser(log, nil, branchAuditFixedLang) })
+		require.NotPanics(t, func() { maskProjectedLogForUser(log, nil, "", branchAuditFixedLang) })
 		assert.Equal(t, "Failed", log.Content, "no request id: the rule text alone")
 		assert.Equal(t, other, log.Other)
 	}
@@ -119,7 +119,7 @@ func TestBranchAuditMaskStreamStatus_OddShapes(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			log := &Log{Type: LogTypeConsume, Content: "ours", Other: tc.other}
-			maskProjectedLogForUser(log, nil, branchAuditFixedLang)
+			maskProjectedLogForUser(log, nil, "", branchAuditFixedLang)
 			assert.JSONEq(t, tc.want, log.Other)
 			if tc.other == tc.want {
 				assert.Equal(t, tc.other, log.Other, "untouched metadata is not re-encoded")

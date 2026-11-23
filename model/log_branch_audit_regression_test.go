@@ -90,7 +90,7 @@ func TestStreamFailureErrorLogFollowsTerminalFrameClassification(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			log := &Log{Type: LogTypeError, RequestId: "r", Other: tc.other, Content: upstreamStreamFailureText + " (request id: r)"}
-			maskProjectedLogForUser(log, nil, lang)
+			maskProjectedLogForUser(log, nil, "", lang)
 			assert.Equal(t, tc.want, log.Content)
 			assert.NotContains(t, log.Other, "status_code")
 			assert.NotContains(t, log.Other, `"error_type"`)
@@ -109,7 +109,7 @@ func TestStreamFailureErrorLogFollowsTerminalFrameClassification(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			withLiveRelayErrorDisplay(t, operation_setting.RelayErrorDisplaySetting{Enabled: true, HideUpstreamErrors: true, DefaultMessage: "Unavailable"})
 			log := &Log{Type: LogTypeError, Other: other, Content: "ours"}
-			maskProjectedLogForUser(log, nil, lang)
+			maskProjectedLogForUser(log, nil, "", lang)
 			assert.Equal(t, "ours", log.Content)
 			assert.Equal(t, other, log.Other)
 		})
@@ -126,7 +126,7 @@ func TestBranchAuditRegression_MaskedErrorLogKeepsOverriddenUpstreamStatus(t *te
 	withLiveRelayErrorDisplay(t, operation_setting.RelayErrorDisplaySetting{Enabled: true, HideUpstreamErrors: true, Rules: rules})
 	log := &Log{Type: LogTypeError, RequestId: "rid-st", Content: "insufficient balance (request id: rid-st)",
 		Other: `{"error_type":"openai_error","error_code":"insufficient_quota","status_code":402,"big":9007199254740993}`}
-	maskProjectedLogForUser(log, nil, func(int) string { return "en" })
+	maskProjectedLogForUser(log, nil, "", func(int) string { return "en" })
 	require.Equal(t, "Busy (request id: rid-st)", log.Content)
 	var got map[string]json.RawMessage
 	require.NoError(t, common.UnmarshalJsonStr(log.Other, &got))
@@ -144,16 +144,16 @@ func TestMaskedErrorLogStatusOverrideBranches(t *testing.T) {
 	lang := func(int) string { return "en" }
 
 	local := &Log{Type: LogTypeError, Content: "no channel", Other: `{"error_type":"new_api_error","error_code":"model_not_found","status_code":503}`}
-	maskProjectedLogForUser(local, nil, lang)
+	maskProjectedLogForUser(local, nil, "", lang)
 	assert.Equal(t, "Unavailable model", local.Content)
 	assert.JSONEq(t, `{"error_type":"new_api_error","error_code":"model_not_found","status_code":404}`, local.Other)
 
 	noStatus := &Log{Type: LogTypeError, Content: "no channel", Other: `{"error_type":"new_api_error","error_code":"model_not_found"}`}
-	maskProjectedLogForUser(noStatus, nil, lang)
+	maskProjectedLogForUser(noStatus, nil, "", lang)
 	assert.Equal(t, `{"error_type":"new_api_error","error_code":"model_not_found"}`, noStatus.Other, "no status recorded: none is invented")
 
 	upstream := &Log{Type: LogTypeError, Content: "boom", Other: `{"error_type":"openai_error","error_code":"x","status_code":500}`}
-	maskProjectedLogForUser(upstream, nil, lang)
+	maskProjectedLogForUser(upstream, nil, "", lang)
 	assert.JSONEq(t, `{"error_type":"new_api_error","error_code":"upstream_error","status_code":500}`, upstream.Other, "no override: the status stays")
 }
 

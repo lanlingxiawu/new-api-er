@@ -33,7 +33,15 @@ func SetRelayRouter(router *gin.Engine) {
 			}
 		})
 
-		modelsRouter.GET("/:model", func(c *gin.Context) {
+		modelsRouter.GET("/*model", func(c *gin.Context) {
+			if c.Param("model") == "/" {
+				target := "/v1/models"
+				if c.Request.URL.RawQuery != "" {
+					target += "?" + c.Request.URL.RawQuery
+				}
+				c.Redirect(301, target)
+				return
+			}
 			switch {
 			case c.GetHeader("x-api-key") != "" && c.GetHeader("anthropic-version") != "":
 				controller.RetrieveModel(c, constant.ChannelTypeAnthropic)

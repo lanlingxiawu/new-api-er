@@ -64,9 +64,7 @@ export function ImageDialog({
       open={open}
       onOpenChange={handleOpenChange}
       title={t('Image Preview')}
-      description={
-        taskId ? `${t('Task ID:')} ${taskId}` : t('View the generated image')
-      }
+      description={taskId ? `${t('Task ID:')} ${taskId}` : undefined}
       contentClassName='sm:max-w-3xl'
       contentHeight='auto'
       bodyClassName='space-y-4'

@@ -275,8 +275,10 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 
 	for {
 		var observe func([]byte)
-		if info.StreamSession.Active() {
+		if info.StreamDiagnostic != nil {
 			observe = info.StreamDiagnostic.WriteStreamPayload
+		}
+		if info.StreamSession.Active() {
 			if deadline, ok := service.RelayRequestDeadline(c); ok {
 				_ = conn.SetReadDeadline(deadline.Add(10 * time.Millisecond))
 			} else if constant.StreamingTimeout > 0 {
@@ -285,10 +287,11 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 		}
 		msg, recvErr := receiveMessageObserved(conn, observe)
 		if recvErr != nil {
-			if info.StreamSession.Active() {
+			normalClose := websocket.IsCloseError(recvErr, websocket.CloseNormalClosure, websocket.CloseGoingAway)
+			if info.StreamSession.Active() || !normalClose {
 				info.StreamSession.EndRead(recvErr)
 			}
-			if websocket.IsCloseError(recvErr, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			if normalClose {
 				break
 			}
 			return nil, types.NewErrorWithStatusCode(

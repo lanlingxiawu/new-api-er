@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -48,6 +49,7 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_ClaudeMode(t *testing.T) 
 	}
 
 	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, usage, types.RelayFormatClaude)
+	flushChannelAffinityUsageStats()
 	stats := GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFP)
 
 	require.EqualValues(t, 1, stats.Total)
@@ -79,6 +81,7 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_MixedMode(t *testing.T) {
 
 	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, openAIUsage, types.RelayFormatOpenAI)
 	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, claudeUsage, types.RelayFormatClaude)
+	flushChannelAffinityUsageStats()
 	stats := GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFP)
 
 	require.EqualValues(t, 2, stats.Total)
@@ -101,10 +104,58 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_UnsupportedModeKeepsEmpty
 	}
 
 	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, usage, types.RelayFormatGemini)
+	flushChannelAffinityUsageStats()
 	stats := GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFP)
 
 	require.EqualValues(t, 1, stats.Total)
 	require.EqualValues(t, 1, stats.Hit)
 	require.EqualValues(t, 25, stats.CachedTokens)
 	require.Equal(t, "", stats.CachedTokenRateMode)
+}
+
+func TestObserveChannelAffinityUsageCache_SyncEnvAppliesBeforeReturn(t *testing.T) {
+	t.Setenv("CHANNEL_AFFINITY_USAGE_STATS_SYNC", "true")
+	ruleName, keyFP := affinityTestKeys(t)
+	usingGroup := "default"
+	ctx := buildChannelAffinityStatsContextForTest(ruleName, usingGroup, keyFP)
+	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, &dto.Usage{PromptTokens: 7}, types.RelayFormatOpenAI)
+	stats := GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFP)
+	require.EqualValues(t, 1, stats.Total)
+	require.EqualValues(t, 7, stats.PromptTokens)
+}
+
+func TestAffinityUsageStatsDropsWhenQueueIsFull(t *testing.T) {
+	t.Setenv("CHANNEL_AFFINITY_USAGE_STATS_SYNC", "")
+	flushChannelAffinityUsageStats()
+
+	release := make(chan struct{})
+	entered := make(chan struct{}, channelAffinityUsageStatsWorkers)
+	hook := func(affinityUsageObservation) {
+		entered <- struct{}{}
+		<-release
+	}
+	affinityUsageObserveHook.Store(&hook)
+	t.Cleanup(func() {
+		close(release)
+		affinityUsageObserveHook.Store(nil)
+		flushChannelAffinityUsageStats()
+	})
+
+	for range channelAffinityUsageStatsWorkers {
+		require.True(t, enqueueAffinityUsageObservation(affinityUsageObservation{}))
+	}
+	deadline := time.After(2 * time.Second)
+	for range channelAffinityUsageStatsWorkers {
+		select {
+		case <-entered:
+		case <-deadline:
+			t.Fatal("usage stats workers did not reach the blocked hook")
+		}
+	}
+	for range channelAffinityUsageStatsQueueSize {
+		require.True(t, enqueueAffinityUsageObservation(affinityUsageObservation{}))
+	}
+	before := affinityUsageDrops.Load()
+	require.False(t, enqueueAffinityUsageObservation(affinityUsageObservation{}))
+	require.Equal(t, before+1, affinityUsageDrops.Load())
 }

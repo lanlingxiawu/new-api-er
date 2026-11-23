@@ -40,7 +40,10 @@ export type HealthSettings = {
 export type FilteringSettings = Pick<
   SecuritySettings,
   'CheckSensitiveEnabled' | 'CheckSensitiveOnPromptEnabled' | 'SensitiveWords'
->
+> & {
+  'claude_stream_validation_setting.enabled': boolean
+  'stream_protocol_validation_setting.enabled': string
+}
 export type RequestPolicySettings = RetrySettings &
   HealthSettings &
   FilteringSettings &
@@ -52,6 +55,8 @@ export type RequestPolicySettings = RetrySettings &
   }
 
 export const defaultRequestPolicySettings: RequestPolicySettings = {
+  'claude_stream_validation_setting.enabled': true,
+  'stream_protocol_validation_setting.enabled': 'null',
   'probe_routing_setting.max_input_chars': 128,
   'channel_daily_limit_setting.enabled': true,
   'channel_daily_limit_setting.timezone': 'Asia/Shanghai',

@@ -236,6 +236,16 @@ export interface ToolSurchargeItem {
   price: number
 }
 
+export interface UpstreamExchangeMark {
+  get_conn_ms?: number
+  conn_ms?: number
+  wrote_ms?: number
+  first_byte_ms?: number
+  end_ms?: number
+  wrote_ok?: boolean
+  request_body_bytes?: number
+}
+
 export interface LogOtherData {
   stream_diagnostic_available?: boolean // 新流式流程的异常、拒绝或零输出日志可查看 Root 诊断；此标记不等于上游故障。
   stream_diagnostic_attempt?: number // 本条日志的中转尝试编号，历史记录缺省按 0 处理。
@@ -267,6 +277,9 @@ export interface LogOtherData {
     local_count_tokens?: boolean
     usage_billing_path?: UsageBillingPath | string
     channel_affinity?: ChannelAffinityInfo
+    // Per upstream HTTP attempt, measured from request start. Missing fields
+    // were not observed or recorded. Privileged log views only.
+    upstream_exchange?: UpstreamExchangeMark[]
     // Upstream error text of a charged stream that failed midway; the consume
     // log content only carries our own message (admin only).
     stream_error?: string

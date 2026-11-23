@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { zodResolver } from '@hookform/resolvers/zod'
 /*
 Copyright (C) 2023-2026 QuantumNous
@@ -215,7 +233,7 @@ export function RequestLogSettingsSection({
                   </FormLabel>
                   <FormDescription>
                     {t(
-                      'After saving, each restart deletes historical request log files and their list index on this machine. Saving does not delete logs immediately. When off, regular cleanup still applies.'
+                      'When enabled, each restart deletes historical request logs on this machine. Saving does not delete them immediately. When disabled, retained logs are restored after restart and regular cleanup still applies.'
                     )}
                   </FormDescription>
                 </SettingsSwitchContent>
@@ -306,7 +324,7 @@ export function RequestLogSettingsSection({
                 </FormControl>
                 <FormDescription>
                   {t(
-                    'When request logs exceed the max count, only the newest min count is kept. Unless restart cleanup is enabled, historical logs are restored from local files after restart, without requiring Redis.'
+                    'When request logs exceed the max count, only the newest min count is kept.'
                   )}
                 </FormDescription>
                 <FormMessage />

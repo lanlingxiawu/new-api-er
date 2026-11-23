@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -146,11 +147,12 @@ func Record(sample Sample) {
 		group:    sample.Group,
 		bucketTs: bucketStart(time.Now().Unix()),
 	}
-	actual, _ := hotBuckets.LoadOrStore(key, &atomicBucket{})
+	actual, ok := hotBuckets.Load(key)
+	if !ok {
+		actual, _ = hotBuckets.LoadOrStore(key, &atomicBucket{})
+	}
 	actual.(*atomicBucket).add(sample)
-	gopool.Go(func() {
-		recordRedis(key, sample)
-	})
+	schedulePerfRedis(key, sample)
 }
 
 // queryWindow covers the current partial hour plus the preceding complete
@@ -572,6 +574,127 @@ func avgTps(value counters) float64 {
 		return 0
 	}
 	return float64(value.outputTokens) / (float64(value.generationMs) / 1000)
+}
+
+const perfRedisFlushInterval = time.Second
+
+type redisDelta struct {
+	req   int64
+	ok    int64
+	lat   int64
+	ttft  int64
+	ttftN int64
+	out   int64
+	genMs int64
+}
+
+func (d *redisDelta) add(other redisDelta) {
+	d.req += other.req
+	d.ok += other.ok
+	d.lat += other.lat
+	d.ttft += other.ttft
+	d.ttftN += other.ttftN
+	d.out += other.out
+	d.genMs += other.genMs
+}
+
+var (
+	perfRedisMu      sync.Mutex
+	perfRedisPending = map[bucketKey]redisDelta{}
+	perfRedisOnce    sync.Once
+)
+
+func schedulePerfRedis(key bucketKey, sample Sample) {
+	if !common.RedisEnabled || common.RDB == nil {
+		return
+	}
+	if os.Getenv("PERF_METRICS_REDIS_IMMEDIATE") == "true" {
+		gopool.Go(func() {
+			recordRedis(key, sample)
+		})
+		return
+	}
+	addPerfRedisDelta(key, sample)
+	perfRedisOnce.Do(func() {
+		go perfRedisFlushLoop()
+	})
+}
+
+func addPerfRedisDelta(key bucketKey, sample Sample) {
+	perfRedisMu.Lock()
+	current := perfRedisPending[key]
+	current.add(redisDeltaFrom(sample))
+	perfRedisPending[key] = current
+	perfRedisMu.Unlock()
+}
+
+func redisDeltaFrom(sample Sample) redisDelta {
+	delta := redisDelta{req: 1}
+	if sample.Success {
+		delta.ok = 1
+	}
+	if sample.LatencyMs > 0 {
+		delta.lat = sample.LatencyMs
+	}
+	if sample.HasTtft && sample.TtftMs >= 0 {
+		delta.ttft = sample.TtftMs
+		delta.ttftN = 1
+	}
+	if sample.OutputTokens > 0 && sample.GenerationMs > 0 {
+		delta.out = sample.OutputTokens
+		delta.genMs = sample.GenerationMs
+	}
+	return delta
+}
+
+func perfRedisFlushLoop() {
+	ticker := time.NewTicker(perfRedisFlushInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					common.SysError("performance metrics redis flush recovered")
+				}
+			}()
+			flushPerfRedisPending()
+		}()
+	}
+}
+
+func flushPerfRedisPending() {
+	perfRedisMu.Lock()
+	batch := perfRedisPending
+	perfRedisPending = map[bucketKey]redisDelta{}
+	perfRedisMu.Unlock()
+	if len(batch) == 0 || !common.RedisEnabled || common.RDB == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	pipe := common.RDB.Pipeline()
+	for key, delta := range batch {
+		redisKey := redisBucketKey(key)
+		if delta.req != 0 {
+			pipe.HIncrBy(ctx, redisKey, "req", delta.req)
+		}
+		if delta.ok != 0 {
+			pipe.HIncrBy(ctx, redisKey, "ok", delta.ok)
+		}
+		if delta.lat != 0 {
+			pipe.HIncrBy(ctx, redisKey, "lat", delta.lat)
+		}
+		if delta.ttft != 0 || delta.ttftN != 0 {
+			pipe.HIncrBy(ctx, redisKey, "ttft", delta.ttft)
+			pipe.HIncrBy(ctx, redisKey, "ttft_n", delta.ttftN)
+		}
+		if delta.out != 0 || delta.genMs != 0 {
+			pipe.HIncrBy(ctx, redisKey, "out", delta.out)
+			pipe.HIncrBy(ctx, redisKey, "gen_ms", delta.genMs)
+		}
+		pipe.Expire(ctx, redisKey, time.Hour)
+	}
+	_, _ = pipe.Exec(ctx)
 }
 
 func recordRedis(key bucketKey, sample Sample) {

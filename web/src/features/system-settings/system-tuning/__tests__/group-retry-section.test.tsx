@@ -23,17 +23,14 @@ afterEach(() => {
 })
 
 function show() {
+  const client = new QueryClient({
+    defaultOptions: {
+      mutations: { retry: false },
+      queries: { retry: false },
+    },
+  })
   render(
-    <QueryClientProvider
-      client={
-        new QueryClient({
-          defaultOptions: {
-            mutations: { retry: false },
-            queries: { retry: false },
-          },
-        })
-      }
-    >
+    <QueryClientProvider client={client}>
       <GroupRetrySection
         value='{"default":2}'
         statusRules='{"default":"429"}'
@@ -43,7 +40,19 @@ function show() {
       />
     </QueryClientProvider>
   )
+  return client
 }
+
+it('treats a business failure in the shared groups query as an error', async () => {
+  vi.mocked(api.get).mockResolvedValue({
+    data: { success: false, message: 'Denied' },
+  })
+  const client = show()
+  await waitFor(() =>
+    expect(client.getQueryState(['groups'])?.status).toBe('error')
+  )
+  client.clear()
+})
 
 it('saves retry counts, status codes and the switch in one request', async () => {
   const put = vi

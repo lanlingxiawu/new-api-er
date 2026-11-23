@@ -29,6 +29,9 @@ func TestShutdownWithBatchFlush_WaitsForBatchAlreadyInFlight(t *testing.T) {
 	const childEnv = "FORK_SHUTDOWN_PERSISTENCE_CHILD"
 	if os.Getenv(childEnv) != "1" {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestShutdownWithBatchFlush_WaitsForBatchAlreadyInFlight$", "-test.count=1", "-test.timeout=40s", "-test.v")
+		// The recovery journal is relative to the process directory. Give this
+		// child its own directory so a prior failed fixture cannot be replayed.
+		cmd.Dir = t.TempDir()
 		cmd.Env = append(os.Environ(), childEnv+"=1", "SQL_DSN=", "LOG_SQL_DSN=", "REDIS_CONN_STRING=")
 		output, err := cmd.CombinedOutput()
 		require.NoError(t, err, "isolated persistence child failed:\n%s", output)
@@ -46,7 +49,9 @@ func TestShutdownWithBatchFlush_WaitsForBatchAlreadyInFlight(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
 	sqlDB.SetMaxOpenConns(4)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}))
+	// The production flush records an idempotency receipt in the same
+	// transaction as its quota updates; the fixture needs that startup table.
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.BusinessStatsAppliedBatch{}))
 	user := model.User{Username: "shutdown-batch", Password: "unused-fixture", AffCode: "shutdown-batch", Quota: 1000}
 	require.NoError(t, db.Create(&user).Error)
 	token := model.Token{UserId: user.Id, Key: "shutdown-batch-fixture", Name: "shutdown-batch", RemainQuota: 1000}

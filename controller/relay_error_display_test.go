@@ -53,6 +53,45 @@ func TestRelayErrorDisplayInvalidMessageIsTranslated(t *testing.T) {
 	assert.NotEqual(t, i18n.MsgSettingRelayErrorDisplayInvalid, i18n.T(ctx, i18n.MsgSettingRelayErrorDisplayInvalid))
 }
 
+func TestPreviewRelayErrorDisplay_RequestGroup(t *testing.T) {
+	for _, group := range []string{"vip", "default", "", "auto", "VIP"} {
+		t.Run(group, func(t *testing.T) {
+			body := `{"setting":{"rules":"[{\"groups\":[\"vip\"],\"source\":\"any\",\"action\":\"replace\",\"message\":\"VIP busy\"}]"},"sample":{"source":"upstream","group":"` + group + `","message":"original","status_code":403}}`
+			_, out := callJSON(t, PreviewRelayErrorDisplay, http.MethodPost, "/api/option/relay-error-display/preview", body)
+			require.True(t, out.Success)
+			if group == "vip" {
+				assert.Equal(t, "VIP busy", out.Data["message"])
+				assert.EqualValues(t, 0, out.Data["rule_index"])
+			} else {
+				assert.Equal(t, "original", out.Data["message"])
+				assert.EqualValues(t, -1, out.Data["rule_index"])
+			}
+		})
+	}
+}
+
+func TestPreviewRelayErrorDisplay_GroupValidation(t *testing.T) {
+	for _, length := range []int{128, 129} {
+		request := relayErrorPreviewRequest{}
+		request.Sample.Source = "upstream"
+		request.Sample.Group = strings.Repeat("组", length)
+		data, err := common.Marshal(request)
+		require.NoError(t, err)
+		_, out := callJSON(t, PreviewRelayErrorDisplay, http.MethodPost, "/", string(data))
+		assert.Equal(t, length == 128, out.Success)
+	}
+	ctx, out := callJSON(t, PreviewRelayErrorDisplay, http.MethodPost, "/",
+		`{"setting":{"rules":"[{\"groups\":[\"auto\"],\"source\":\"any\",\"action\":\"keep\"}]"},"sample":{"source":"upstream","message":"x"}}`)
+	require.False(t, out.Success)
+	assert.Equal(t, i18n.T(ctx, i18n.MsgSettingRelayErrorGroupsInvalid, map[string]any{"Rule": 1, "Max": 100, "Length": 128}), out.Message)
+	for _, lang := range []string{i18n.LangEn, i18n.LangZhCN, i18n.LangZhTW} {
+		message := i18n.Translate(lang, i18n.MsgSettingRelayErrorGroupsInvalid, map[string]any{"Rule": 1, "Max": 100, "Length": 128})
+		assert.NotEqual(t, i18n.MsgSettingRelayErrorGroupsInvalid, message)
+		assert.Contains(t, message, "100")
+		assert.Contains(t, message, "128")
+	}
+}
+
 func TestPreviewRelayErrorDisplay(t *testing.T) {
 	draft := `"setting":{"enabled":false,"hide_upstream_errors":true,"default_message":"服务暂时不可用","rules":"[{\"name\":\"quota\",\"source\":\"upstream\",\"keywords\":[\"quota\"],\"action\":\"replace\",\"message\":\"服务繁忙\",\"status_code\":503}]"}`
 

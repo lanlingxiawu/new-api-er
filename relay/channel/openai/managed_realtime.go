@@ -152,13 +152,10 @@ type realtimeStreamRead struct {
 	readerPanic bool   // Diagnostic classification only; existing error handling remains unchanged.
 }
 
-// managedRealtimeHandler 使用两个有界读取者和一个写入/计费所有者管理双向连接。
-// 参数 c 为连接请求上下文，info 包含两端 WS 与已通过握手的会话；返回 nil 中转错误和累计选定用量，终止原因保存在 info。
-// 结束时关闭连接并等待读取者；对最近 128 个非空 response ID 去重，空 ID 或已淘汰的 ID 不享有永久去重保证。
-// 已完成轮次之间发生上游异常时仅补发终止错误，保留原累计账本，不虚构新轮次或再次预留。
-// 首轮开始前已透传可恢复请求错误且上游正常关闭时，保留空账本；新的请求或回答会取消此例外。
-func managedRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.RealtimeUsage) {
-	info.IsStream = true
+// startRealtimeRelayReaders shares read workers and connection cleanup between
+// both owners. Only the strict policy adds a message size limit; official main
+// has none. Readers never parse or settle usage.
+func startRealtimeRelayReaders(c *gin.Context, info *relaycommon.RelayInfo) (context.Context, <-chan realtimeStreamRead, func()) {
 	termination := info.StreamSession.Termination
 	stop, cancel := context.WithCancel(c.Request.Context())
 	reads := make(chan realtimeStreamRead, 2)
@@ -168,7 +165,9 @@ func managedRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types
 		client bool
 	}{{info.ClientWs, true}, {info.TargetWs, false}} {
 		conn, client := peer.conn, peer.client
-		conn.SetReadLimit(relaycommon.MaxStreamFrameBytes)
+		if !info.MainStreamMode() {
+			conn.SetReadLimit(relaycommon.MaxStreamFrameBytes)
+		}
 		wg.Add(1)
 		common.RelayCtxGo(stop, func() {
 			defer wg.Done()
@@ -196,13 +195,24 @@ func managedRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types
 			}
 		})
 	}
-	defer func() {
+	cleanup := func() {
 		termination.ObserveUpstreamClose("realtime_cleanup")
 		cancel()
 		_ = info.TargetWs.Close()
 		_ = info.ClientWs.Close()
 		wg.Wait()
-	}()
+	}
+	return stop, reads, cleanup
+}
+
+// managedRealtimeHandler owns strict protocol decisions and cumulative billing.
+// Recent response IDs are deduplicated across rounds, with a fixed 128-ID bound.
+func managedRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.RealtimeUsage) {
+	info.StreamProcessingOwner = relaycommon.StreamOwnerRealtime
+	info.IsStream = true
+	termination := info.StreamSession.Termination
+	stop, reads, cleanup := startRealtimeRelayReaders(c, info)
+	defer cleanup()
 	a := newRealtimeStreamAccounting()
 	local := &dto.RealtimeUsage{}
 	var outputEstimator service.StreamTokenEstimator // 每轮独立；同一文本的 WS 分片方式不改变收费。

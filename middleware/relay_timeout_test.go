@@ -308,25 +308,47 @@ func TestRelayRequestTimeoutDisabledLeavesLegacyChainUntouched(t *testing.T) {
 	assert.Same(t, originalWriter, c.Writer)
 }
 
-func TestRelayRequestTimeoutEnabledWithoutUserOverridesLeavesLegacyChainUntouched(t *testing.T) {
-	useRelayTimeoutSetting(t, operation_setting.RelayTimeoutSetting{Enabled: true, ResponseTimeoutSeconds: 1, TotalTimeoutSeconds: 1})
-	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
-	originalWriter := c.Writer
-
-	RelayRequestTimeout()(c)
-	StartRelayRequestTimeout(c, true)
-
-	assert.False(t, service.IsRelayTimeoutManaged(c))
-	assert.Same(t, originalWriter, c.Writer)
-	_, exists := common.GetContextKey(c, constant.ContextKeyRelayTimeoutControl)
-	assert.False(t, exists)
-	legacyClient := &http.Client{Timeout: time.Second}
-	assert.Same(t, legacyClient, service.RelayHTTPClient(c, legacyClient))
+func TestRelayRequestTimeoutEnabledWithoutUserOverridesInheritsDefaults(t *testing.T) {
+	useRelayTimeoutSetting(t, operation_setting.RelayTimeoutSetting{Enabled: true, ResponseTimeoutSeconds: 2200, TotalTimeoutSeconds: 3600})
+	for _, tc := range []struct {
+		name     string
+		isStream bool
+		explicit bool
+	}{
+		{"stream missing fields", true, false},
+		{"non-stream missing fields", false, false},
+		{"stream zero fields", true, true},
+		{"non-stream zero fields", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			if tc.explicit {
+				common.SetContextKey(c, constant.ContextKeyUserStreamResponseTimeout, 0)
+				common.SetContextKey(c, constant.ContextKeyUserStreamTotalTimeout, 0)
+				common.SetContextKey(c, constant.ContextKeyUserNonStreamResponseTimeout, 0)
+				common.SetContextKey(c, constant.ContextKeyUserNonStreamTotalTimeout, 0)
+			}
+			originalWriter := c.Writer
+			RelayRequestTimeout()(c)
+			StartRelayRequestTimeout(c, tc.isStream)
+			control, ok := relayTimeoutControlFromContext(c)
+			require.True(t, ok)
+			t.Cleanup(control.Close)
+			assert.True(t, service.IsRelayTimeoutManaged(c))
+			assert.NotSame(t, originalWriter, c.Writer)
+			assert.Equal(t, 2200, common.GetContextKeyInt(c, constant.ContextKeyRelayResponseTimeoutSeconds))
+			assert.Equal(t, 3600, common.GetContextKeyInt(c, constant.ContextKeyRelayTotalTimeoutSeconds))
+			assert.Equal(t, 2200*time.Second, control.responseTimeout)
+			assert.NotNil(t, control.totalTimer)
+			legacyClient := &http.Client{Timeout: time.Second}
+			assert.Zero(t, service.RelayHTTPClient(c, legacyClient).Timeout)
+			assert.Equal(t, time.Second, legacyClient.Timeout)
+		})
+	}
 }
 
-func TestRelayRequestTimeoutStreamModeWithoutDurationOverridesLeavesLegacyChainUntouched(t *testing.T) {
+func TestRelayRequestTimeoutStreamModeWithoutDurationOverridesUsesDefault(t *testing.T) {
 	useRelayTimeoutSetting(t, operation_setting.RelayTimeoutSetting{Enabled: true, ResponseTimeoutSeconds: 1, TotalTimeoutSeconds: 1})
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -337,8 +359,13 @@ func TestRelayRequestTimeoutStreamModeWithoutDurationOverridesLeavesLegacyChainU
 	RelayRequestTimeout()(c)
 	StartRelayRequestTimeout(c, true)
 
-	assert.False(t, service.IsRelayTimeoutManaged(c))
-	assert.Same(t, originalWriter, c.Writer)
+	control, ok := relayTimeoutControlFromContext(c)
+	require.True(t, ok)
+	t.Cleanup(control.Close)
+	assert.True(t, service.IsRelayTimeoutManaged(c))
+	assert.NotSame(t, originalWriter, c.Writer)
+	assert.Equal(t, service.RelayStreamResponseTimeoutModeIdle, control.streamResponseMode)
+	assert.Equal(t, time.Second, control.responseTimeout)
 }
 
 func TestRelayRequestTimeoutAnyUserOverrideActivatesManagedPath(t *testing.T) {
@@ -383,28 +410,31 @@ func TestRelayRequestTimeoutAnyUserOverrideActivatesManagedPath(t *testing.T) {
 	}
 }
 
-// A user override that only applies to the other mode must not disarm the
-// legacy guards for this one: taking the request over drops the stream
-// scanner's STREAMING_TIMEOUT ticker and strips RELAY_TIMEOUT from the shared
-// client, so a managed request that resolves to no limits would be strictly
-// less protected than an unmanaged one.
-func TestRelayRequestTimeoutZeroEffectiveLimitsLeavesLegacyChainUntouched(t *testing.T) {
+// Global zero means unlimited, including when only the other mode has an
+// override. Legacy environment limits must not override this explicit policy.
+func TestRelayRequestTimeoutZeroEffectiveLimitsStaysManaged(t *testing.T) {
 	useRelayTimeoutSetting(t, operation_setting.RelayTimeoutSetting{Enabled: true, ResponseTimeoutSeconds: 0, TotalTimeoutSeconds: 0})
-	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
-	// Configured for non-stream only; this request is a streaming one.
-	common.SetContextKey(c, constant.ContextKeyUserNonStreamTotalTimeout, 600)
-	originalWriter := c.Writer
-
-	RelayRequestTimeout()(c)
-	StartRelayRequestTimeout(c, true)
-
-	assert.False(t, service.IsRelayTimeoutManaged(c))
-	assert.Same(t, originalWriter, c.Writer)
-	legacyClient := &http.Client{Timeout: time.Second}
-	assert.Same(t, legacyClient, service.RelayHTTPClient(c, legacyClient),
-		"unmanaged requests must keep RELAY_TIMEOUT on the shared client")
+	for _, otherModeOverride := range []int{0, 600} {
+		for _, isStream := range []bool{false, true} {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			if isStream {
+				common.SetContextKey(c, constant.ContextKeyUserNonStreamTotalTimeout, otherModeOverride)
+			} else {
+				common.SetContextKey(c, constant.ContextKeyUserStreamTotalTimeout, otherModeOverride)
+			}
+			RelayRequestTimeout()(c)
+			StartRelayRequestTimeout(c, isStream)
+			control, ok := relayTimeoutControlFromContext(c)
+			require.True(t, ok)
+			t.Cleanup(control.Close)
+			assert.True(t, service.IsRelayTimeoutManaged(c))
+			assert.Nil(t, control.responseTimer)
+			assert.Nil(t, control.totalTimer)
+			legacyClient := &http.Client{Timeout: time.Second}
+			assert.Zero(t, service.RelayHTTPClient(c, legacyClient).Timeout)
+		}
+	}
 }
 
 // -1 is an explicit "no limit for me", so the request stays managed (and the
@@ -493,6 +523,56 @@ func TestRelayRequestTimeoutCapturesHotSettingForNewRequest(t *testing.T) {
 	assert.Equal(t, 22, common.GetContextKeyInt(c, constant.ContextKeyRelayTotalTimeoutSeconds))
 }
 
+func TestRelayRequestTimeoutHotUpdateAppliesOnlyToNewManagedRequests(t *testing.T) {
+	useRelayTimeoutSetting(t, operation_setting.RelayTimeoutSetting{Enabled: true, ResponseTimeoutSeconds: 1200})
+	gin.SetMode(gin.TestMode)
+	previousStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 1200
+	t.Cleanup(func() { constant.StreamingTimeout = previousStreamingTimeout })
+
+	inFlight, _ := gin.CreateTestContext(httptest.NewRecorder())
+	inFlight.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	RelayRequestTimeout()(inFlight)
+	StartRelayRequestTimeout(inFlight, true)
+	oldControl, ok := relayTimeoutControlFromContext(inFlight)
+	require.True(t, ok)
+	t.Cleanup(oldControl.Close)
+
+	operation_setting.ReplaceRelayTimeoutSetting(operation_setting.RelayTimeoutSetting{Enabled: true, ResponseTimeoutSeconds: 2200})
+	assert.Equal(t, 1200, common.GetContextKeyInt(inFlight, constant.ContextKeyRelayResponseTimeoutSeconds))
+	assert.Equal(t, 1200*time.Second, oldControl.responseTimeout)
+	assert.Equal(t, 1200, constant.StreamingTimeout, "hot settings do not replace the legacy environment setting")
+
+	for _, tc := range []struct {
+		name         string
+		userResponse int
+		userTotal    int
+		wantManaged  bool
+		wantResponse int
+	}{
+		{name: "all zero inherits updated default", wantManaged: true, wantResponse: 2200},
+		{name: "managed user inherits updated default", userTotal: -1, wantManaged: true, wantResponse: 2200},
+		{name: "explicit user override wins", userResponse: 900, wantManaged: true, wantResponse: 900},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			common.SetContextKey(c, constant.ContextKeyUserStreamResponseTimeout, tc.userResponse)
+			common.SetContextKey(c, constant.ContextKeyUserStreamTotalTimeout, tc.userTotal)
+			RelayRequestTimeout()(c)
+			StartRelayRequestTimeout(c, true)
+			control, managed := relayTimeoutControlFromContext(c)
+			require.Equal(t, tc.wantManaged, managed)
+			if !managed {
+				return
+			}
+			t.Cleanup(control.Close)
+			assert.Equal(t, tc.wantResponse, common.GetContextKeyInt(c, constant.ContextKeyRelayResponseTimeoutSeconds))
+			assert.Equal(t, time.Duration(tc.wantResponse)*time.Second, control.responseTimeout)
+		})
+	}
+}
+
 func TestRelayNonOutputClassification(t *testing.T) {
 	for _, heartbeat := range []string{"", "\n", ": PING\n\n", "  : comment\r\n:保活\n"} {
 		assert.True(t, isRelayNonOutput([]byte(heartbeat)))
@@ -502,6 +582,70 @@ func TestRelayNonOutputClassification(t *testing.T) {
 		assert.False(t, isRelayNonOutput([]byte(output)))
 		assert.False(t, isRelayNonOutputString(output))
 	}
+}
+
+func TestRelayRequestTimeoutHotTogglePreservesCapturedPolicy(t *testing.T) {
+	useRelayTimeoutSetting(t, operation_setting.RelayTimeoutSetting{Enabled: true, ResponseTimeoutSeconds: 1200})
+	captured, _ := gin.CreateTestContext(httptest.NewRecorder())
+	captured.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	RelayRequestTimeout()(captured)
+
+	operation_setting.ReplaceRelayTimeoutSetting(operation_setting.RelayTimeoutSetting{Enabled: false, ResponseTimeoutSeconds: 2200})
+	StartRelayRequestTimeout(captured, false)
+	control, ok := relayTimeoutControlFromContext(captured)
+	require.True(t, ok)
+	t.Cleanup(control.Close)
+	assert.Equal(t, 1200*time.Second, control.responseTimeout)
+
+	disabled, _ := gin.CreateTestContext(httptest.NewRecorder())
+	disabled.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	originalWriter := disabled.Writer
+	RelayRequestTimeout()(disabled)
+	operation_setting.ReplaceRelayTimeoutSetting(operation_setting.RelayTimeoutSetting{Enabled: true, ResponseTimeoutSeconds: 2200})
+	StartRelayRequestTimeout(disabled, false)
+	assert.False(t, service.IsRelayTimeoutManaged(disabled))
+	assert.Same(t, originalWriter, disabled.Writer)
+	legacyClient := &http.Client{Timeout: time.Second}
+	assert.Same(t, legacyClient, service.RelayHTTPClient(disabled, legacyClient))
+
+	reenabled, _ := gin.CreateTestContext(httptest.NewRecorder())
+	reenabled.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	RelayRequestTimeout()(reenabled)
+	StartRelayRequestTimeout(reenabled, false)
+	newControl, ok := relayTimeoutControlFromContext(reenabled)
+	require.True(t, ok)
+	t.Cleanup(newControl.Close)
+	assert.Equal(t, 2200*time.Second, newControl.responseTimeout)
+}
+
+func TestRelayRequestTimeoutInheritedPolicyClosesAfterHandler(t *testing.T) {
+	useRelayTimeoutSetting(t, operation_setting.RelayTimeoutSetting{Enabled: true, ResponseTimeoutSeconds: 2200, TotalTimeoutSeconds: 3600})
+	var control *relayTimeoutControl
+	var requestContext context.Context
+	router := gin.New()
+	router.Use(RelayRequestTimeout())
+	router.POST("/", func(c *gin.Context) {
+		StartRelayRequestTimeout(c, true)
+		var ok bool
+		control, ok = relayTimeoutControlFromContext(c)
+		require.True(t, ok)
+		requestContext = c.Request.Context()
+		// A duplicate start must retain the same policy and writer.
+		writer := c.Writer
+		StartRelayRequestTimeout(c, true)
+		assert.Same(t, writer, c.Writer)
+		c.String(http.StatusOK, "data: result\n\n")
+		assert.False(t, control.RelayResponsePending())
+	})
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/", nil))
+	require.NotNil(t, control)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "data: result\n\n", recorder.Body.String())
+	assert.True(t, control.closed)
+	assert.False(t, control.responseTimer.Stop())
+	assert.False(t, control.totalTimer.Stop())
+	assert.ErrorIs(t, requestContext.Err(), context.Canceled)
 }
 
 // timeoutTestScale 放大本文件所有计时窗口：全量测试并行负载下调度抖动可达数十毫秒，

@@ -118,7 +118,7 @@ func fetchGroupData(ctx context.Context, client *http.Client, groupConfig map[st
 			}
 
 			if heartbeats, exists := heartbeatData.HeartbeatList[monitorID]; exists && len(heartbeats) > 0 {
-				monitor.Status = heartbeats[0].Status
+				monitor.Status = heartbeats[len(heartbeats)-1].Status
 			}
 
 			result.Monitors = append(result.Monitors, monitor)

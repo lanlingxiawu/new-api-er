@@ -1,6 +1,7 @@
 package operation_setting
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -9,6 +10,130 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRelayErrorDisplay_GroupConditions(t *testing.T) {
+	rule := RelayErrorRule{Groups: []string{"vip", "premium", "vip"}, Source: RelayErrorSourceUpstream,
+		StatusCodes: []int{429}, Keywords: []string{"quota"}, Action: RelayErrorActionReplace, Message: "VIP busy"}
+	s := enabledSetting(t, false, rule, RelayErrorRule{Source: RelayErrorSourceAny, Action: RelayErrorActionReplace, Message: "Global busy"})
+	for _, tc := range []struct {
+		group         string
+		upstream      bool
+		status        int
+		message, want string
+	}{
+		{"vip", true, 429, "QUOTA low", "VIP busy"},
+		{"premium", true, 429, "quota low", "VIP busy"},
+		{"VIP", true, 429, "quota low", "Global busy"},
+		{"", true, 429, "quota low", "Global busy"},
+		{"auto", true, 429, "quota low", "Global busy"},
+		{"vip", false, 429, "quota low", "Global busy"},
+		{"vip", true, 400, "quota low", "Global busy"},
+		{"vip", true, 429, "other", "Global busy"},
+	} {
+		d := decide(t, s, RelayErrorInput{Group: tc.group, Upstream: tc.upstream, StatusCode: tc.status, Message: tc.message})
+		assert.Equal(t, tc.want, d.Message, "%+v", tc)
+	}
+	// Scope never overrides list order, including explicit keep and edit rules.
+	for _, action := range []string{RelayErrorActionKeep, RelayErrorActionReplace, RelayErrorActionEdit} {
+		first := RelayErrorRule{Source: RelayErrorSourceAny, Action: action, Message: "first"}
+		if action == RelayErrorActionEdit {
+			first.Edits = []RelayErrorEdit{{Find: "quota", Replace: "first"}}
+		}
+		d := decide(t, enabledSetting(t, false, first, rule), RelayErrorInput{Group: "vip", Upstream: true, StatusCode: 429, Message: "quota"})
+		assert.Equal(t, 0, d.RuleIndex)
+		assert.Equal(t, action != RelayErrorActionKeep, d.Replace)
+	}
+}
+
+func TestRelayErrorDisplay_GroupValidation(t *testing.T) {
+	for _, scope := range []string{"null", "[]"} {
+		d := decide(t, RelayErrorDisplaySetting{Rules: `[{"groups":` + scope + `,"source":"any","action":"keep"}]`}, RelayErrorInput{Group: "any-group"})
+		assert.Equal(t, 0, d.RuleIndex, "null and empty stored scopes remain global")
+	}
+	for _, tc := range []struct {
+		name   string
+		groups []string
+		valid  bool
+	}{
+		{"absent", nil, true}, {"empty", []string{}, true},
+		{"duplicates", []string{"vip", "vip"}, true},
+		{"exact names", []string{" vip ", "VIP", "*", "deleted-group"}, true},
+		{"128 unicode characters", []string{strings.Repeat("组", 128)}, true},
+		{"129 unicode characters", []string{strings.Repeat("组", 129)}, false},
+		{"empty member", []string{"vip", ""}, false}, {"whitespace", []string{" \t"}, false},
+		{"auto", []string{"auto"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rule := RelayErrorRule{Groups: tc.groups, Source: RelayErrorSourceAny, Action: RelayErrorActionKeep}
+			s := enabledSetting(t, false, rule)
+			err := ValidateRelayErrorDisplaySetting(s)
+			if tc.valid {
+				require.NoError(t, err)
+				return
+			}
+			var invalidGroups *RelayErrorGroupsInvalid
+			require.ErrorAs(t, err, &invalidGroups)
+			assert.Equal(t, 1, invalidGroups.Rule)
+			assert.Empty(t, compileRelayErrorDisplayParts(s).rules, "invalid scopes must not become all-group rules")
+		})
+	}
+	groups := make([]string, 101)
+	for i := range groups {
+		groups[i] = fmt.Sprintf("group-%d", i)
+	}
+	for _, n := range []int{100, 101} {
+		err := ValidateRelayErrorDisplaySetting(enabledSetting(t, false, RelayErrorRule{Groups: groups[:n], Source: RelayErrorSourceAny, Action: RelayErrorActionKeep}))
+		assert.Equal(t, n == 100, err == nil)
+	}
+}
+
+func TestResolveRelayErrorGroup(t *testing.T) {
+	for _, tc := range []struct{ using, auto, want string }{
+		{"vip", "", "vip"}, {"auto", "vip", "vip"}, {"default", "vip", "vip"},
+		{"auto", "", ""}, {"", "", ""}, {"vip", "auto", ""},
+		{" vip ", "", " vip "}, {"VIP", "", "VIP"}, {" \t", "", ""},
+		{strings.Repeat("组", 129), "", ""},
+	} {
+		assert.Equal(t, tc.want, ResolveRelayErrorGroup(tc.using, tc.auto), "%+v", tc)
+	}
+}
+
+func BenchmarkRelayErrorDecide_GroupScopes(b *testing.B) {
+	rules := make([]RelayErrorRule, MaxRelayErrorRules)
+	for i := range rules {
+		rules[i] = RelayErrorRule{Source: RelayErrorSourceAny, Action: RelayErrorActionKeep}
+		for j := 0; j < 100; j++ {
+			rules[i].Groups = append(rules[i].Groups, fmt.Sprintf("group-%d-%d", i, j))
+		}
+	}
+	raw, err := common.Marshal(rules)
+	require.NoError(b, err)
+	view, err := compileRelayErrorDisplay(RelayErrorDisplaySetting{Enabled: true, Rules: string(raw)})
+	require.NoError(b, err)
+	disabled := *view
+	disabled.enabled = false
+	global, err := compileRelayErrorDisplay(RelayErrorDisplaySetting{Enabled: true, Rules: `[{"source":"any","action":"keep"}]`})
+	require.NoError(b, err)
+	for _, tc := range []struct {
+		name, group string
+		view        *relayErrorDisplayView
+	}{
+		{"disabled", "group-99-99", &disabled},
+		{"all-groups", "group-99-99", global},
+		{"first-group", "group-0-0", view},
+		{"last-group", "group-99-99", view},
+		{"no-match", "missing-group", view},
+		{"unknown-group", "", view},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			in := RelayErrorInput{Group: tc.group, Message: "upstream failed"}
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				tc.view.decide(in)
+			}
+		})
+	}
+}
 
 func rulesJSON(t *testing.T, rules ...RelayErrorRule) string {
 	t.Helper()

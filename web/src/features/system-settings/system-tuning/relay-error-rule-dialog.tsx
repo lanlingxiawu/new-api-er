@@ -21,6 +21,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Dialog } from '@/components/dialog'
+import { MultiSelect } from '@/components/multi-select'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -66,11 +67,27 @@ export function RelayErrorRuleDialog(props: {
   rule: RuleRow
   isNew: boolean
   onConfirm: (rule: RuleRow) => void
+  groups: string[]
+  groupsLoaded: boolean
+  groupsLoading: boolean
+  groupsError: boolean
+  onRetryGroups: () => void
 }) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState<RuleRow>(props.rule)
   const [errors, setErrors] = useState<RuleFieldErrors>(() =>
     props.isNew ? {} : validateRuleRow(props.rule, t)
+  )
+  const knownGroups = new Set(props.groups)
+  const groupOptions = [...new Set([...props.groups, ...draft.groups])].map(
+    (group) => ({
+      value: group,
+      label: group,
+      hint:
+        props.groupsLoaded && !knownGroups.has(group)
+          ? t('Not in current group list')
+          : undefined,
+    })
   )
 
   const update = (patch: Partial<RuleRow>) =>
@@ -130,6 +147,46 @@ export function RelayErrorRuleDialog(props: {
       <div className='min-w-0 space-y-4'>
         <div className='space-y-3'>
           <h4 className='text-sm font-medium'>{t('Match when')}</h4>
+          <div className='grid gap-1.5'>
+            <Label htmlFor='red-rule-groups'>{t('Applies to groups')}</Label>
+            <MultiSelect
+              id='red-rule-groups'
+              aria-label={t('Applies to groups')}
+              options={groupOptions}
+              selected={draft.groups}
+              onChange={(groups) => update({ groups })}
+              allowCreate
+              preserveSelectionOnEscape
+              maxVisibleChips={6}
+              placeholder={
+                props.groupsLoading ? t('Loading...') : t('All groups')
+              }
+            />
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'Leave empty for all groups. Auto routing matches the actual group used by the request.'
+              )}
+            </p>
+            {props.groupsError && (
+              <div className='flex flex-wrap items-center gap-2 text-xs'>
+                <span className='text-destructive'>
+                  {t(
+                    'Could not load groups. Existing selections are kept; enter a group name or retry.'
+                  )}
+                </span>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  disabled={props.groupsLoading}
+                  onClick={props.onRetryGroups}
+                >
+                  {t('Retry')}
+                </Button>
+              </div>
+            )}
+            <FieldError message={errors.groups} />
+          </div>
           <div className='grid gap-1.5'>
             <Label htmlFor='red-rule-source'>{t('Applies to')}</Label>
             <Select
@@ -308,7 +365,8 @@ export function RelayErrorRuleDialog(props: {
                     'Steps run in order on the original error, each on the result of the previous one. Matching ignores case. With Regex checked, use $1 to reuse a group and $$ for a literal $. If nothing is left, the default message is shown.'
                   )}
                 </p>
-                {!draft.statusCodes.trim() &&
+                {draft.groups.length === 0 &&
+                  !draft.statusCodes.trim() &&
                   !draft.errorCodes.trim() &&
                   !draft.keywords.trim() && (
                     <p className='text-warning text-xs'>

@@ -77,11 +77,17 @@ function makeLog(other: LogOtherData, type = 2): UsageLog {
 function DetailPreview(props: {
   other: LogOtherData
   isAdmin: boolean
+  canUseAdminActions?: boolean
   type?: number
+  ids?: Pick<UsageLog, 'request_id' | 'upstream_request_id'>
 }) {
   const table = useReactTable({
-    data: [makeLog(props.other, props.type)],
-    columns: useCommonLogsColumns(props.isAdmin, false),
+    data: [{ ...makeLog(props.other, props.type), ...props.ids }],
+    columns: useCommonLogsColumns(
+      props.isAdmin,
+      false,
+      props.canUseAdminActions
+    ),
     getCoreRowModel: getCoreRowModel(),
   })
   const cell = table
@@ -121,16 +127,385 @@ afterEach(() => {
   client.clear()
   useSystemConfigStore.getState().setConfig(previousConfig)
 })
-function renderPreview(other: LogOtherData, isAdmin = true, type?: number) {
+function renderPreview(
+  other: LogOtherData,
+  isAdmin = true,
+  type?: number,
+  canUseAdminActions?: boolean,
+  ids?: Pick<UsageLog, 'request_id' | 'upstream_request_id'>
+) {
   render(
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={client}>
-        <DetailPreview other={other} isAdmin={isAdmin} type={type} />
+        <DetailPreview
+          other={other}
+          isAdmin={isAdmin}
+          type={type}
+          canUseAdminActions={canUseAdminActions}
+          ids={ids}
+        />
       </QueryClientProvider>
     </I18nextProvider>
   )
   return screen.getByRole('button', { name: /./ })
 }
+
+test.each([
+  {
+    other: {
+      stream_status: { status: 'error', end_reason: 'client disconnected' },
+    },
+    label: 'Stream Status',
+  },
+  { other: { reasoning_effort: 'high' }, label: 'Reasoning Effort' },
+  { other: { is_system_prompt_overwritten: true }, label: 'System Prompt' },
+  {
+    other: { is_model_mapped: true, upstream_model_name: 'mapped-model' },
+    label: 'Model Mapping',
+  },
+] satisfies Array<{ other: LogOtherData; label: string }>)(
+  'keeps public $label visible without diagnostic navigation for self views',
+  async ({ other, label }) => {
+    fireEvent.click(renderPreview(other, false, 2, false))
+    const dialog = within(await screen.findByRole('dialog'))
+    expect(dialog.queryByRole('tab')).not.toBeInTheDocument()
+    expect(dialog.getByText(label)).toBeVisible()
+    expect(dialog.queryByText('Upstream exchange')).not.toBeInTheDocument()
+    expect(dialog.queryByText('Root Diagnostics')).not.toBeInTheDocument()
+  }
+)
+
+test.each([
+  {
+    name: 'successful stream',
+    other: { stream_status: { status: 'ok' } },
+    type: 2,
+  },
+  {
+    name: 'mapping without a target',
+    other: { is_model_mapped: true },
+    type: 2,
+  },
+  {
+    name: 'empty conversion chain',
+    other: { request_conversion: [''] },
+    type: 2,
+  },
+  {
+    name: 'refund conversion',
+    other: { request_path: '/v1/chat/completions' },
+    type: 6,
+  },
+] satisfies Array<{ name: string; other: LogOtherData; type: number }>)(
+  'does not show an empty diagnostic tab for $name',
+  async ({ other, type }) => {
+    fireEvent.click(renderPreview(other, true, type))
+    const dialog = within(await screen.findByRole('dialog'))
+    expect(dialog.queryByRole('tab')).not.toBeInTheDocument()
+  }
+)
+
+test.each([
+  { viewer: 'employee', showAdminFields: true, canUseAdminActions: false },
+  { viewer: 'admin', showAdminFields: true, canUseAdminActions: true },
+  { viewer: 'user', showAdminFields: false, canUseAdminActions: false },
+])(
+  'shows request policy decisions for the $viewer log view without granting admin actions',
+  async ({ showAdminFields, canUseAdminActions }) => {
+    fireEvent.click(
+      renderPreview(
+        {
+          admin_info: {
+            use_channel: [275, 275],
+            request_policy: [
+              {
+                attempt: 1,
+                channel_id: 275,
+                group: 'Gemini_Vertex',
+                elapsed_ms: 226,
+                decision: {
+                  action: 'select',
+                  reason: 'channel_selected',
+                  source: 'routing',
+                },
+              },
+              {
+                attempt: 1,
+                channel_id: 275,
+                elapsed_ms: 1142,
+                status: 429,
+                decision: {
+                  action: 'failure',
+                  reason: 'upstream_failure',
+                  source: 'upstream',
+                },
+              },
+              {
+                attempt: 2,
+                channel_id: 275,
+                elapsed_ms: 2033,
+                decision: {
+                  action: 'stop',
+                  reason: 'attempt_budget_exhausted',
+                  source: 'global',
+                },
+              },
+            ],
+          },
+        },
+        showAdminFields,
+        5,
+        canUseAdminActions
+      )
+    )
+    const dialog = within(await screen.findByRole('dialog'))
+    if (showAdminFields) {
+      expect(dialog.getByText('Request policy decisions')).toBeVisible()
+      const flow = within(
+        dialog.getByRole('list', { name: 'Request decision flow' })
+      )
+      const steps = flow.getAllByRole('listitem')
+      expect(steps).toHaveLength(3)
+      expect(steps[0]).toHaveTextContent('Channel selected · #275')
+      expect(steps[0]).toHaveTextContent('Attempt 1 · 226 ms · Gemini_Vertex')
+      expect(steps[1]).toHaveTextContent(
+        'Upstream request failed · #275 · HTTP 429'
+      )
+      expect(steps[2]).toHaveTextContent('Total attempt budget exhausted')
+      expect(steps[2]).toHaveTextContent('Source: Global default')
+    } else {
+      expect(
+        dialog.queryByText('Request policy decisions')
+      ).not.toBeInTheDocument()
+      expect(
+        dialog.queryByRole('list', { name: 'Request decision flow' })
+      ).not.toBeInTheDocument()
+    }
+    if (canUseAdminActions) {
+      expect(dialog.getByRole('button', { name: 'Find similar' })).toBeVisible()
+    } else {
+      expect(
+        dialog.queryByRole('button', { name: 'Find similar' })
+      ).not.toBeInTheDocument()
+    }
+  }
+)
+
+test.each([undefined, []])(
+  'omits the request policy section when an employee log has no decisions (%j)',
+  async (events) => {
+    fireEvent.click(
+      renderPreview({ admin_info: { request_policy: events } }, true, 5, false)
+    )
+    const dialog = within(await screen.findByRole('dialog'))
+    expect(
+      dialog.queryByText('Request policy decisions')
+    ).not.toBeInTheDocument()
+    expect(
+      dialog.queryByRole('list', { name: 'Request decision flow' })
+    ).not.toBeInTheDocument()
+  }
+)
+
+test.each([
+  { viewer: 'employee', fields: true, actions: false },
+  { viewer: 'admin', fields: true, actions: true },
+  { viewer: 'ordinary user', fields: false, actions: false },
+])(
+  'limits upstream milestones for $viewer without granting admin actions',
+  async ({ fields, actions }) => {
+    fireEvent.click(
+      renderPreview(
+        {
+          admin_info: {
+            upstream_exchange: [
+              { conn_ms: 0, wrote_ms: 5, first_byte_ms: 28, end_ms: 29 },
+              { conn_ms: 1000 },
+            ],
+          },
+        },
+        fields,
+        2,
+        actions
+      )
+    )
+    const dialog = within(await screen.findByRole('dialog'))
+    if (fields) {
+      fireEvent.click(dialog.getByRole('tab', { name: 'Request diagnostics' }))
+      expect(dialog.getByText('Upstream exchange')).toBeVisible()
+      expect(dialog.getByText('Attempt 1')).toBeVisible()
+      expect(dialog.getByText('Attempt 2')).toBeVisible()
+      expect(dialog.getByText('0 ms')).toBeVisible()
+      expect(dialog.getAllByText('Not observed')).toHaveLength(3)
+      expect(dialog.getAllByText('HTTP call returned')).toHaveLength(2)
+      expect(dialog.queryByText(/Declared body size:/)).not.toBeInTheDocument()
+    } else {
+      expect(dialog.queryByText('Upstream exchange')).not.toBeInTheDocument()
+      expect(dialog.queryByText('0 ms')).not.toBeInTheDocument()
+    }
+    expect(
+      dialog.queryByRole('button', { name: 'Query Upstream' })
+    ).not.toBeInTheDocument()
+    expect(dialog.queryByText('Root Diagnostics')).not.toBeInTheDocument()
+  }
+)
+
+test('shows observed intervals and known size without legacy protocol metadata', async () => {
+  const attempt = {
+    conn_ms: 43,
+    wrote_ms: 639000,
+    first_byte_ms: 655000,
+    end_ms: 655000,
+    wrote_ok: true,
+    request_body_bytes: 327680,
+    protocol: 'HTTP/2.0',
+  }
+  fireEvent.click(
+    renderPreview({
+      admin_info: {
+        upstream_exchange: [attempt],
+      },
+    })
+  )
+  const dialog = within(await screen.findByRole('dialog'))
+  fireEvent.click(dialog.getByRole('tab', { name: 'Request diagnostics' }))
+  const cardElement = dialog.getByText('Upstream exchange').parentElement
+  if (!cardElement) throw new Error('The exchange card must be present')
+  const card = within(cardElement)
+  expect(
+    card.getByText('Connection → write end').parentElement
+  ).toHaveTextContent('10m 39s')
+  expect(
+    card.getByText('Write end → first byte').parentElement
+  ).toHaveTextContent('16.0s')
+  expect(card.getByText('Completed')).toBeVisible()
+  expect(card.getByText('Declared body size: 327,680 B')).toBeVisible()
+  expect(card.queryByText(/Protocol:/)).not.toBeInTheDocument()
+  expect(card.queryByText('Before first connection')).not.toBeInTheDocument()
+  expect(card.queryByText('Acquiring connection')).not.toBeInTheDocument()
+})
+
+test('separates connection acquisition without counting earlier attempts as preparation', async () => {
+  fireEvent.click(
+    renderPreview({
+      admin_info: {
+        upstream_exchange: [
+          {
+            get_conn_ms: 100,
+            conn_ms: 1600,
+            wrote_ms: 1600,
+            first_byte_ms: 29700,
+            end_ms: 29700,
+          },
+          { get_conn_ms: 30000, conn_ms: 30010, end_ms: 30020 },
+        ],
+      },
+    })
+  )
+  const dialog = within(await screen.findByRole('dialog'))
+  fireEvent.click(dialog.getByRole('tab', { name: 'Request diagnostics' }))
+  expect(dialog.getAllByText('Before first connection')).toHaveLength(1)
+  expect(
+    dialog.getByText('Before first connection').parentElement
+  ).toHaveTextContent('100 ms')
+  const acquisitions = dialog.getAllByText('Acquiring connection')
+  expect(acquisitions[0].parentElement).toHaveTextContent('1.5s')
+  expect(acquisitions[1].parentElement).toHaveTextContent('10 ms')
+  expect(
+    dialog.getByText('Write end → first byte').parentElement
+  ).toHaveTextContent('28.1s')
+})
+
+test.each([
+  { get_conn_ms: 0, conn_ms: 0, expected: '0 ms' },
+  { get_conn_ms: 20, conn_ms: 10, expected: undefined },
+  { get_conn_ms: -1, conn_ms: 10, expected: undefined },
+  { get_conn_ms: 10, conn_ms: undefined, expected: undefined },
+])(
+  'validates acquisition timing $get_conn_ms → $conn_ms',
+  async ({ get_conn_ms, conn_ms, expected }) => {
+    fireEvent.click(
+      renderPreview({
+        admin_info: {
+          upstream_exchange: [{ get_conn_ms, conn_ms, end_ms: 30 }],
+        },
+      })
+    )
+    const dialog = within(await screen.findByRole('dialog'))
+    fireEvent.click(dialog.getByRole('tab', { name: 'Request diagnostics' }))
+    if (expected) {
+      expect(
+        dialog.getByText('Acquiring connection').parentElement
+      ).toHaveTextContent(expected)
+      expect(
+        dialog.getByText('Before first connection').parentElement
+      ).toHaveTextContent(expected)
+    } else {
+      expect(dialog.queryByText('Acquiring connection')).not.toBeInTheDocument()
+    }
+  }
+)
+
+test.each([
+  { wrote_ok: false, expected: 'Failed' },
+  { wrote_ok: undefined, expected: 'Result not recorded' },
+])(
+  'preserves first-write status: $expected',
+  async ({ wrote_ok, expected }) => {
+    fireEvent.click(
+      renderPreview({
+        admin_info: {
+          upstream_exchange: [
+            {
+              conn_ms: 0,
+              wrote_ms: 10,
+              first_byte_ms: 5,
+              end_ms: 20,
+              wrote_ok,
+              request_body_bytes: 0,
+            },
+          ],
+        },
+      })
+    )
+    const dialog = within(await screen.findByRole('dialog'))
+    fireEvent.click(dialog.getByRole('tab', { name: 'Request diagnostics' }))
+    const cardElement = dialog.getByText('Upstream exchange').parentElement
+    if (!cardElement) throw new Error('The exchange card must be present')
+    const card = within(cardElement)
+    expect(card.getByText('First write ended')).toBeVisible()
+    expect(card.getByText(expected)).toBeVisible()
+    expect(card.getByText('Declared body size: 0 B')).toBeVisible()
+    expect(card.queryByText(/Protocol:/)).not.toBeInTheDocument()
+    expect(
+      card.getByText('The first byte arrived before the request write ended.')
+    ).toBeVisible()
+    expect(card.queryByText('Write end → first byte')).not.toBeInTheDocument()
+  }
+)
+
+test.each([true, false])(
+  'keeps request IDs without inventing timing diagnostics: privileged=%s',
+  async (privileged) => {
+    fireEvent.click(
+      renderPreview({}, privileged, 2, false, {
+        request_id: '202611210341066442531858268d9d6olW2bnr0',
+        upstream_request_id: '202611210341091838560558268d9d6jCf5Hw0x',
+      })
+    )
+    const dialog = within(await screen.findByRole('dialog'))
+    expect(
+      dialog.queryByRole('tab', { name: 'Request diagnostics' })
+    ).not.toBeInTheDocument()
+    expect(dialog.queryByText('Upstream exchange')).not.toBeInTheDocument()
+    expect(
+      dialog.getByText('202611210341066442531858268d9d6olW2bnr0')
+    ).toBeVisible()
+    expect(
+      dialog.getByText('202611210341091838560558268d9d6jCf5Hw0x')
+    ).toBeVisible()
+  }
+)
 
 test.each([true, false])(
   'channel rejection diagnostics respect the privileged log view=%s',
@@ -452,6 +827,7 @@ test.each([true, false])(
     fireEvent.click(preview)
     const dialog = within(await screen.findByRole('dialog'))
     if (isAdmin) {
+      fireEvent.click(dialog.getByRole('tab', { name: 'Request diagnostics' }))
       expect(dialog.getByText('Incho')).toBeVisible()
       expect(dialog.getByText('1.0.1')).toBeVisible()
       expect(dialog.getByText('Plugin maintainer')).toBeVisible()

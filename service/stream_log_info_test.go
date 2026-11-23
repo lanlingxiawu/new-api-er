@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -216,4 +217,82 @@ func assertStreamResponseLogContent(t *testing.T, other *model.LogOther, source 
 func logOtherAdmin(other *model.LogOther) map[string]any {
 	adminInfo, _ := other.Snapshot()["admin_info"].(map[string]any)
 	return adminInfo
+}
+
+func streamLogInfoFixture(tb testing.TB, responses int) *relaycommon.RelayInfo {
+	tb.Helper()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{
+		IsStream: true, RelayFormat: types.RelayFormatOpenAI,
+		UserSetting: dto.UserSetting{StreamProtocolValidation: common.GetPointer(true)},
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+	BeginStreamAttempt(c, info)
+	for i := range responses {
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Fixture": {strconv.Itoa(i)}},
+			Body:       io.NopCloser(strings.NewReader(strings.Repeat("body-", 1000))),
+		}
+		info.StreamSession.ObserveTransport(resp, nil)
+		info.StreamDiagnostic.Observe(resp)
+		_, err := io.Copy(io.Discard, resp.Body)
+		require.NoError(tb, err)
+		require.NoError(tb, resp.Body.Close())
+	}
+	info.StreamResult = &relaycommon.StreamOutcome{
+		Diagnostic: info.StreamDiagnostic.Snapshot(), DiagnosticAvailable: true,
+	}
+	info.StreamResult.Diagnostic.UsageEvidence = map[string]int{"output_tokens": 17}
+	info.StreamResult.Diagnostic.Error = "finalized cause"
+	return info
+}
+
+func TestStreamLogInfoFrozenEvidenceAndFallback(t *testing.T) {
+	for _, finalized := range []bool{false, true} {
+		t.Run(strconv.FormatBool(finalized), func(t *testing.T) {
+			info := streamLogInfoFixture(t, 4)
+			frozen := info.StreamResult.Diagnostic
+			info.StreamDiagnostic.SetError(errors.New("late capture error"))
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, errors.New("status cause"))
+			info.StreamDiagnostic.Termination.ObserveUpstreamClose("late cleanup")
+			info.StreamDiagnostic.WriteDownstreamPayload([]byte("late error frame"))
+			if !finalized {
+				info.StreamResult = nil
+			}
+			other := model.NewLogOther()
+			AppendStreamLogInfo(info, other)
+			diagnostic := other.Snapshot()["stream_diagnostic"].(relaycommon.StreamDiagnostic)
+			require.NotNil(t, diagnostic.Termination.UpstreamClose)
+			if finalized {
+				require.Equal(t, frozen.Error, diagnostic.Error)
+				require.Equal(t, frozen.UsageEvidence, diagnostic.UsageEvidence)
+				require.Equal(t, frozen.StreamResponseSnapshot, diagnostic.StreamResponseSnapshot)
+				require.Equal(t, frozen.PreviousResponses, diagnostic.PreviousResponses)
+				require.NotNil(t, diagnostic.DownstreamBodyBase64)
+				body, err := base64.StdEncoding.DecodeString(*diagnostic.DownstreamBodyBase64)
+				require.NoError(t, err)
+				require.Equal(t, "late error frame", string(body))
+				require.Equal(t, frozen, info.StreamResult.Diagnostic, "log refresh must not modify finalized evidence")
+			} else {
+				require.Equal(t, "status cause", diagnostic.Error)
+				require.Empty(t, diagnostic.BodyHead, "a pending attempt has no raw-content eligibility")
+			}
+		})
+	}
+}
+
+func BenchmarkStreamLogInfoFrozen(b *testing.B) {
+	for _, responses := range []int{1, 4} {
+		b.Run(strconv.Itoa(responses), func(b *testing.B) {
+			info := streamLogInfoFixture(b, responses)
+			info.StreamResult.DiagnosticAvailable = false
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				AppendStreamLogInfo(info, model.NewLogOther())
+			}
+		})
+	}
 }

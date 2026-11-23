@@ -32,7 +32,13 @@ const POLICY_SECTIONS = [
           CheckSensitiveEnabled: settings.CheckSensitiveEnabled,
           CheckSensitiveOnPromptEnabled: settings.CheckSensitiveOnPromptEnabled,
           SensitiveWords: settings.SensitiveWords,
+          StreamProtocolValidationEnabled:
+            settings['stream_protocol_validation_setting.enabled'] === 'null'
+              ? undefined
+              : settings['stream_protocol_validation_setting.enabled'] ===
+                'true',
         }}
+        legacyValue={settings['claude_stream_validation_setting.enabled']}
       />
     ),
   },

@@ -100,7 +100,7 @@ func TestRelayErrorEdit_UserLogAndStream(t *testing.T) {
 
 	relayErrorDisplaySnapshot.Publish(*view)
 	t.Cleanup(func() { relayErrorDisplaySnapshot.Publish(relayErrorDisplayView{}) })
-	message, replaced := MaskRelayStreamErrorForUser("stream cut in group vip", "")
+	message, replaced := MaskRelayStreamErrorForUser("stream cut in group vip", "", "")
 	assert.True(t, replaced)
 	assert.Equal(t, "stream cut in group", message)
 }

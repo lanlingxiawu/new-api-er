@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -422,11 +423,11 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	targetConn, resp, err := dialer.DialContext(service.RelayRequestContext(c), fullRequestURL, targetHeader)
 	if info.StreamSession != nil {
 		info.StreamSession.ObserveWebSocketHandshake(resp, err)
-		info.StreamDiagnostic.ObserveStreamHandshake(resp, err)
 		if err == nil {
 			info.StreamSession.BindUpstream(targetConn)
 		}
 	}
+	info.StreamDiagnostic.ObserveStreamHandshake(resp, err)
 	if err != nil {
 		statusCode := http.StatusInternalServerError
 		if resp != nil {
@@ -471,6 +472,20 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if traceContext := service.RelayResponseTraceContext(c, req.Context()); traceContext != req.Context() {
 		req = req.WithContext(traceContext)
 	}
+	var exchangeClock *common.UpstreamExchangeClock
+	var requestBodyBytes *int64
+	if os.Getenv("UPSTREAM_EXCHANGE_TRACE_DISABLED") != "true" {
+		exchangeClock = &common.UpstreamExchangeClock{}
+		req = req.WithContext(service.AttachUpstreamExchangeTrace(req.Context(), exchangeClock))
+		// Declared size only: never read or wrap the body for diagnostics.
+		if req.ContentLength > 0 {
+			size := req.ContentLength
+			requestBodyBytes = &size
+		} else if req.Body == nil || req.Body == http.NoBody {
+			size := int64(0)
+			requestBodyBytes = &size
+		}
+	}
 	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
@@ -505,6 +520,11 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	// 请求级包装在任何状态处理/JSON 解码前接入响应采集，nil 采集器时沿用原客户端行为。
 	diagnosticClient := common.StreamDiagnosticHTTPClient{Client: service.RelayHTTPClient(c, &relayClient), Capture: info.StreamDiagnostic, Stream: info.StreamSession}
 	resp, err := diagnosticClient.Do(req)
+	if info != nil && exchangeClock != nil {
+		mark := exchangeClock.Snapshot(info.StartTime, time.Now())
+		mark.RequestBodyBytes = requestBodyBytes
+		info.AppendUpstreamExchange(mark)
+	}
 	if err != nil {
 		if info.StreamDiagnostic == nil {
 			logger.LogError(c, "do request failed: "+err.Error())

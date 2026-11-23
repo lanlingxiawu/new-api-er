@@ -33,18 +33,29 @@ type StreamResponseSnapshot struct {
 
 // StreamResponseCapture 属于一次中转尝试，保留最近四次 SDK 上游响应及单份有界下游正文，不采集请求内容。
 type StreamResponseCapture struct {
-	Termination  *StreamTerminationRecorder // Shared attempt observer, independent of generic/strict protocol ownership.
-	ResponseGate *StreamResponseGate        // 当前尝试的实际成功响应门控；非流式旧采集器不设置，保持原行为。
-	downstream   *ResponseCapture           // 首次实际写出时分配的下游字节缓冲；受 mu 保护，不在普通 Snapshot 中自动暴露。
-	mu           sync.Mutex                 // 保护本尝试响应列表、下游缓冲、遗漏计数及终止错误，不跨网络读写持锁。
-	attempt      int                        // 中转尝试编号，用于日志详情定位。
-	responses    []*streamCapturedBody      // 按时间顺序保存的响应读取包装器，最多四个。
-	omitted      int                        // 被保留数量上限淘汰的历史响应数。
-	err          string                     // 明确设置的本次尝试终止错误，优先于最后一次读取错误。
+	PassiveStatus *StreamStatus // Existing error record when no strict writer owns the stream.
+	policy        *StreamValidationPolicy
+	Termination   *StreamTerminationRecorder // Shared attempt observer, independent of generic/strict protocol ownership.
+	ResponseGate  *StreamResponseGate        // 当前尝试的实际成功响应门控；非流式旧采集器不设置，保持原行为。
+	downstream    *ResponseCapture           // 首次实际写出时分配的下游字节缓冲；受 mu 保护，不在普通 Snapshot 中自动暴露。
+	mu            sync.Mutex                 // 保护本尝试响应列表、下游缓冲、遗漏计数及终止错误，不跨网络读写持锁。
+	attempt       int                        // 中转尝试编号，用于日志详情定位。
+	responses     []*streamCapturedBody      // 按时间顺序保存的响应读取包装器，最多四个。
+	omitted       int                        // 被保留数量上限淘汰的历史响应数。
+	err           string                     // 明确设置的本次尝试终止错误，优先于最后一次读取错误。
 }
 
-// WriteDownstreamPayload 记录实际成功写给下游的 HTTP 字节或 WS 载荷，不采集请求与协议帧头。
-// 参数 p：底层 Write 接受的前 n 字节，或成功 WriteMessage 的完整载荷；nil 接收者跳过，调用前网络写入已结束。
+// SetValidationPolicy stores the attempt policy separately from measured facts.
+func (s *StreamResponseCapture) SetValidationPolicy(policy StreamValidationPolicy) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.policy = &policy
+	s.mu.Unlock()
+}
+
+// WriteDownstreamPayload observes only bytes already accepted by the writer.
 func (s *StreamResponseCapture) WriteDownstreamPayload(p []byte) {
 	if s == nil || !s.ResponseGate.AllowsStream() || len(p) == 0 {
 		return
@@ -241,6 +252,10 @@ func (s *StreamResponseCapture) Snapshot() StreamDiagnostic {
 	}
 	s.mu.Lock()
 	d := StreamDiagnostic{Attempt: s.attempt, Error: s.err, OmittedResponses: s.omitted}
+	if s.policy != nil {
+		policy := *s.policy
+		d.Validation = &policy
+	}
 	responses := append([]*streamCapturedBody(nil), s.responses...)
 	s.mu.Unlock()
 	d.Termination = s.Termination.Snapshot()

@@ -22,6 +22,14 @@ func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) Po
 	if err == nil {
 		return PolicyDecision{Action: "stop", Reason: "request_completed", Source: "system"}
 	}
+	// Response commitment and cancellation are transport facts, even when the
+	// optional protocol validator is disabled or a specialized handler owns it.
+	if c.Writer != nil && c.Writer.Written() {
+		return PolicyDecision{Action: "stop", Reason: "response_committed", Source: "system"}
+	}
+	if c.Request != nil && c.Request.Context().Err() != nil {
+		return PolicyDecision{Action: "stop", Reason: "request_cancelled", Source: "system"}
+	}
 	if GroupRetryGuardDisabled(c) {
 		return PolicyDecision{Action: "stop", Reason: "group_retry_protection", Source: "group"}
 	}

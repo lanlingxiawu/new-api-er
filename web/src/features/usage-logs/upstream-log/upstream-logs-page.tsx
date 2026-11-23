@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import type { ColumnDef, PaginationState } from '@tanstack/react-table'
@@ -270,16 +288,16 @@ function UpstreamLogsWorkspace({
     const range = getDefaultTimeRange()
     const hasCommittedFilters = Boolean(
       search.upstreamLocalRequestId ||
-        search.upstreamFilterRequestId ||
-        search.upstreamChannel ||
-        search.upstreamFilterKeyIndex != null ||
-        search.upstreamType?.length ||
-        search.upstreamUsername ||
-        search.upstreamToken ||
-        search.upstreamModel ||
-        search.upstreamGroup ||
-        search.upstreamStartTime ||
-        search.upstreamEndTime
+      search.upstreamFilterRequestId ||
+      search.upstreamChannel ||
+      search.upstreamFilterKeyIndex != null ||
+      search.upstreamType?.length ||
+      search.upstreamUsername ||
+      search.upstreamToken ||
+      search.upstreamModel ||
+      search.upstreamGroup ||
+      search.upstreamStartTime ||
+      search.upstreamEndTime
     )
     if (!hasCommittedFilters && upstreamDraftSnapshot) {
       return upstreamDraftSnapshot
@@ -304,17 +322,13 @@ function UpstreamLogsWorkspace({
     upstreamDraftSnapshot = initialDraft
     return initialDraft
   })
-  const setDraft = useCallback(
-    (action: SetStateAction<UpstreamLogDraft>) => {
-      setDraftState((current) => {
-        const next =
-          typeof action === 'function' ? action(current) : action
-        upstreamDraftSnapshot = next
-        return next
-      })
-    },
-    []
-  )
+  const setDraft = useCallback((action: SetStateAction<UpstreamLogDraft>) => {
+    setDraftState((current) => {
+      const next = typeof action === 'function' ? action(current) : action
+      upstreamDraftSnapshot = next
+      return next
+    })
+  }, [])
   const [submitted, setSubmitted] = useState<SubmittedQuery | null>(() =>
     createSubmittedQuery(draft, draft.keyIndex != null)
   )
@@ -979,7 +993,7 @@ function UpstreamLogsWorkspace({
           <AlertTitle>{t('Recent upstream results')}</AlertTitle>
           <AlertDescription>
             {t(
-              'A channel key can only read the upstream log for that key, and only its most recent entries, so results were matched locally and there are no further pages. Add an upstream account access token to the channel to search the full history.'
+              'Only recent logs for this channel key are shown. Add an upstream account access token to the channel to search more history.'
             )}
           </AlertDescription>
         </Alert>
@@ -1029,9 +1043,9 @@ function UpstreamLogsWorkspace({
         applyHeaderSize
         showPagination={Boolean(
           isWorkspaceActive &&
-            submitted &&
-            logsQuery.data?.total &&
-            !isRecentOnly
+          submitted &&
+          logsQuery.data?.total &&
+          !isRecentOnly
         )}
         tableClassName='[&_[data-slot=table]]:text-[13px] [&_[data-slot=table]_td]:py-2'
       />

@@ -34,6 +34,7 @@ func TestClaudeDiagnosticRootBoundary(t *testing.T) {
 		common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	}
 	model.DB = db
+	require.NoError(t, db.AutoMigrate(&model.UserSession{}))
 	logDB := model.LOG_DB
 	if logDB == nil {
 		logDB = db
@@ -65,18 +66,24 @@ func TestClaudeDiagnosticRootBoundary(t *testing.T) {
 		user := model.User{Username: "diag-" + token[:15], Password: "fixture", Role: role, Status: common.UserStatusEnabled, Group: "default", AccessToken: &token, AffCode: token}
 		require.NoError(t, db.Create(&user).Error)
 		t.Cleanup(func() { db.Unscoped().Where("id = ?", user.Id).Delete(&model.User{}) })
+		_, browser := createAccessTokenTestSession(t, user.Id, "diagnostic-"+token)
+		t.Cleanup(func() { db.Where("user_id = ?", user.Id).Delete(&model.UserSession{}) })
 		request := httptest.NewRequest("GET", fmt.Sprintf("/diagnostic?request_id=%s&created_at=%d", row.RequestId, row.CreatedAt), nil)
 		request.Header.Set("Authorization", "Bearer "+token)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, request)
 		if role == common.RoleRootUser {
+			require.Equal(t, http.StatusForbidden, w.Code, "root legacy tokens must not read diagnostics")
+			request.Header.Set("Authorization", "Bearer "+browser)
+			w = httptest.NewRecorder()
+			router.ServeHTTP(w, request)
 			require.Equal(t, http.StatusOK, w.Code)
 			require.Contains(t, w.Body.String(), "root-private")
 			require.Contains(t, w.Body.String(), "Ym9keQ==")
 			require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 			for _, attempt := range []string{"2", "3", "-1", "invalid"} {
 				r := httptest.NewRequest("GET", fmt.Sprintf("/diagnostic?request_id=%s&created_at=%d&attempt=%s", row.RequestId, row.CreatedAt, attempt), nil)
-				r.Header.Set("Authorization", "Bearer "+token)
+				r.Header.Set("Authorization", "Bearer "+browser)
 				result := httptest.NewRecorder()
 				router.ServeHTTP(result, r)
 				if attempt == "2" {

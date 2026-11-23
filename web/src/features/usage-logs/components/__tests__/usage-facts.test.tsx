@@ -103,6 +103,9 @@ test('shows the recorded request and response models in log details', () => {
       returned_model: 'unexpected-model',
     },
   })
+  expect(
+    screen.queryByRole('tab', { name: 'Request diagnostics' })
+  ).not.toBeInTheDocument()
   expect(screen.getByText('Response model: unexpected-model')).toBeVisible()
   expect(rowValue('Request Model')).toBe('requested-model')
   expect(rowValue('Upstream Model')).toBe('mapped-model')

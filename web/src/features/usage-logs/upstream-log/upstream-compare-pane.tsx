@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { RotateCcw } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -8,6 +26,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 
 import { LogDetailBody } from '../components/dialogs/log-detail-body'
 import {
+  type LogDetailSection,
   compareCellClassName,
   compareCellStyle,
 } from '../components/dialogs/log-detail-grid'
@@ -15,7 +34,7 @@ import { upstreamItemToUsageLog } from '../lib/upstream-log-item'
 import type { UpstreamCompareQuery } from './use-upstream-compare-query'
 
 // 加载、出错、无结果时占据右栏的行数：覆盖全部分区行，避免只撑高左侧概览那一行。
-const STATE_ROW_SPAN = 28
+const STATE_ROW_SPAN = 30
 
 /**
  * 对比网格的右栏：上游日志与左侧本站日志按同一张行表排列，同类分区左右对齐。
@@ -23,8 +42,12 @@ const STATE_ROW_SPAN = 28
  */
 export function UpstreamComparePane({
   query,
+  section,
+  showOverview,
 }: {
   query: UpstreamCompareQuery
+  section?: LogDetailSection
+  showOverview?: boolean
 }) {
   const { t } = useTranslation()
   const item = query.data?.items[0]
@@ -51,6 +74,8 @@ export function UpstreamComparePane({
       <LogDetailBody
         log={upstreamItemToUsageLog(item)}
         isAdmin
+        section={section}
+        showOverview={showOverview}
         // 不挂载流式诊断：它按请求 ID 查本站服务器，而这里的请求 ID 属于上游。
         showStreamDiagnostic={false}
         compareColumn={2}

@@ -7,6 +7,7 @@ const (
 )
 
 const MsgBodyCacheCapacity = "relay.body_cache_capacity"
+const MsgStreamValidationLegacyConflict = "setting.stream_validation_legacy_conflict"
 const MsgGroupRetryGuardInvalid = "setting.group_retry_guard_invalid"
 const MsgLogExportInvalidGroupRatio = "log_export.invalid_group_ratio"
 
@@ -620,6 +621,7 @@ const (
 	MsgSettingInvalidType                           = "setting.invalid_type"
 	MsgSettingRelayErrorDefaultMessageSkipped       = "setting.relay_error_default_message_skipped"
 	MsgSettingRelayErrorDisplayInvalid              = "setting.relay_error_display_invalid"
+	MsgSettingRelayErrorGroupsInvalid               = "setting.relay_error_groups_invalid"
 	MsgSettingRelayErrorEditInvalid                 = "setting.relay_error_edit_invalid"
 	MsgSettingRelayErrorEditTooComplex              = "setting.relay_error_edit_too_complex"
 	MsgSettingRelayErrorRuleSkipped                 = "setting.relay_error_rule_skipped"

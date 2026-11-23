@@ -140,11 +140,6 @@ export function ServerLogFiles() {
         <h4 id={titleId} className='font-medium'>
           {t('Server Log Management')}
         </h4>
-        <p className='text-muted-foreground mt-1 text-xs'>
-          {t(
-            'Manage server log files. Log files accumulate over time; regular cleanup is recommended to free disk space.'
-          )}
-        </p>
       </div>
 
       {serverLogInfo !== null &&

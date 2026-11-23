@@ -135,12 +135,14 @@ func formatUserLogs(logs []*Log, startIdx int) {
 		logs[i].ChannelName = ""
 		// Read before the projection removes admin_info, where it is kept.
 		var streamInput *operation_setting.RelayErrorInput
+		var group string
 		if masking {
 			streamInput = storedStreamTerminalInput(logs[i])
+			group = storedRelayErrorGroup(logs[i])
 		}
 		logs[i].Other = formatLogOtherJSON(logs[i].Other, logOtherVisibilityUser)
 		if masking {
-			maskProjectedLogForUser(logs[i], streamInput, langOf)
+			maskProjectedLogForUser(logs[i], streamInput, group, langOf)
 		}
 	}
 	assignDisplayLogIds(logs, startIdx)
@@ -152,16 +154,16 @@ func formatUserLogs(logs []*Log, startIdx int) {
 // (storedStreamTerminalInput, read from the log before projection; nil when it
 // has none). other is re-encoded only when a value in it was rewritten, and
 // then only that value changes: the others keep their raw JSON.
-func maskProjectedLogForUser(log *Log, streamInput *operation_setting.RelayErrorInput, langOf func(userId int) string) {
+func maskProjectedLogForUser(log *Log, streamInput *operation_setting.RelayErrorInput, group string, langOf func(userId int) string) {
 	if log.Type != LogTypeError && !strings.Contains(log.Other, `"stream_status"`) {
 		return
 	}
 	fields := parseLogOtherFields(log.Other)
 	changed := false
 	if log.Type == LogTypeError {
-		changed = maskErrorLogForUser(log, fields, streamInput, langOf)
+		changed = maskErrorLogForUser(log, fields, streamInput, group, langOf)
 	} else {
-		changed = maskStreamStatusForUser(fields, log.UserId, langOf)
+		changed = maskStreamStatusForUser(fields, log.UserId, group, langOf)
 	}
 	if changed {
 		log.Other = fields.encode()
@@ -394,6 +396,17 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
+	if other == nil {
+		other = NewLogOther()
+	}
+	// Capture before enqueue: auto selection and the request context may change
+	// before the worker persists the row. A terminal frame's snapshot wins.
+	if _, exists := other.adminInfo[operation_setting.RelayErrorGroupKey]; !exists {
+		other.SetAdmin(operation_setting.RelayErrorGroupKey, operation_setting.ResolveRelayErrorGroup(
+			common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+			common.GetContextKeyString(c, constant.ContextKeyAutoGroup),
+		))
+	}
 	otherStr := other.JSONString()
 	// 判断是否需要记录 IP
 	needRecordIp := contextWantsIPLog(c)
@@ -475,7 +488,6 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if !common.LogConsumeEnabled {
 		return 0
 	}
-	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	logEntry := buildConsumeLog(c, userId, params)
 	username := logEntry.Username
 	createdAt := logEntry.CreatedAt
@@ -1298,8 +1310,32 @@ func MaskErrorLogContentForUser(log *Log, lang string) string {
 		return log.Content
 	}
 	masked := *log
-	maskErrorLogForUser(&masked, parseLogOtherFields(log.Other), storedStreamTerminalInput(log), func(int) string { return lang })
+	maskErrorLogForUser(&masked, parseLogOtherFields(log.Other), storedStreamTerminalInput(log), storedRelayErrorGroup(log), func(int) string { return lang })
 	return masked.Content
+}
+
+// storedRelayErrorGroup reads private metadata before user projection. A
+// present snapshot, including unknown or invalid values, never falls back to
+// the public group. Only older rows without a snapshot use that column.
+func storedRelayErrorGroup(log *Log) string {
+	if log == nil {
+		return ""
+	}
+	if log.Type == LogTypeError {
+		fields := parseLogOtherFields(log.Other)
+		if fields == nil && strings.TrimSpace(log.Other) != "" {
+			return ""
+		}
+		admin := fields.object(logOtherAdminInfoKey)
+		if _, exists := fields[logOtherAdminInfoKey]; exists && admin == nil {
+			return ""
+		}
+		if raw, exists := admin[operation_setting.RelayErrorGroupKey]; exists {
+			group, _ := rawJSONString(raw)
+			return operation_setting.ResolveRelayErrorGroup(group, "")
+		}
+	}
+	return operation_setting.ResolveRelayErrorGroup(log.Group, "")
 }
 
 // storedStreamTerminalInput returns the error code and text the terminal frame
@@ -1358,7 +1394,7 @@ func isStreamFailureErrorLog(fields logOtherFields, errorType, errorCode string)
 // is rewritten at read time so rule changes also cover past logs. streamInput
 // is the stream-failure row's recorded terminal-frame input
 // (storedStreamTerminalInput), or nil. Reports whether fields was changed.
-func maskErrorLogForUser(log *Log, fields logOtherFields, streamInput *operation_setting.RelayErrorInput, langOf func(userId int) string) bool {
+func maskErrorLogForUser(log *Log, fields logOtherFields, streamInput *operation_setting.RelayErrorInput, group string, langOf func(userId int) string) bool {
 	errorType, errorCode := fields.str("error_type"), fields.str("error_code")
 	in := operation_setting.RelayErrorInput{
 		Upstream:   operation_setting.IsUpstreamRelayErrorKind(errorType, errorCode),
@@ -1380,6 +1416,7 @@ func maskErrorLogForUser(log *Log, fields logOtherFields, streamInput *operation
 		}
 	}
 	in.Lang = langOf(log.UserId)
+	in.Group = group
 	content, statusCode, replaced := operation_setting.MaskRelayErrorLogInputForUser(in, log.RequestId)
 	if !replaced {
 		return false
@@ -1409,7 +1446,7 @@ func maskErrorLogForUser(log *Log, fields logOtherFields, streamInput *operation
 // upstream's text there. The status and end_reason classification is ours and
 // stays. Only string texts are rewritten; other values keep their raw JSON.
 // Reports whether any text was rewritten.
-func maskStreamStatusForUser(fields logOtherFields, userId int, langOf func(userId int) string) bool {
+func maskStreamStatusForUser(fields logOtherFields, userId int, group string, langOf func(userId int) string) bool {
 	status := fields.object("stream_status")
 	if status == nil {
 		return false
@@ -1419,7 +1456,7 @@ func maskStreamStatusForUser(fields logOtherFields, userId int, langOf func(user
 		if !ok {
 			return raw, false
 		}
-		masked, replaced := operation_setting.MaskRelayStreamErrorForUser(text, langOf(userId))
+		masked, replaced := operation_setting.MaskRelayStreamErrorForUser(text, langOf(userId), group)
 		if !replaced {
 			return raw, false
 		}

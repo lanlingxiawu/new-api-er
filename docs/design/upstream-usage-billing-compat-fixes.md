@@ -1,5 +1,23 @@
 # 上游用量兼容与异常流计费修复
 
+## 2026-11-18 全分组真实验收发现的两项修复
+
+### Existing Logic and Related-Path Findings
+
+香港当前分支与官方 main `669d774976369e986f03b6e24fff1042f6f94832` 均复现：`gpt-image-2-c` 返回 `input_tokens=0, output_tokens=1000`，图片消费日志却记录输入 1；`gemini-embedding-2` 的 OpenAI 兼容入口请求 256 维后返回默认维度。两端源码分别在 `relay/image_handler.go:ImageHelper` 无条件把零输入改成 1，以及 `relay/channel/gemini/adaptor.go:ConvertEmbeddingRequest` 只允许三个旧模型转发 `outputDimensionality`。原生 Gemini 请求不经过该转换白名单。[Google 官方模型说明](https://ai.google.dev/gemini-api/docs/models/gemini-embedding-2?hl=en)确认 embedding-2 支持 128–3072 维。
+
+本次是用户要求的既有功能缺陷修复：图片已有非零输出用量时保留零输入；只有输入、输出均无计数时继续使用既有占位输入，保持无 usage 图片的按次结算。维度白名单补齐 `gemini-embedding-2` 与 `gemini-embedding-2-preview`，继续遵守请求的显式正数 dimensions，缺省及旧不支持模型维持现状。保持原错误、鉴权、价格和缓存路径，不修改官方 main 基线或历史账单。
+
+### Main Chain Impact / Shared Resource Audit / Concurrency Analysis
+
+改动仅在既有图片用量 fallback 条件及 Gemini 请求字段转换中同步执行；没有新增执行阶段、外部调用、后台工作、DB/Redis 访问、全局缓存、锁或连接池。维度转换由已有可选请求字段控制；图片仍走原缺失用量 fallback 与结算流程。30k/100k RPM 下每请求额外 I/O、goroutine、锁均为 0，图片多一个整数比较，Gemini 多两个固定 switch 标签。不增加新配置或独立功能开关，不引入需要降级的新子系统；不能据此宣称负载验收通过。
+
+### 回归与部署验收
+
+先写失败测试：真实本地图片 HTTP 响应进入 ImageHelper，检查交给结算的 0/正输入、0/正输出及完全缺失 usage；Gemini 批量转换覆盖两个新模型、已有模型、缺省/0/256 维与旧不支持模型，核对序列化后的两个请求。现有已结算标记仅用于测试拦住资金副作用，不访问共享数据库。实现后运行相关包测试、根构建，按服务器 schema 演练启动后更新当前分支，保留本轮旧响应和 main 对照，再用原永久 key 复测。
+
+实施结果：新增回归先复现三处失败断言；修复后当前工作区和隔离构建的 relay、Gemini、OpenAI 三包全量测试均通过，`go build ./...` 与 Linux 发布构建通过。隔离包从 2026-11-17 已验证源码恢复，仅追加本次两个生产文件及两个测试文件；1881 个前端产物逐文件哈希不变，工作区其他并行改动未进入包。香港 MySQL 9.7.4 / PostgreSQL 18.7 新库和现有 schema-only 副本各启动两次通过，现有结构及第二次启动无 DDL。发布 `hk-test-20261118` / `20261118-419ca2f5bb64` 后，原永久 key 的三项真实回归全部通过：图片日志输入 0、输出 1000，按次费用不变；Gemini 与 Gemini_AS 的 OpenAI 兼容接口均返回两个 256 维向量。官方 main 与 nexaxis 的旧差异仍保留。完整基线、失败与修复后证据见[全分组验收报告](hk-nexaxis-all-groups-20261118.md)。
+
 日期：2026-11-04。基于实际 `upstream/main` 的 `ba5f7367797566175a6cd97a748d430af3602a01`；不是本地 main。用户已明确要求对审计发现进行修复并测试，本设计记录本次获准实施的范围。
 
 ## Goals and scope

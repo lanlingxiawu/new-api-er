@@ -19,7 +19,7 @@ import (
 // 请求日志的写入侧。
 //
 // Main-chain impact (Rule 0): 本中间件挂在每一条 relay 路由上。relay goroutine 只做
-// "组装结构体 + 一次非阻塞 channel 发送"，落盘与索引登记全部交给固定数量的常驻
+// 有界正文采集、组装结构体和一次非阻塞 channel 发送；落盘与索引登记交给固定数量的常驻
 // worker。worker 数即稳态峰值文件句柄数，与 RPM 完全解耦——早期"每条一个 goroutine"
 // 的模型在磁盘存储下会让 fd 与并发同阶（实测 c=500 时 goroutine 曾涨到 17 万）。
 //
@@ -238,8 +238,8 @@ func (w *responseBodyWriter) WriteString(s string) (int, error) {
 // 仅在 common.RequestLogEnabled 开启时生效；非空用户名列表以中英文逗号分隔。
 func RequestResponseLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 关闭时零开销直接放行
-		if !common.RequestLogEnabled {
+		// 未开启或写入器不可用时，不预读/复制无法持久化的内容。
+		if !common.RequestLogEnabled || requestLogQueue.Load() == nil {
 			c.Next()
 			return
 		}
@@ -293,6 +293,9 @@ type requestLogCapture struct {
 }
 
 func recordRequestLogEntry(c *gin.Context, snap requestLogCapture) {
+	if requestLogQueue.Load() == nil {
+		return
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			common.SysError(fmt.Sprintf("request log capture panic recovered: %v", r))

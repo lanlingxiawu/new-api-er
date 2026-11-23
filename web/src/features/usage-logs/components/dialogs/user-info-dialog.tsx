@@ -82,9 +82,6 @@ export function UserInfoDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={t('User Information')}
-      description={t(
-        'View detailed information about this user including balance, usage statistics, and invitation details.'
-      )}
       contentClassName='sm:max-w-lg'
       contentHeight='auto'
       bodyClassName='space-y-4'

@@ -23,7 +23,14 @@ import (
 // usages. This boundary exercises real funding, counters and logs, without an
 // entire relay-route E2E or a call to a paid model.
 func TestForkNormalBillingDatabaseMatrix(t *testing.T) {
-	runBillingDatabaseMatrix(t, runForkNormalBillingCases)
+	originalDebug := common.DebugEnabled
+	t.Cleanup(func() { common.DebugEnabled = originalDebug })
+	for _, debug := range []bool{false, true} {
+		t.Run(fmt.Sprintf("debug_%t", debug), func(t *testing.T) {
+			common.DebugEnabled = debug
+			runBillingDatabaseMatrix(t, runForkNormalBillingCases)
+		})
+	}
 }
 
 func runForkNormalBillingCases(t *testing.T, db, logDB *gorm.DB) {

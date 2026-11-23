@@ -494,6 +494,7 @@ func TestPerformanceAggregationAndFlush(t *testing.T) {
 			t.Cleanup(func() {
 				model.DB, common.SQLitePath, common.IsMasterNode, common.RedisEnabled = oldDB, oldPath, oldMaster, oldRedis
 				common.SetDatabaseTypes(oldType, oldLogType)
+				model.InitColumnNames()
 				hotBuckets.Clear()
 			})
 			require.NoError(t, model.InitDB())

@@ -3,6 +3,7 @@ package service
 import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/tokenkit"
 	"github.com/gin-gonic/gin"
@@ -33,6 +34,11 @@ func ResponseText2Usage(c *gin.Context, responseText string, modeName string, pr
 // yielded any SSE payload. That empty-stream case is a transport failure, not a
 // billable completion, so we must not fall back to the request-body estimate.
 func ResponseText2UsageFromStream(c *gin.Context, responseText string, modeName string, promptTokens int, receivedResponseCount int) *dto.Usage {
+	if value, ok := c.Get(relaycommon.StreamSessionKey); ok {
+		if session, ok := value.(*relaycommon.StreamSession); ok && !session.ValidationEnabled() {
+			return ResponseText2Usage(c, responseText, modeName, promptTokens)
+		}
+	}
 	if receivedResponseCount == 0 {
 		return &dto.Usage{}
 	}

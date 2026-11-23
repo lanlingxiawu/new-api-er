@@ -38,6 +38,36 @@ func TestBodyGovernanceSnapshotDuringRead(t *testing.T) {
 	require.Zero(t, GetBodyMemoryReserved())
 }
 
+func TestBodyGovernanceEnableWithExistingRequest(t *testing.T) {
+	useTempDiskCache(t, DiskCacheConfig{MemoryBudgetMB: 1})
+	storage, err := CreateBodyStorageFromReader(strings.NewReader(strings.Repeat("x", 2<<20)), -1, 3<<20)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, storage.Close()) })
+	reserved := GetBodyMemoryReserved()
+	require.GreaterOrEqual(t, reserved, int64(2<<20))
+	cfg := GetDiskCacheConfig()
+	cfg.GovernanceEnabled = true
+	SetDiskCacheConfig(cfg)
+	// Enabling protection must preserve an active request's replay data. New
+	// admissions are rejected until the old reservation drains, not queued.
+	require.Equal(t, reserved, GetBodyMemoryReserved())
+	_, err = storage.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	first := make([]byte, 1)
+	_, err = storage.Read(first)
+	require.NoError(t, err)
+	require.Equal(t, byte('x'), first[0])
+	blocked, err := CreateBodyStorage([]byte("new"))
+	require.ErrorIs(t, err, ErrBodyCacheCapacity)
+	require.Nil(t, blocked)
+	require.NoError(t, storage.Close())
+	require.Zero(t, GetBodyMemoryReserved())
+	admitted, err := CreateBodyStorage([]byte("new"))
+	require.NoError(t, err)
+	require.NoError(t, admitted.Close())
+	require.Zero(t, GetBodyMemoryReserved())
+}
+
 func TestBodyGovernanceDiskSnapshot(t *testing.T) {
 	useTempDiskCache(t, DiskCacheConfig{GovernanceEnabled: true, MemoryBudgetMB: 1, Enabled: true, MaxSizeMB: 1})
 	path, f, err := CreateDiskCacheFile(DiskCacheTypeBody)

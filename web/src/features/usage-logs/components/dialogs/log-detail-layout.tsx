@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { AlertTriangle } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
@@ -27,20 +28,44 @@ export function DetailRow(props: {
   value: ReactNode
   mono?: boolean
   muted?: boolean
+  size?: 'xs' | 'sm'
+  warning?: string
+  className?: string
 }) {
   return (
-    <div className='grid min-w-0 grid-cols-[5.25rem_minmax(0,1fr)] gap-2 text-sm sm:grid-cols-[7rem_minmax(0,1fr)] sm:gap-3'>
-      <span className='text-muted-foreground min-w-0 text-xs'>
+    <div
+      className={cn(
+        'grid min-w-0 grid-cols-[5.25rem_minmax(0,1fr)] gap-2 text-sm sm:grid-cols-[7rem_minmax(0,1fr)] sm:gap-3',
+        props.className
+      )}
+    >
+      <span
+        className={cn(
+          'text-muted-foreground min-w-0',
+          props.size === 'sm' ? 'text-sm' : 'text-xs'
+        )}
+      >
         {props.label}
       </span>
       <span
         className={cn(
-          'max-w-full min-w-0 text-xs break-all sm:wrap-break-word',
+          'max-w-full min-w-0 break-all sm:wrap-break-word',
+          props.size === 'sm' ? 'text-sm' : 'text-xs',
           props.mono && 'font-mono',
-          props.muted && 'text-muted-foreground'
+          props.muted && 'text-muted-foreground',
+          props.warning && 'font-medium text-warning'
         )}
+        title={props.warning}
       >
-        {props.value}
+        {props.warning ? (
+          <span className='inline-flex items-center gap-1'>
+            <AlertTriangle className='size-3 shrink-0' aria-hidden='true' />
+            {props.value}
+            <span className='sr-only'>{props.warning}</span>
+          </span>
+        ) : (
+          props.value
+        )}
       </span>
     </div>
   )
@@ -52,6 +77,8 @@ export function DetailSection(props: {
   label: string
   variant?: 'default' | 'danger'
   children: ReactNode
+  contentClassName?: string
+  size?: 'xs' | 'sm'
 }) {
   const isDanger = props.variant === 'danger'
   const iconTone = isDanger ? 'destructive' : props.iconTone
@@ -60,7 +87,8 @@ export function DetailSection(props: {
       <Label
         className={cn(
           'flex items-center gap-1.5 text-xs font-semibold',
-          isDanger && 'text-red-500'
+          props.size === 'sm' && 'text-sm',
+          isDanger && 'text-destructive'
         )}
       >
         {props.icon && (
@@ -73,9 +101,8 @@ export function DetailSection(props: {
       <div
         className={cn(
           'min-w-0 space-y-1 overflow-hidden rounded-md border p-2.5 max-sm:p-2',
-          isDanger
-            ? 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/20'
-            : 'bg-muted/30'
+          isDanger ? 'border-destructive/30 bg-destructive/5' : 'bg-muted/30',
+          props.contentClassName
         )}
       >
         {props.children}

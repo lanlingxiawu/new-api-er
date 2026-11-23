@@ -22,6 +22,9 @@ func StreamConnectionLifetime(ctx context.Context, conn io.Closer) func() {
 // ObserveStreamHandshake 只登记 WS 握手的原始响应头；随后收到的上游载荷由 WriteStreamPayload 采集。
 // 参数 resp 为握手响应，err 为连接错误；不读取请求或握手失败时未被业务读取的响应体。
 func (s *StreamResponseCapture) ObserveStreamHandshake(resp *http.Response, err error) {
+	if s != nil && s.ResponseGate != nil {
+		s.ResponseGate.accepted.Store(err == nil && resp != nil && resp.StatusCode == http.StatusSwitchingProtocols)
+	}
 	if resp == nil {
 		s.observe(nil, err)
 		return

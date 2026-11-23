@@ -24,7 +24,10 @@ import (
 // BeginStreamAttempt 为每次渠道尝试安装独立会话；非流式直接返回，不更改原请求响应或计费。
 // 参数 c 为请求上下文，info 为重试复用的中转信息；入口模式首次冻结，证据每次重建。
 func BeginStreamAttempt(c *gin.Context, info *relaycommon.RelayInfo) {
+	channelSetting, _ := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)
+	info.FreezeStreamValidation(channelSetting)
 	if !info.UseStreamErrors() {
+		info.StreamProcessingOwner = relaycommon.StreamOwnerNotApplicable
 		return
 	}
 	// HTTP/SDK 错误日志有时只持有标准 context，隐私标记同步传递但不把 Gin 或尝试会话放入链中。
@@ -45,7 +48,10 @@ func BeginStreamAttempt(c *gin.Context, info *relaycommon.RelayInfo) {
 	// 每次渠道尝试重新等待真实成功响应；采集和终止共用门控，SDK 内部重试可重新激活。
 	info.StreamResponseGate = &relaycommon.StreamResponseGate{}
 	info.StreamSession = relaycommon.NewStreamSession(info.RelayFormat)
-	InitStreamReceivedEstimator(info)
+	info.StreamSession.SetValidationEnabled(info.StreamValidationPolicy.Enabled)
+	if info.NeedsSemanticWriter() {
+		InitStreamReceivedEstimator(info)
+	}
 	info.StreamSession.RelayMode = info.RelayMode
 	info.StreamSession.ResponseGate = info.StreamResponseGate
 	info.StreamSession.BindContext(c.Request.Context())
@@ -74,6 +80,7 @@ func BeginStreamAttempt(c *gin.Context, info *relaycommon.RelayInfo) {
 	c.Set(relaycommon.StreamSessionKey, info.StreamSession)
 	c.Set(common.StreamPrivateContextKey, true)
 	info.StreamStatus = relaycommon.NewStreamStatus()
+	info.StreamSession.Status = info.StreamStatus
 	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
 	c.Set(relaycommon.StreamHandledKey, false)
 	c.Set(relaycommon.StreamResponseOnlyKey, true)
@@ -84,6 +91,11 @@ func BeginStreamAttempt(c *gin.Context, info *relaycommon.RelayInfo) {
 	c.Set(relaycommon.StreamDiagnosticAttemptKey, attempt)
 	if info.CaptureStreamResponse() {
 		info.StreamDiagnostic = relaycommon.NewStreamResponseCapture(attempt)
+		info.StreamDiagnostic.SetValidationPolicy(info.StreamValidationPolicy)
+		if !info.StreamValidationPolicy.Enabled {
+			info.StreamDiagnostic.PassiveStatus = info.StreamStatus
+		}
+		info.StreamSession.Capture = info.StreamDiagnostic
 		info.StreamDiagnostic.ResponseGate = info.StreamResponseGate
 
 		value, _ := common.GetContextKey(c, constant.ContextKeyRelayTimeoutControl)
@@ -98,6 +110,10 @@ func BeginStreamAttempt(c *gin.Context, info *relaycommon.RelayInfo) {
 		// 放在语义写入器之下：过滤帧与尚未组成完整事件的数据不计入原始下游正文。
 		c.Writer = relaycommon.NewDownstreamCaptureWriter(c.Writer, info.StreamDiagnostic)
 	}
+	info.StreamWriter = nil
+	if !info.NeedsSemanticWriter() {
+		return
+	}
 	var estimator StreamTokenEstimator // 每次尝试重新累计，刷新批次边界不改变最终估算。
 	info.StreamWriter = relaycommon.NewStreamWriter(c.Writer, info.StreamSession, func(text string, media int) int {
 		return estimator.Add(info.UpstreamModelName, text) + estimator.AddMedia(media)
@@ -110,6 +126,9 @@ func BeginStreamAttempt(c *gin.Context, info *relaycommon.RelayInfo) {
 // 非活动会话原样返回 usage；活动会话正常完成沿用原计量，异常返回确认用量、交付估算或零用量，并冻结结果以免重复终止。
 func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage) *dto.Usage {
 	if !info.StreamSession.Active() {
+		if info.MainStreamMode() {
+			info.StreamFinalUsage = usage // Logging observes the selected value; it never selects it.
+		}
 		return usage
 	}
 	if info.StreamFinalUsage != nil {

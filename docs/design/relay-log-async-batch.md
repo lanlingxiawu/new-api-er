@@ -122,6 +122,10 @@ LOG_DB.logs
 9. 日志批次达到最终失败条件：事件转兜底文件，同时用 `log_id=0/nil` 执行 continuation，
    账务不等待日志库恢复。
 
+消费与错误日志在构造时记录当前请求的 `ClientIP()`，不再读取用户 `record_ip_log` 开关；
+没有 HTTP Request 的合成上下文保留空 IP。该字符串随现有事件入队，后台不再访问请求上下文。
+详见 [AI 请求固定记录来源 IP](ai-request-ip-logging.md)。
+
 ### 4.2 Relay 错误
 
 1. relay 生成对客户端的错误响应。

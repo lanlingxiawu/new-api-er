@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import type { PprofStatus } from './types'
 
@@ -24,7 +25,9 @@ export async function getPprofStatus() {
   const res = await api.get<{ success: boolean; data?: PprofStatus }>(
     '/api/system-info/pprof-status'
   )
-  return res.data
+  const result = requireServerSuccess(res.data)
+  if (!result.data) throw new Error('Profiling status unavailable')
+  return result
 }
 
 /**
@@ -45,7 +48,10 @@ function fileExtension(name: string, debug?: number) {
   return 'pprof'
 }
 
-export async function downloadProfile(name: string, opts: DownloadOptions = {}) {
+export async function downloadProfile(
+  name: string,
+  opts: DownloadOptions = {}
+) {
   const params = new URLSearchParams()
   if (opts.seconds) params.set('seconds', String(opts.seconds))
   if (opts.debug) params.set('debug', String(opts.debug))

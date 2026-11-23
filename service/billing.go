@@ -65,24 +65,18 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int) error {
 	if relayInfo.Billing != nil {
 		preConsumed := relayInfo.Billing.GetPreConsumedQuota()
-		delta := actualQuota - preConsumed
-
-		if delta > 0 {
-			logger.LogInfo(ctx, common.LogText("charging the difference after pre-consume: %s (actual %s, pre-consumed %s)",
-				logger.FormatQuota(delta),
-				logger.FormatQuota(actualQuota),
-				logger.FormatQuota(preConsumed),
-			))
-		} else if delta < 0 {
-			logger.LogInfo(ctx, common.LogText("refunding the difference after pre-consume: %s (actual %s, pre-consumed %s)",
-				logger.FormatQuota(-delta),
-				logger.FormatQuota(actualQuota),
-				logger.FormatQuota(preConsumed),
-			))
-		} else {
-			logger.LogInfo(ctx, common.LogText("pre-consumed quota matches the actual quota, no adjustment: %s (per-request billing)",
-				logger.FormatQuota(actualQuota),
-			))
+		if common.DebugEnabled && !common.IsPrivateStream(ctx) {
+			delta := actualQuota - preConsumed
+			if delta > 0 {
+				logger.LogDebug(ctx, "charging the difference after pre-consume: %s (actual %s, pre-consumed %s)",
+					logger.FormatQuota(delta), logger.FormatQuota(actualQuota), logger.FormatQuota(preConsumed))
+			} else if delta < 0 {
+				logger.LogDebug(ctx, "refunding the difference after pre-consume: %s (actual %s, pre-consumed %s)",
+					logger.FormatQuota(-delta), logger.FormatQuota(actualQuota), logger.FormatQuota(preConsumed))
+			} else {
+				logger.LogDebug(ctx, "pre-consumed quota matches the actual quota, no adjustment: %s (per-request billing)",
+					logger.FormatQuota(actualQuota))
+			}
 		}
 
 		if err := relayInfo.Billing.Settle(actualQuota); err != nil {

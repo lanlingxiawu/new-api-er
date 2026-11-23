@@ -83,7 +83,14 @@ func patchGeminiZeroCompletionUsage(c *gin.Context, info *relaycommon.RelayInfo,
 	}
 	estimated := service.ResponseText2Usage(c, responseText, info.UpstreamModelName, usage.PromptTokens)
 	// 图片是文本之外的额外产出，按张叠加而不是只在无文本时替补，否则"文字+图"会把图白送。
-	usage.CompletionTokens = estimated.CompletionTokens + imageCount*service.DataURLMediaTokens
+	if info.MainStreamMode() {
+		usage.CompletionTokens = estimated.CompletionTokens
+		if imageCount != 0 && usage.CompletionTokens == 0 {
+			usage.CompletionTokens = imageCount * 1400
+		}
+	} else {
+		usage.CompletionTokens = estimated.CompletionTokens + imageCount*service.DataURLMediaTokens
+	}
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	// Settlement prefers BillingUsage, so fill the missing completion in the
 	// original upstream dialect without discarding cache or modality details.
@@ -284,107 +291,115 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 		responseText.WriteString(geminiResponseUsageText(&geminiResponse))
 
-		// The original frame distinguishes missing counters from explicit zero.
-		// Keep this request-local merge separate from the nonzero DTO merge.
-		metadata := geminiResponse.GetUsageMetadata()
-		hasUsage := dto.HasGeminiUsageMetadataTokens(metadata)
-		fallbackPrompt := info.GetEstimatePromptTokens()
-		if metadata != nil {
-			if accumulatedUsageMetadata == nil {
-				accumulatedUsageMetadata = &dto.GeminiUsageMetadata{}
+		if info.MainStreamMode() {
+			if metadata := geminiResponse.GetUsageMetadata(); dto.HasGeminiUsageMetadataTokens(metadata) {
+				accumulatedUsageMetadata = dto.MergeGeminiUsageMetadataNonZero(accumulatedUsageMetadata, metadata)
+				*usage = buildUsageFromGeminiMetadata(accumulatedUsageMetadata, info.GetEstimatePromptTokens())
+				hasBillableUsageMetadata = true
 			}
-			accumulated := accumulatedUsageMetadata
-			previousTotal := accumulated.TotalTokenCount
-			previousParts := accumulated.PromptTokenCount + accumulated.ToolUsePromptTokenCount + accumulated.CandidatesTokenCount + accumulated.ThoughtsTokenCount
-			rawMetadata := gjson.Get(data, "usageMetadata")
-			totalReported := false
-			for _, field := range []struct {
-				name   string
-				target *int
-			}{
-				{"promptTokenCount", &accumulated.PromptTokenCount},
-				{"toolUsePromptTokenCount", &accumulated.ToolUsePromptTokenCount},
-				{"candidatesTokenCount", &accumulated.CandidatesTokenCount},
-				{"thoughtsTokenCount", &accumulated.ThoughtsTokenCount},
-				{"cachedContentTokenCount", &accumulated.CachedContentTokenCount},
-				{"totalTokenCount", &accumulated.TotalTokenCount},
-			} {
-				n := rawMetadata.Get(field.name)
-				if n.Type != gjson.Number || n.Float() != float64(n.Int()) || n.Int() < 0 || n.Int() > 1_000_000_000 {
-					continue
+		} else {
+			// The original frame distinguishes missing counters from explicit zero.
+			// Keep this request-local merge separate from the nonzero DTO merge.
+			metadata := geminiResponse.GetUsageMetadata()
+			hasUsage := dto.HasGeminiUsageMetadataTokens(metadata)
+			fallbackPrompt := info.GetEstimatePromptTokens()
+			if metadata != nil {
+				if accumulatedUsageMetadata == nil {
+					accumulatedUsageMetadata = &dto.GeminiUsageMetadata{}
 				}
-				*field.target = int(n.Int())
-				hasUsage = true
-				switch field.name {
-				case "promptTokenCount":
-					hasConfirmedPrompt = true
-				case "candidatesTokenCount":
-					hasConfirmedCandidates = true
-				case "totalTokenCount":
-					totalReported = true
-				}
-			}
-			for _, detail := range []struct {
-				name   string
-				target *[]dto.GeminiPromptTokensDetails
-			}{
-				{"promptTokensDetails", &accumulated.PromptTokensDetails},
-				{"toolUsePromptTokensDetails", &accumulated.ToolUsePromptTokensDetails},
-				{"candidatesTokensDetails", &accumulated.CandidatesTokensDetails},
-			} {
-				incoming := rawMetadata.Get(detail.name).Array()
-				if len(incoming) == 0 {
-					continue
-				}
-				// StreamSession has already validated the bounded modality array.
-				// Duplicate modalities remain separate entries and are summed by billing.
-				reported := make(map[string]bool, len(incoming))
-				updates := make([]dto.GeminiPromptTokensDetails, 0, len(incoming))
-				for _, item := range incoming {
-					n := item.Get("tokenCount")
+				accumulated := accumulatedUsageMetadata
+				previousTotal := accumulated.TotalTokenCount
+				previousParts := accumulated.PromptTokenCount + accumulated.ToolUsePromptTokenCount + accumulated.CandidatesTokenCount + accumulated.ThoughtsTokenCount
+				rawMetadata := gjson.Get(data, "usageMetadata")
+				totalReported := false
+				for _, field := range []struct {
+					name   string
+					target *int
+				}{
+					{"promptTokenCount", &accumulated.PromptTokenCount},
+					{"toolUsePromptTokenCount", &accumulated.ToolUsePromptTokenCount},
+					{"candidatesTokenCount", &accumulated.CandidatesTokenCount},
+					{"thoughtsTokenCount", &accumulated.ThoughtsTokenCount},
+					{"cachedContentTokenCount", &accumulated.CachedContentTokenCount},
+					{"totalTokenCount", &accumulated.TotalTokenCount},
+				} {
+					n := rawMetadata.Get(field.name)
 					if n.Type != gjson.Number || n.Float() != float64(n.Int()) || n.Int() < 0 || n.Int() > 1_000_000_000 {
 						continue
 					}
-					modality := strings.ToUpper(strings.TrimSpace(item.Get("modality").String()))
-					if modality != "TEXT" && modality != "AUDIO" && modality != "IMAGE" {
+					*field.target = int(n.Int())
+					hasUsage = true
+					switch field.name {
+					case "promptTokenCount":
+						hasConfirmedPrompt = true
+					case "candidatesTokenCount":
+						hasConfirmedCandidates = true
+					case "totalTokenCount":
+						totalReported = true
+					}
+				}
+				for _, detail := range []struct {
+					name   string
+					target *[]dto.GeminiPromptTokensDetails
+				}{
+					{"promptTokensDetails", &accumulated.PromptTokensDetails},
+					{"toolUsePromptTokensDetails", &accumulated.ToolUsePromptTokensDetails},
+					{"candidatesTokensDetails", &accumulated.CandidatesTokensDetails},
+				} {
+					incoming := rawMetadata.Get(detail.name).Array()
+					if len(incoming) == 0 {
 						continue
 					}
-					reported[modality] = true
-					updates = append(updates, dto.GeminiPromptTokensDetails{Modality: modality, TokenCount: int(n.Int())})
-				}
-				merged := make([]dto.GeminiPromptTokensDetails, 0, len(*detail.target)+len(updates))
-				for _, previous := range *detail.target {
-					if !reported[previous.Modality] {
-						merged = append(merged, previous)
+					// StreamSession has already validated the bounded modality array.
+					// Duplicate modalities remain separate entries and are summed by billing.
+					reported := make(map[string]bool, len(incoming))
+					updates := make([]dto.GeminiPromptTokensDetails, 0, len(incoming))
+					for _, item := range incoming {
+						n := item.Get("tokenCount")
+						if n.Type != gjson.Number || n.Float() != float64(n.Int()) || n.Int() < 0 || n.Int() > 1_000_000_000 {
+							continue
+						}
+						modality := strings.ToUpper(strings.TrimSpace(item.Get("modality").String()))
+						if modality != "TEXT" && modality != "AUDIO" && modality != "IMAGE" {
+							continue
+						}
+						reported[modality] = true
+						updates = append(updates, dto.GeminiPromptTokensDetails{Modality: modality, TokenCount: int(n.Int())})
 					}
+					merged := make([]dto.GeminiPromptTokensDetails, 0, len(*detail.target)+len(updates))
+					for _, previous := range *detail.target {
+						if !reported[previous.Modality] {
+							merged = append(merged, previous)
+						}
+					}
+					*detail.target = append(merged, updates...)
+					hasUsage = true
 				}
-				*detail.target = append(merged, updates...)
-				hasUsage = true
+				parts := accumulated.PromptTokenCount + accumulated.ToolUsePromptTokenCount + accumulated.CandidatesTokenCount + accumulated.ThoughtsTokenCount
+				if !totalReported {
+					// Newly reported components may already be included in the old total.
+					// Only remove reductions; max below accounts for actual increases.
+					accumulated.TotalTokenCount = max(0, previousTotal-max(0, previousParts-parts))
+				}
+				accumulated.TotalTokenCount = max(accumulated.TotalTokenCount, parts)
+				if hasConfirmedCandidates && accumulated.CandidatesTokenCount+accumulated.ThoughtsTokenCount == 0 {
+					// Both conversion and canonical billing may infer output from total.
+					// Once output is explicitly zero, even a later total-only frame cannot revive it.
+					accumulated.TotalTokenCount = accumulated.PromptTokenCount + accumulated.ToolUsePromptTokenCount
+				}
+				if metadata.BillingUsage != nil {
+					// An original provider sidecar retains its existing authority and merge policy.
+					accumulated.BillingUsage = dto.MergeBillingUsageNonZero(accumulated.BillingUsage, metadata.BillingUsage)
+				}
+				if hasConfirmedPrompt {
+					fallbackPrompt = 0
+				}
 			}
-			parts := accumulated.PromptTokenCount + accumulated.ToolUsePromptTokenCount + accumulated.CandidatesTokenCount + accumulated.ThoughtsTokenCount
-			if !totalReported {
-				// Newly reported components may already be included in the old total.
-				// Only remove reductions; max below accounts for actual increases.
-				accumulated.TotalTokenCount = max(0, previousTotal-max(0, previousParts-parts))
+			if hasUsage {
+				mappedUsage := buildUsageFromGeminiMetadata(accumulatedUsageMetadata, fallbackPrompt)
+				*usage = mappedUsage
+				hasBillableUsageMetadata = true
 			}
-			accumulated.TotalTokenCount = max(accumulated.TotalTokenCount, parts)
-			if hasConfirmedCandidates && accumulated.CandidatesTokenCount+accumulated.ThoughtsTokenCount == 0 {
-				// Both conversion and canonical billing may infer output from total.
-				// Once output is explicitly zero, even a later total-only frame cannot revive it.
-				accumulated.TotalTokenCount = accumulated.PromptTokenCount + accumulated.ToolUsePromptTokenCount
-			}
-			if metadata.BillingUsage != nil {
-				// An original provider sidecar retains its existing authority and merge policy.
-				accumulated.BillingUsage = dto.MergeBillingUsageNonZero(accumulated.BillingUsage, metadata.BillingUsage)
-			}
-			if hasConfirmedPrompt {
-				fallbackPrompt = 0
-			}
-		}
-		if hasUsage {
-			mappedUsage := buildUsageFromGeminiMetadata(accumulatedUsageMetadata, fallbackPrompt)
-			*usage = mappedUsage
-			hasBillableUsageMetadata = true
 		}
 
 		if !callback(data, &geminiResponse) {
@@ -404,7 +419,11 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		} else {
 			usage = &dto.Usage{}
 		}
-		if imageCount != 0 && info.ReceivedResponseCount > 0 {
+		if info.MainStreamMode() && imageCount != 0 && usage.CompletionTokens == 0 {
+			usage.CompletionTokens = imageCount * 1400
+			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+			common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
+		} else if !info.MainStreamMode() && imageCount != 0 && info.ReceivedResponseCount > 0 {
 			// 按张叠加在文本估算之上：图片是额外产出，不是"没有文本时"的替补。
 			usage.CompletionTokens += imageCount * service.DataURLMediaTokens
 			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
@@ -412,7 +431,9 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 		attachEstimatedGeminiBillingUsage(usage)
 	} else {
-		supplementGeminiMissingPrompt(c, info, usage, accumulatedUsageMetadata, hasConfirmedPrompt)
+		if !info.MainStreamMode() {
+			supplementGeminiMissingPrompt(c, info, usage, accumulatedUsageMetadata, hasConfirmedPrompt)
+		}
 		patchGeminiZeroCompletionUsage(c, info, usage, responseText.String(), imageCount)
 	}
 

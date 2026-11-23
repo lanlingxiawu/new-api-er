@@ -247,6 +247,9 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		if err := common.Unmarshal(common.StringToByteSlice(lastStreamData), &streamResponse); err != nil {
 			info.StreamSession.Fail("upstream_json_error", err)
 			logger.LogLegacyStreamError(c, "error unmarshalling stream response: "+err.Error())
+			if info.MainStreamMode() {
+				return
+			}
 		} else {
 			info.ClaudeConvertInfo.Usage = usage
 			sendClaudeFinalStreamResponse(c, info, &streamResponse)
@@ -254,7 +257,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 
 		// If the upstream stream ends without a finish_reason, close the Claude
 		// stream with the converter's normal stop sequence.
-		if info.ClaudeConvertInfo != nil && info.ClaudeConvertInfo.MessageStartSent && !info.ClaudeConvertInfo.Done {
+		if info.StreamValidationEnabled() && info.ClaudeConvertInfo != nil && info.ClaudeConvertInfo.MessageStartSent && !info.ClaudeConvertInfo.Done {
 			info.ClaudeConvertInfo.Usage = usage
 			finishReason := info.FinishReason
 			if finishReason == "" {

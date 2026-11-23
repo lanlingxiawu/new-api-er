@@ -18,8 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { TFunction } from 'i18next'
 import {
-  Copy,
-  Check,
   Route,
   Settings2,
   AlertTriangle,
@@ -36,8 +34,8 @@ import {
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { CopyButton } from '@/components/copy-button'
 import { StatusBadge } from '@/components/status-badge'
-import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
 import { usePricingData } from '@/features/pricing/hooks/use-pricing-data'
@@ -45,9 +43,15 @@ import { BILLING_PRICING_VARS } from '@/features/pricing/lib/billing-expr'
 import { pluginUsageSchema } from '@/features/pricing/lib/plugin-pricing'
 import { PolicyDecisionRecord } from '@/features/system-settings/request-policies/decision-record'
 import { useIsAdmin } from '@/hooks/use-admin'
-import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { toIntlLocale } from '@/i18n/languages'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
+import {
+  formatLogQuota,
+  formatNumber,
+  formatTokens,
+  formatUseTime,
+  formatTimestampToDate,
+} from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { AuditDetailFields } from '../../audit/components/audit-detail-fields'
@@ -75,17 +79,27 @@ import {
   type LogMetrics,
 } from '../../lib/log-metrics'
 import { buildQuotaAuditOperation } from '../../lib/quota-audit-operation'
+import {
+  getExchangeIntervalMs,
+  isValidExchangeMs,
+} from '../../lib/upstream-timing'
 import { isPerCallBilling, isTimingLogType } from '../../lib/utils'
-import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
+import {
+  USAGE_BILLING_PATH,
+  type LogOtherData,
+  type UpstreamExchangeMark,
+} from '../../types'
 import { ResponseModelDetails } from '../model-badge'
 import { PluginAuthorLink } from '../plugin-author-link'
 import {
+  isLogDetailSectionRow,
+  type LogDetailSection,
   compareCellClassName,
   compareCellStyle,
   type LogDetailCompareColumn,
   type LogDetailRow,
 } from './log-detail-grid'
-import { DetailSection } from './log-detail-layout'
+import { DetailRow, DetailSection } from './log-detail-layout'
 import { StreamDiagnosticPanel } from './stream-diagnostic-panel'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
@@ -138,42 +152,126 @@ function userChannelRoutingPhase(phase: string, t: TFunction): string {
 function timingTextColorClass(
   variant: 'success' | 'warning' | 'danger'
 ): string {
-  if (variant === 'success') return 'text-emerald-600'
-  if (variant === 'warning') return 'text-amber-600'
-  return 'text-rose-600'
+  if (variant === 'success') return 'text-success'
+  if (variant === 'warning') return 'text-warning'
+  return 'text-destructive'
 }
 
-function DetailRow(props: {
-  label: React.ReactNode
-  value: React.ReactNode
-  mono?: boolean
-  muted?: boolean
-  warning?: string // 本站低于上游时的提示文案；提供时该值以警告色和图标标出。
+function formatExchangeMs(ms: number | undefined, missing: string) {
+  if (!isValidExchangeMs(ms)) return missing
+  if (ms < 1000) return `${ms} ms`
+  return formatUseTime(ms / 1000)
+}
+
+function UpstreamExchangeValue(props: {
+  attempt: UpstreamExchangeMark
+  number: number
 }) {
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
+  const missing = t('Not observed')
+  let writeResult = t('Result not recorded')
+  if (isValidExchangeMs(props.attempt.wrote_ms)) {
+    if (props.attempt.wrote_ok === true) writeResult = t('Completed')
+    if (props.attempt.wrote_ok === false) writeResult = t('Failed')
+  }
+  const rows = [
+    [t('Upstream connection'), props.attempt.conn_ms, undefined],
+    [t('First write ended'), props.attempt.wrote_ms, writeResult],
+    [t('Upstream first byte'), props.attempt.first_byte_ms, undefined],
+    [t('HTTP call returned'), props.attempt.end_ms, undefined],
+  ] as const
+  const intervals = [
+    [
+      t('Before first connection'),
+      props.number === 1
+        ? getExchangeIntervalMs(0, props.attempt.get_conn_ms)
+        : undefined,
+    ],
+    [
+      t('Acquiring connection'),
+      getExchangeIntervalMs(props.attempt.get_conn_ms, props.attempt.conn_ms),
+    ],
+    [
+      t('Connection → write end'),
+      getExchangeIntervalMs(props.attempt.conn_ms, props.attempt.wrote_ms),
+    ],
+    [
+      t('Write end → first byte'),
+      getExchangeIntervalMs(
+        props.attempt.wrote_ms,
+        props.attempt.first_byte_ms
+      ),
+    ],
+  ] as const
+  const firstBeforeWrite =
+    isValidExchangeMs(props.attempt.first_byte_ms) &&
+    isValidExchangeMs(props.attempt.wrote_ms) &&
+    props.attempt.first_byte_ms < props.attempt.wrote_ms
+  const size = props.attempt.request_body_bytes
+  const bodySize =
+    isValidExchangeMs(size) && Number.isSafeInteger(size)
+      ? `${formatNumber(size, locale)} B`
+      : undefined
   return (
-    <div className='grid min-w-0 grid-cols-[5.25rem_minmax(0,1fr)] gap-2 text-sm sm:grid-cols-[7rem_minmax(0,1fr)] sm:gap-3'>
-      <span className='text-muted-foreground min-w-0 text-xs'>
-        {props.label}
-      </span>
-      <span
-        className={cn(
-          'max-w-full min-w-0 text-xs break-all sm:wrap-break-word',
-          props.mono && 'font-mono',
-          props.muted && 'text-muted-foreground',
-          props.warning && 'font-medium text-amber-600 dark:text-amber-400'
+    <div className='space-y-3'>
+      <div className='flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1.5 text-xs'>
+        <p className='font-medium'>{t('Attempt {{n}}', { n: props.number })}</p>
+        {bodySize !== undefined && (
+          <p className='text-muted-foreground'>
+            {t('Declared body size: {{size}}', { size: bodySize })}
+          </p>
         )}
-        title={props.warning}
-      >
-        {props.warning ? (
-          <span className='inline-flex items-center gap-1'>
-            <AlertTriangle className='size-3 shrink-0' aria-hidden='true' />
-            {props.value}
-            <span className='sr-only'>{props.warning}</span>
-          </span>
-        ) : (
-          props.value
-        )}
-      </span>
+      </div>
+      <dl className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
+        {rows.map(([label, ms, result]) => (
+          <div
+            key={label}
+            className='border-primary/30 min-w-0 border-l-2 pl-3'
+          >
+            <dt className='text-muted-foreground text-xs'>{label}</dt>
+            <dd className='mt-1 text-sm font-medium tabular-nums'>
+              {formatExchangeMs(ms, missing)}
+              {result && (
+                <span
+                  className={cn(
+                    'mt-1 block text-xs font-normal text-muted-foreground',
+                    props.attempt.wrote_ok === false && 'text-destructive'
+                  )}
+                >
+                  {result}
+                </span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {(intervals.some(([, ms]) => ms !== undefined) || firstBeforeWrite) && (
+        <div className='space-y-2 border-t pt-3'>
+          <div className='grid gap-x-6 gap-y-2 sm:grid-cols-2'>
+            {intervals.map(
+              ([label, ms]) =>
+                ms !== undefined && (
+                  <DetailRow
+                    key={label}
+                    className='grid-cols-[minmax(0,1fr)_auto] items-baseline sm:grid-cols-[minmax(0,1fr)_auto]'
+                    label={label}
+                    value={
+                      <span className='font-medium whitespace-nowrap tabular-nums'>
+                        {formatExchangeMs(ms, missing)}
+                      </span>
+                    }
+                  />
+                )
+            )}
+          </div>
+          {firstBeforeWrite && (
+            <p className='text-muted-foreground text-xs'>
+              {t('The first byte arrived before the request write ended.')}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -182,8 +280,10 @@ function DetailRow(props: {
 function CompareCell(props: {
   row: LogDetailRow
   column?: LogDetailCompareColumn
+  section?: LogDetailSection
   children: React.ReactNode
 }) {
+  if (!isLogDetailSectionRow(props.row, props.section)) return null
   if (!props.column) return props.children
   if (
     props.children == null ||
@@ -392,7 +492,11 @@ function BillingBreakdown(props: {
     })
   }
 
-  if (!isTieredExpr && (isClaude || hasCacheWrite12h) && hasAnyCacheTokens(other)) {
+  if (
+    !isTieredExpr &&
+    (isClaude || hasCacheWrite12h) &&
+    hasAnyCacheTokens(other)
+  ) {
     if (other.cache_ratio != null && other.cache_ratio !== 1) {
       rows.push({
         label: t('Cache Read'),
@@ -405,7 +509,9 @@ function BillingBreakdown(props: {
       other.cache_creation_ratio !== 1
     ) {
       rows.push({
-        label: hasCacheWrite12h ? t('Cache Creation (30m)') : t('Cache Creation'),
+        label: hasCacheWrite12h
+          ? t('Cache Creation (30m)')
+          : t('Cache Creation'),
         value: `${fmtPrice(baseInputUSD * other.cache_creation_ratio)}/M`,
         metric: 'price.cache_write',
       })
@@ -432,7 +538,11 @@ function BillingBreakdown(props: {
     }
   }
 
-  if (!isTieredExpr && hasCacheWrite12h && other.cache_creation_ratio_12h != null) {
+  if (
+    !isTieredExpr &&
+    hasCacheWrite12h &&
+    other.cache_creation_ratio_12h != null
+  ) {
     rows.push({
       label: t('Cache Creation (12h)'),
       value: `${fmtPrice(baseInputUSD * other.cache_creation_ratio_12h)}/M`,
@@ -579,7 +689,8 @@ function TokenBreakdown(props: {
   const cacheWrite5m = other.cache_creation_tokens_5m || 0
   const cacheWrite1h = other.cache_creation_tokens_1h || 0
   const cacheWrite12h = other.cache_creation_tokens_12h || 0
-  const cacheWrite30m = cacheWrite12h > 0 ? Math.max(cacheWrite - cacheWrite12h, 0) : 0
+  const cacheWrite30m =
+    cacheWrite12h > 0 ? Math.max(cacheWrite - cacheWrite12h, 0) : 0
   const hasTokens =
     promptTokens > 0 || completionTokens > 0 || hasAnyCacheTokens(other)
 
@@ -613,7 +724,12 @@ function TokenBreakdown(props: {
     })
   }
 
-  if (cacheWrite > 0 && cacheWrite5m === 0 && cacheWrite1h === 0 && cacheWrite12h === 0) {
+  if (
+    cacheWrite > 0 &&
+    cacheWrite5m === 0 &&
+    cacheWrite1h === 0 &&
+    cacheWrite12h === 0
+  ) {
     rows.push({
       label: t('Cache Write'),
       value: cacheWrite.toLocaleString(),
@@ -637,7 +753,12 @@ function TokenBreakdown(props: {
     })
   }
 
-  if (cacheWrite30m > 0) rows.push({ label: t('Cache Write (30m)'), value: cacheWrite30m.toLocaleString() })
+  if (cacheWrite30m > 0) {
+    rows.push({
+      label: t('Cache Write (30m)'),
+      value: cacheWrite30m.toLocaleString(),
+    })
+  }
   if (cacheWrite12h > 0) {
     rows.push({
       label: t('Cache Write (12h)'),
@@ -710,10 +831,12 @@ function TokenBreakdown(props: {
 interface LogDetailBodyProps {
   log: UsageLog // 要展示的日志，含请求 ID、Unix 秒创建时间和后端已过滤的扩展字段。
   isAdmin: boolean // 控制既有管理员费用字段展示，原始诊断权限由面板与后端独立判断。
+  canViewUpstreamExchange?: boolean
+  section?: LogDetailSection
+  showOverview?: boolean
+  canViewPolicyDecisions?: boolean // 不传时沿用管理员可见性；员工视角由调用方显式开放。
   isRoot?: boolean // 超级管理员可见 root_info（任务插件版本、上游任务 ID、节点名）。
   heading?: ReactNode // 正文顶部的小标题；对比模式下左右两栏各有一个。
-  onQueryUpstream?: () => void // 提供时在请求 ID 旁显示「查询上游」；上游详情不传，避免嵌套查询。
-  onFindSimilar?: () => void // 提供时显示「查同类」，跳到导出中心并带上该行的异常特征；该行无异常特征时调用方不传。
   showStreamDiagnostic: boolean // 是否挂载流式诊断面板。它按请求 ID 查本站服务器，上游日志必须关闭。
   compareColumn?: LogDetailCompareColumn // 对比模式下所在的栏；提供时各分区按固定行号放入父级对比网格。
   lowerThanUpstream?: LogMetrics // 本站低于上游的数据项及其上游值；对应行以警告样式标出。
@@ -728,7 +851,6 @@ interface LogDetailBodyProps {
  */
 export function LogDetailBody(props: LogDetailBodyProps) {
   const { t } = useTranslation()
-  const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
   const other = parseLogOther(props.log.other)
 
   const isViolation = isViolationFeeLog(other)
@@ -751,6 +873,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
   const showAdminIp =
     !!props.log.ip && (showTiming || (props.isAdmin && isTopup))
   const adminInfo = other?.admin_info
+  const canViewPolicyDecisions = props.canViewPolicyDecisions ?? props.isAdmin
   // 上游日志对比可能来自旧版本服务器，原因仍在顶层字段。
   const rejectReason = adminInfo?.reject_reason ?? other?.reject_reason
   const topupAuditFields =
@@ -883,6 +1006,13 @@ export function LogDetailBody(props: LogDetailBodyProps) {
   )
 
   const col = props.compareColumn
+  const canViewUpstreamExchange = props.canViewUpstreamExchange ?? props.isAdmin
+  const upstreamExchange =
+    canViewUpstreamExchange && Array.isArray(adminInfo?.upstream_exchange)
+      ? adminInfo.upstream_exchange.filter(
+          (attempt) => attempt && typeof attempt === 'object'
+        )
+      : []
 
   return (
     <div
@@ -892,166 +1022,208 @@ export function LogDetailBody(props: LogDetailBodyProps) {
           : 'w-full max-w-full min-w-0 space-y-2.5 overflow-x-hidden py-1 sm:space-y-3'
       }
     >
-      <CompareCell row='heading' column={col}>
+      <CompareCell row='heading' column={col} section={props.section}>
         {props.heading}
       </CompareCell>
       {/* Overview section - key identifiers */}
-      <CompareCell row='overview' column={col}>
-        <div className='min-w-0 space-y-1'>
-          {props.log.request_id && (
-            <DetailRow
-              label={t('Request ID')}
-              value={
-                <span className='flex items-center gap-2'>
-                  <span className='min-w-0 break-all'>
-                    {props.log.request_id}
-                  </span>
-                  {props.isAdmin &&
-                    props.log.upstream_request_id &&
-                    props.onQueryUpstream && (
-                      <Button
-                        variant='outline'
-                        size='sm'
-                        className='h-6 shrink-0 px-2 text-xs'
-                        onClick={props.onQueryUpstream}
-                      >
-                        {t('Query Upstream')}
-                      </Button>
-                    )}
-                  {/* 该行一个异常特征都没有时按钮不显示——按钮在那儿却点不出
-                      东西，比没有这个按钮更糟。 */}
-                  {props.isAdmin && props.onFindSimilar && (
-                    <Button
-                      variant='outline'
-                      size='sm'
-                      className='h-6 shrink-0 px-2 text-xs'
-                      onClick={props.onFindSimilar}
-                    >
-                      {t('Find similar')}
-                    </Button>
-                  )}
-                </span>
-              }
-              mono
-            />
-          )}
-          {props.log.upstream_request_id && (
-            <DetailRow
-              label={t('Upstream Request ID')}
-              value={
-                <span className='min-w-0 break-all'>
-                  {props.log.upstream_request_id}
-                </span>
-              }
-              mono
-            />
-          )}
-
-          {props.isAdmin && props.log.channel > 0 && (
-            <DetailRow
-              label={t('Channel')}
-              value={
-                <span>
-                  {props.log.channel}
-                  {props.log.channel_name && (
-                    <span className='text-muted-foreground'>
-                      {' '}
-                      ({props.log.channel_name})
+      {props.showOverview !== false && (
+        <CompareCell row='overview' column={col} section={props.section}>
+          <div className={cn('grid min-w-0 gap-y-2 rounded-lg border p-3')}>
+            {props.log.model_name && (
+              <DetailRow
+                size='sm'
+                label={t('Model')}
+                value={props.log.model_name}
+                mono
+              />
+            )}
+            {props.log.created_at > 0 && (
+              <DetailRow
+                size='sm'
+                label={t('Created At')}
+                value={formatTimestampToDate(props.log.created_at)}
+              />
+            )}
+            {props.log.request_id && (
+              <DetailRow
+                size='sm'
+                label={t('Request ID')}
+                className='col-span-full items-center'
+                value={
+                  <span className='flex min-w-0 items-center gap-2'>
+                    <span className='min-w-0 flex-1 break-all select-all'>
+                      {props.log.request_id}
                     </span>
-                  )}
-                </span>
-              }
-              mono
-            />
-          )}
+                    <CopyButton
+                      value={props.log.request_id}
+                      size='icon'
+                      variant='ghost'
+                      className='font-sans'
+                      aria-label={t('Copy {{field}}', {
+                        field: t('Request ID'),
+                      })}
+                    />
+                  </span>
+                }
+                mono
+              />
+            )}
+            {props.log.upstream_request_id && (
+              <DetailRow
+                size='sm'
+                label={t('Upstream Request ID')}
+                className='col-span-full items-center'
+                value={
+                  <span className='flex min-w-0 items-center gap-2'>
+                    <span className='min-w-0 flex-1 break-all select-all'>
+                      {props.log.upstream_request_id}
+                    </span>
+                    <CopyButton
+                      value={props.log.upstream_request_id}
+                      size='icon'
+                      variant='ghost'
+                      className='font-sans'
+                      aria-label={t('Copy {{field}}', {
+                        field: t('Upstream Request ID'),
+                      })}
+                    />
+                  </span>
+                }
+                mono
+              />
+            )}
 
-          {channelChain && props.isAdmin && (
-            <DetailRow label={t('Retry Chain')} value={channelChain} mono />
-          )}
-
-          {props.log.token_name && (
-            <DetailRow label={t('Token')} value={props.log.token_name} mono />
-          )}
-
-          {(props.log.group || other?.group) && (
-            <DetailRow
-              label={t('Group')}
-              value={props.log.group || other?.group || ''}
-              mono
-            />
-          )}
-
-          {showAdminIp && (
-            <DetailRow
-              label={t('IP Address')}
-              value={
-                <span className='flex items-center gap-1'>
-                  <Globe className='size-3 text-amber-500' aria-hidden='true' />
-                  {props.log.ip}
-                </span>
-              }
-              mono
-            />
-          )}
-
-          {showTiming && props.log.use_time > 0 && (
-            <DetailRow
-              label={t('Response Time')}
-              value={
-                <span
-                  className={cn(
-                    'font-medium',
-                    timingTextColorClass(
-                      getResponseTimeColor(
-                        props.log.use_time,
-                        props.log.completion_tokens
-                      )
-                    )
-                  )}
-                >
-                  {formatUseTime(props.log.use_time)}
-                  {props.log.is_stream &&
-                    other?.frt != null &&
-                    other.frt > 0 && (
-                      <span
-                        className={cn(
-                          'font-normal',
-                          timingTextColorClass(
-                            getFirstResponseTimeColor(other.frt / 1000)
-                          )
-                        )}
-                      >
+            {props.isAdmin && props.log.channel > 0 && (
+              <DetailRow
+                size='sm'
+                label={t('Channel')}
+                value={
+                  <span>
+                    {props.log.channel}
+                    {props.log.channel_name && (
+                      <span className='text-muted-foreground'>
                         {' '}
-                        (FRT: {formatUseTime(other.frt / 1000)})
+                        ({props.log.channel_name})
                       </span>
                     )}
-                </span>
-              }
-            />
-          )}
-        </div>
+                  </span>
+                }
+                mono
+              />
+            )}
+
+            {channelChain && props.isAdmin && (
+              <DetailRow
+                size='sm'
+                label={t('Retry Chain')}
+                value={channelChain}
+                mono
+              />
+            )}
+
+            {props.log.token_name && (
+              <DetailRow
+                size='sm'
+                label={t('Token')}
+                value={props.log.token_name}
+                mono
+              />
+            )}
+
+            {(props.log.group || other?.group) && (
+              <DetailRow
+                size='sm'
+                label={t('Group')}
+                value={props.log.group || other?.group || ''}
+                mono
+              />
+            )}
+
+            {showAdminIp && (
+              <DetailRow
+                size='sm'
+                label={t('IP Address')}
+                value={
+                  <span className='flex items-center gap-1'>
+                    <Globe className='text-warning size-3' aria-hidden='true' />
+                    {props.log.ip}
+                  </span>
+                }
+                mono
+              />
+            )}
+            {showTiming && props.log.use_time > 0 && (
+              <DetailRow
+                size='sm'
+                label={t('Response Time')}
+                value={
+                  <span
+                    className={cn(
+                      'font-medium',
+                      timingTextColorClass(
+                        getResponseTimeColor(
+                          props.log.use_time,
+                          props.log.completion_tokens
+                        )
+                      )
+                    )}
+                  >
+                    {formatUseTime(props.log.use_time)}
+                    {props.log.is_stream &&
+                      other?.frt != null &&
+                      other.frt > 0 && (
+                        <span
+                          className={cn(
+                            'font-normal',
+                            timingTextColorClass(
+                              getFirstResponseTimeColor(other.frt / 1000)
+                            )
+                          )}
+                        >
+                          {' '}
+                          (FRT: {formatUseTime(other.frt / 1000)})
+                        </span>
+                      )}
+                  </span>
+                }
+              />
+            )}
+          </div>
+        </CompareCell>
+      )}
+      <CompareCell row='upstreamExchange' column={col} section={props.section}>
+        {upstreamExchange.length > 0 && (
+          <DetailSection
+            label={t('Upstream exchange')}
+            contentClassName='space-y-3 p-3 sm:p-4'
+          >
+            {upstreamExchange.map((attempt, index) => (
+              // eslint-disable-next-line react/no-array-index-key -- Stored attempts are immutable, ordered snapshots without row state.
+              <div key={index} className='not-first:border-t not-first:pt-3'>
+                <UpstreamExchangeValue attempt={attempt} number={index + 1} />
+              </div>
+            ))}
+            <p className='text-muted-foreground text-xs leading-relaxed'>
+              {t(
+                'Cumulative observations may include retries; the response body can continue after HTTP return.'
+              )}
+            </p>
+          </DetailSection>
+        )}
       </CompareCell>
 
       {/* Request conversion (admin only, not for refund) */}
-      <CompareCell row='conversion' column={col}>
+      <CompareCell row='conversion' column={col} section={props.section}>
         {showConversion && (
           <DetailSection label={t('Request Conversion')}>
             <div className='relative min-w-0'>
-              <Button
-                variant='ghost'
-                size='sm'
-                className='absolute top-0 right-0 h-5 w-5 p-0'
-                onClick={() => copyToClipboard(conversionLabel)}
-                title={t('Copy to clipboard')}
-                aria-label={t('Copy to clipboard')}
-              >
-                {copiedText === conversionLabel ? (
-                  <Check className='size-3 text-green-600' />
-                ) : (
-                  <Copy className='size-3' />
-                )}
-              </Button>
-              <div className='min-w-0 space-y-1 pr-6'>
+              <CopyButton
+                value={conversionLabel}
+                variant='outline'
+                size='icon'
+                className='absolute top-0 right-0'
+              />
+              <div className='min-w-0 space-y-1 pr-11'>
                 {other?.request_path && (
                   <DetailRow
                     label={t('Path')}
@@ -1075,7 +1247,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Quota saturation marker (admin only) */}
-      <CompareCell row='quotaSaturation' column={col}>
+      <CompareCell row='quotaSaturation' column={col} section={props.section}>
         {props.isAdmin && other?.admin_info?.quota_saturation && (
           <DetailSection
             icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
@@ -1112,7 +1284,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* 按 bb6317462 恢复管理员独立原因区块，与流式诊断按钮及 Root 查询无关。 */}
-      <CompareCell row='rejectReason' column={col}>
+      <CompareCell row='rejectReason' column={col} section={props.section}>
         {props.isAdmin && rejectReason && (
           <DetailSection
             icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
@@ -1125,7 +1297,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Violation fee info */}
-      <CompareCell row='violation' column={col}>
+      <CompareCell row='violation' column={col} section={props.section}>
         {isViolation && other && (
           <DetailSection
             icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
@@ -1155,7 +1327,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Refund details (type=6) */}
-      <CompareCell row='refund' column={col}>
+      <CompareCell row='refund' column={col} section={props.section}>
         {isRefund && other && (other.task_id || other.reason) && (
           <DetailSection label={t('Refund Details')}>
             {other.task_id && (
@@ -1168,7 +1340,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
         )}
       </CompareCell>
 
-      <CompareCell row='taskPlugin' column={col}>
+      <CompareCell row='taskPlugin' column={col} section={props.section}>
         {props.isAdmin && adminInfo?.user_channel_routing ? (
           <DetailSection label={t('User channel routing')}>
             <DetailRow
@@ -1201,7 +1373,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
             ) : null}
           </DetailSection>
         ) : null}
-        {props.isAdmin && adminInfo?.request_policy?.length ? (
+        {canViewPolicyDecisions && adminInfo?.request_policy?.length ? (
           <DetailSection
             label={t('Request policy decisions')}
             icon={<Route className='size-4' />}
@@ -1244,7 +1416,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
         ) : null}
       </CompareCell>
 
-      <CompareCell row='rootDiagnostics' column={col}>
+      <CompareCell row='rootDiagnostics' column={col} section={props.section}>
         {props.isRoot && other?.root_info ? (
           <DetailSection label={t('Root Diagnostics')}>
             {other.root_info.task_plugin ? (
@@ -1280,7 +1452,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Top-up audit info (type=1, admin only) */}
-      <CompareCell row='topupAudit' column={col}>
+      <CompareCell row='topupAudit' column={col} section={props.section}>
         {showTopupAuditSection && (
           <DetailSection
             icon={<ShieldCheck className='size-3.5' aria-hidden='true' />}
@@ -1296,11 +1468,11 @@ export function LogDetailBody(props: LogDetailBodyProps) {
               />
             ))}
             {showLegacyTopupWarning && (
-              <div className='flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400'>
+              <div className='text-warning flex items-start gap-1.5 text-xs dark:text-amber-400'>
                 <Info className='mt-0.5 size-3.5 shrink-0' aria-hidden='true' />
                 <span>
                   {t(
-                    'This historical record predates audit-info tracking and cannot be backfilled. The current instance already records server IP, callback IP, payment method, and system version for new top-ups going forward.'
+                    'This record has incomplete audit information that cannot be recovered.'
                   )}
                 </span>
               </div>
@@ -1309,7 +1481,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
         )}
       </CompareCell>
 
-      <CompareCell row='quotaOperation' column={col}>
+      <CompareCell row='quotaOperation' column={col} section={props.section}>
         {quotaOperation && (
           <DetailSection label={t('Quota adjustment details')}>
             <AuditDetailFields fields={quotaOperation.fields} />
@@ -1318,7 +1490,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Manage operator (type=3, admin only) */}
-      <CompareCell row='manageOperator' column={col}>
+      <CompareCell row='manageOperator' column={col} section={props.section}>
         {manageOperator && (
           <DetailRow
             label={
@@ -1337,7 +1509,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Target user of the operation (type=3, admin only) */}
-      <CompareCell row='manageTarget' column={col}>
+      <CompareCell row='manageTarget' column={col} section={props.section}>
         {manageTargetUser && (
           <DetailRow
             label={
@@ -1356,7 +1528,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Operation audit info (type=3, admin only) */}
-      <CompareCell row='manageAudit' column={col}>
+      <CompareCell row='manageAudit' column={col} section={props.section}>
         {showManageAuditSection && (
           <DetailSection
             icon={<ShieldCheck className='size-3.5' aria-hidden='true' />}
@@ -1401,7 +1573,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Login audit info (type=7) */}
-      <CompareCell row='loginAudit' column={col}>
+      <CompareCell row='loginAudit' column={col} section={props.section}>
         {isLogin && loginAuditFields.length > 0 && (
           <DetailSection
             icon={<LogIn className='size-3.5' aria-hidden='true' />}
@@ -1424,7 +1596,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Audio/WebSocket token breakdown */}
-      <CompareCell row='audioTokens' column={col}>
+      <CompareCell row='audioTokens' column={col} section={props.section}>
         {hasAudioTokens && other && (
           <DetailSection
             icon={<Headphones className='size-3.5' aria-hidden='true' />}
@@ -1464,7 +1636,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Reasoning effort */}
-      <CompareCell row='reasoningEffort' column={col}>
+      <CompareCell row='reasoningEffort' column={col} section={props.section}>
         {other?.reasoning_effort && (
           <DetailRow
             label={t('Reasoning Effort')}
@@ -1481,7 +1653,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* System prompt override */}
-      <CompareCell row='systemPrompt' column={col}>
+      <CompareCell row='systemPrompt' column={col} section={props.section}>
         {other?.is_system_prompt_overwritten && (
           <DetailRow
             label={t('System Prompt')}
@@ -1498,7 +1670,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Model mapping */}
-      <CompareCell row='modelMapping' column={col}>
+      <CompareCell row='modelMapping' column={col} section={props.section}>
         {other?.is_model_mapped && other?.upstream_model_name && (
           <DetailSection label={t('Model Mapping')}>
             <DetailRow
@@ -1516,7 +1688,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Token breakdown (for consume/error types with token data) */}
-      <CompareCell row='tokens' column={col}>
+      <CompareCell row='tokens' column={col} section={props.section}>
         {isDisplayableType(props.log.type) && other && (
           <TokenBreakdown
             log={props.log}
@@ -1527,7 +1699,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Billing breakdown (consume type) */}
-      <CompareCell row='billing' column={col}>
+      <CompareCell row='billing' column={col} section={props.section}>
         {isConsume && other && !isViolation && (
           <BillingBreakdown
             log={props.log}
@@ -1539,7 +1711,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Tiered pricing breakdown (when billing_mode is tiered_expr) */}
-      <CompareCell row='dynamicPricing' column={col}>
+      <CompareCell row='dynamicPricing' column={col} section={props.section}>
         {isTieredBilling && other?.expr_b64 && (
           <DetailSection label={t('Dynamic Pricing')}>
             {other.image_count !== undefined && (
@@ -1564,7 +1736,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Admin billing mode indicator for non-consume */}
-      <CompareCell row='billingPath' column={col}>
+      <CompareCell row='billingPath' column={col} section={props.section}>
         {props.isAdmin &&
           !isConsume &&
           props.log.type !== 6 &&
@@ -1599,7 +1771,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Stream status details */}
-      <CompareCell row='streamStatus' column={col}>
+      <CompareCell row='streamStatus' column={col} section={props.section}>
         {other?.stream_status && other.stream_status.status !== 'ok' && (
           <DetailSection label={t('Stream Status')}>
             <DetailRow
@@ -1641,7 +1813,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
         )}
       </CompareCell>
 
-      <CompareCell row='streamBilling' column={col}>
+      <CompareCell row='streamBilling' column={col} section={props.section}>
         {other?.stream_result && (
           <DetailSection label={t('Stream billing')}>
             <DetailRow
@@ -1697,7 +1869,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
         )}
       </CompareCell>
       {/* 只接受后端新流程确认的布尔标记；面板内部继续校验 Root 身份并按点击加载。 */}
-      <CompareCell row='streamDiagnostic' column={col}>
+      <CompareCell row='streamDiagnostic' column={col} section={props.section}>
         {props.showStreamDiagnostic &&
           other?.stream_diagnostic_available === true &&
           props.log.request_id && (
@@ -1711,7 +1883,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Subscription billing details */}
-      <CompareCell row='subscription' column={col}>
+      <CompareCell row='subscription' column={col} section={props.section}>
         {isSubscription && other && (
           <DetailSection label={t('Subscription Billing')}>
             {other.subscription_plan_id && (
@@ -1761,7 +1933,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Param override */}
-      <CompareCell row='paramOverride' column={col}>
+      <CompareCell row='paramOverride' column={col} section={props.section}>
         {other?.po && Array.isArray(other.po) && other.po.length > 0 && (
           <DetailSection
             icon={<Settings2 className='size-3.5' aria-hidden='true' />}
@@ -1793,33 +1965,25 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       {/* Content */}
-      <CompareCell row='content' column={col}>
+      <CompareCell row='content' column={col} section={props.section}>
         {details && (
           <div className='space-y-1.5'>
             <Label className='text-xs font-semibold'>{t('Content')}</Label>
             <div className='bg-muted/30 relative min-w-0 overflow-hidden rounded-md border p-2.5'>
-              <Button
-                variant='ghost'
-                size='sm'
-                className='absolute top-1.5 right-1.5 h-5 w-5 p-0'
-                onClick={() => copyToClipboard(details)}
-                title={t('Copy to clipboard')}
-                aria-label={t('Copy to clipboard')}
-              >
-                {copiedText === details ? (
-                  <Check className='size-3 text-green-600' />
-                ) : (
-                  <Copy className='size-3' />
-                )}
-              </Button>
-              <p className='min-w-0 pr-6 text-xs leading-relaxed break-all whitespace-pre-wrap sm:wrap-break-word'>
+              <CopyButton
+                value={details}
+                variant='outline'
+                size='icon'
+                className='absolute top-2 right-2'
+              />
+              <p className='min-w-0 pr-11 text-xs leading-relaxed break-all whitespace-pre-wrap sm:wrap-break-word'>
                 {details}
               </p>
             </div>
           </div>
         )}
       </CompareCell>
-      <CompareCell row='footer' column={col}>
+      <CompareCell row='footer' column={col} section={props.section}>
         {props.footer}
       </CompareCell>
     </div>

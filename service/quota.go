@@ -161,7 +161,7 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	if err != nil {
 		return err
 	}
-	logger.LogInfo(ctx, common.LogText("realtime streaming consume quota success, quota: %d", quota))
+	logger.LogDebug(ctx, "realtime streaming consume quota success, quota: %d", quota)
 	return nil
 }
 

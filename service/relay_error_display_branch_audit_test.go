@@ -32,7 +32,7 @@ func TestBranchAuditStreamFailure_LiveFrameMaskedLogTextIsUpstream(t *testing.T)
 // stream_status texts is masked too.
 func TestBranchAuditStreamFailure_StreamStatusEntryPointMasks(t *testing.T) {
 	withRelayErrorDisplay(t, operation_setting.RelayErrorDisplaySetting{Enabled: true, HideUpstreamErrors: true, DefaultMessage: "Unavailable"})
-	masked, replaced := operation_setting.MaskRelayStreamErrorForUser("Your credit balance is too low (org vip-azure-3)", "en")
+	masked, replaced := operation_setting.MaskRelayStreamErrorForUser("Your credit balance is too low (org vip-azure-3)", "en", "")
 	assert.True(t, replaced)
 	assert.Equal(t, "Unavailable", masked)
 }

@@ -151,8 +151,11 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		writer.stop()
 	}
 
-	// 无条件新建 StreamStatus
-	info.StreamStatus = relaycommon.NewStreamStatus()
+	// Compatibility attempts already own a fresh status shared by the passive
+	// transport observers. Replacing it here would discard their actual errors.
+	if !info.MainStreamMode() || info.StreamStatus == nil {
+		info.StreamStatus = relaycommon.NewStreamStatus()
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -279,6 +282,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 
 	dataChan := make(chan string, 10)
 	sr := newStreamResult(info.StreamStatus)
+	if info.MainStreamMode() {
+		sr.session = info.StreamSession // Error evidence only; inactive policy never stops the callback.
+	}
 
 	wg.Add(1)
 	gopool.Go(func() {
@@ -400,7 +406,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		info.StreamStatus.EndError = nil
 	}
 	if info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() {
-		logger.LogInfo(c, common.LogText("stream ended: %s", info.StreamStatus.Summary()))
+		if common.DebugEnabled && !common.IsPrivateStream(c) {
+			logger.LogDebug(c, "stream ended: %s", info.StreamStatus.Summary())
+		}
 	} else {
 		logger.LogError(c, common.LogText("stream ended: %s, received=%d", info.StreamStatus.Summary(), info.ReceivedResponseCount))
 	}

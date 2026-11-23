@@ -12,6 +12,65 @@ import (
 )
 
 const forkGuardClaudeStart = `{"type":"message_start","message":{"id":"msg_guard","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929","content":[],"usage":{"input_tokens":21,"output_tokens":0}}}`
+
+func TestClaudeRequiredProtocolBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name, event, payload, reason string
+	}{
+		{"chat", "", `{"choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":999}}`, "upstream_protocol_error"},
+		{"responses", "", `{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":999}}}`, "upstream_protocol_error"},
+		{"gemini", "", `{"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":999}}`, "upstream_protocol_error"},
+		{"spoofed ping", "", `{"type":"ping","choices":[]}`, "upstream_protocol_error"},
+		{"snake case Gemini", "", `{"type":"ping","usage_metadata":{"promptTokenCount":999}}`, "upstream_protocol_error"},
+		{"missing type", "", `{}`, "upstream_protocol_error"},
+		{"empty type", "", `{"type":""}`, "upstream_protocol_error"},
+		{"null type", "", `{"type":null}`, "upstream_protocol_error"},
+		{"numeric type", "", `{"type":7}`, "upstream_protocol_error"},
+		{"foreign DONE", "", `[DONE]`, "upstream_protocol_error"},
+		{"future Claude event", "", `{"type":"future_event","extra":true}`, ""},
+		{"Claude ping", "ping", `{"type":"ping"}`, ""},
+		{"provider error", "", `{"error":{"type":"api_error","message":"fixture unavailable"}}`, "upstream_error"},
+		{"named provider error", "error", `{"message":"fixture unavailable"}`, "upstream_error"},
+		{"foreign failure is still failure", "", `{"type":"response.failed","response":{"status":"failed","error":{"message":"fixture unavailable"}}}`, "upstream_error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewStreamSession(types.RelayFormatOpenAIResponses)
+			s.RequireClaudeProtocol = true
+			err := s.ObserveEvent(tc.event, []byte(tc.payload))
+			if tc.reason == "upstream_protocol_error" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.reason, string(s.Snapshot().Reason))
+			require.False(t, s.ProtocolComplete())
+			require.Empty(t, s.Snapshot().Evidence, "foreign usage must not enter billing evidence")
+		})
+	}
+	for _, tc := range []struct {
+		format types.RelayFormat
+		body   string
+	}{
+		{types.RelayFormatOpenAI, `{"choices":[{"index":0,"finish_reason":"stop"}]}`},
+		{types.RelayFormatOpenAIResponses, `{"type":"response.completed","response":{"status":"completed"}}`},
+		{types.RelayFormatGemini, `{"candidates":[{"index":0,"finishReason":"STOP"}]}`},
+	} {
+		t.Run("other upstream unchanged/"+string(tc.format), func(t *testing.T) {
+			s := NewStreamSession(tc.format)
+			require.NoError(t, s.ObserveEvent("", []byte(tc.body)))
+			require.True(t, s.ProtocolComplete())
+		})
+	}
+	t.Run("DONE after a real Claude terminator", func(t *testing.T) {
+		s := NewStreamSession(types.RelayFormatOpenAI)
+		s.RequireClaudeProtocol = true
+		for _, event := range []string{forkGuardClaudeStart, `{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`, `{"type":"message_stop"}`, `[DONE]`} {
+			require.NoError(t, s.ObserveEvent("", []byte(event)))
+		}
+		require.True(t, s.ProtocolComplete())
+	})
+}
+
 const forkGuardClaudeTool = `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_guard","name":"get_weather","input":{}}}`
 const forkGuardClaudeToolFragment = `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"location\":"}}`
 const forkGuardClaudeClose = `{"type":"content_block_stop","index":0}`

@@ -1,6 +1,9 @@
 package jimeng
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -241,6 +245,20 @@ func TestPayloadHashAndHmac(t *testing.T) {
 	b := hmacSHA256([]byte("k"), []byte("d"))
 	assert.Equal(t, a, b)
 	assert.NotEqual(t, hmacSHA256([]byte("k1"), []byte("d")), a)
+}
+
+func TestPayloadHashDoesNotLogRequestBody(t *testing.T) {
+	var logs bytes.Buffer
+	oldWriter, oldErrorWriter, oldDebug := gin.DefaultWriter, gin.DefaultErrorWriter, common.DebugEnabled
+	gin.DefaultWriter, gin.DefaultErrorWriter, common.DebugEnabled = &logs, &logs, true
+	t.Cleanup(func() {
+		gin.DefaultWriter, gin.DefaultErrorWriter, common.DebugEnabled = oldWriter, oldErrorWriter, oldDebug
+	})
+	c := newTestContext(httptest.NewRecorder())
+	require.NoError(t, SetPayloadHash(c, map[string]any{"prompt": "private fixture"}))
+	want := sha256.Sum256([]byte(`{"prompt":"private fixture"}`))
+	require.Equal(t, hex.EncodeToString(want[:]), getPayloadHash(c))
+	require.Empty(t, logs.String(), "signature generation needs the bytes, application logging does not")
 }
 
 // ---- getters & unimplemented ----

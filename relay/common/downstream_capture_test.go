@@ -99,3 +99,16 @@ func TestDownstreamCaptureOutputBoundary(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, base64.StdEncoding.EncodeToString(rec.Body.Bytes()), *capture.DownstreamBody())
 }
+
+func TestPassiveCaptureFlushFailureKeepsWriterContract(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	capture := NewStreamResponseCapture(1)
+	capture.PassiveStatus = NewStreamStatus()
+	w := NewDownstreamCaptureWriter(streamFlushFailure{c.Writer}, capture)
+	_, err := w.Write([]byte("body"))
+	require.NoError(t, err)
+	require.Error(t, w.FlushError())
+	require.True(t, capture.PassiveStatus.HasErrors())
+	require.NotEmpty(t, capture.Snapshot().Error)
+	require.Equal(t, w.ResponseWriter, w.Unwrap())
+}

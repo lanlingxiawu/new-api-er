@@ -197,7 +197,9 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	if usage.(*dto.Usage).TotalTokens == 0 {
 		usage.(*dto.Usage).TotalTokens = 1
 	}
-	if usage.(*dto.Usage).PromptTokens == 0 {
+	// Keep the legacy placeholder only when neither side reports tokens.
+	// Image providers can legitimately report zero input with billed output.
+	if usage.(*dto.Usage).PromptTokens == 0 && usage.(*dto.Usage).CompletionTokens == 0 {
 		usage.(*dto.Usage).PromptTokens = 1
 	}
 

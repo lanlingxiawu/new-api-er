@@ -23,6 +23,27 @@ import (
 // 测试环境：正文写 t.TempDir()，关闭后台清理，worker 数固定。
 // ---------------------------------------------------------------------------
 
+func TestRequestResponseLogger_NoWritersDoesNotPrefetchBody(t *testing.T) {
+	enableRequestLog(t, "")
+	previous := requestLogQueue.Swap(nil)
+	t.Cleanup(func() { requestLogQueue.Store(previous) })
+	reader := strings.NewReader(`{"prompt":"original request"}`)
+	router := gin.New()
+	router.Use(RequestResponseLogger())
+	router.POST("/fixture", func(c *gin.Context) {
+		require.EqualValues(t, reader.Size(), reader.Len(), "unwritable logging must not read before the handler")
+		body, err := io.ReadAll(c.Request.Body)
+		require.NoError(t, err)
+		c.Data(http.StatusOK, "application/json", body)
+	})
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/fixture", reader)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.JSONEq(t, `{"prompt":"original request"}`, recorder.Body.String())
+}
+
 func requestLogTestEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("REQUEST_LOG_DIR", t.TempDir())

@@ -3,10 +3,12 @@ package service
 import (
 	"hash/fnv"
 	"maps"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MoeForge/moego/ojson"
@@ -796,6 +798,38 @@ type ChannelAffinityUsageCacheCounters struct {
 
 var channelAffinityUsageCacheStatsLocks [64]sync.Mutex
 
+const (
+	channelAffinityUsageStatsQueueSize = 4096
+	channelAffinityUsageStatsWorkers   = 4
+)
+
+// affinityUsageObservation is the small counter snapshot kept by the background
+// stats worker. It does not retain the request, the body, or a gin context.
+type affinityUsageObservation struct {
+	statsCtx             ChannelAffinityStatsContext
+	mode                 string
+	hit                  bool
+	cachedTokens         int64
+	promptCacheHitTokens int64
+	promptTokens         int64
+	completionTokens     int64
+	totalTokens          int64
+}
+
+var (
+	affinityUsageQueue       = make(chan affinityUsageObservation, channelAffinityUsageStatsQueueSize)
+	affinityUsageDrops       atomic.Int64
+	affinityUsagePending     atomic.Int64
+	affinityUsageStart       sync.Once
+	affinityUsageObserveHook atomic.Pointer[func(affinityUsageObservation)]
+)
+
+// channelAffinityUsageStatsSync restores the old inline Redis update.
+// Set CHANNEL_AFFINITY_USAGE_STATS_SYNC=true to disable the background queue.
+func channelAffinityUsageStatsSync() bool {
+	return os.Getenv("CHANNEL_AFFINITY_USAGE_STATS_SYNC") == "true"
+}
+
 // ObserveChannelAffinityUsageCacheByRelayFormat records usage cache stats with a stable rate mode derived from relay format.
 func ObserveChannelAffinityUsageCacheByRelayFormat(c *gin.Context, usage *dto.Usage, relayFormat types.RelayFormat) {
 	ObserveChannelAffinityUsageCacheFromContext(c, usage, cachedTokenRateModeByRelayFormat(relayFormat))
@@ -806,7 +840,83 @@ func ObserveChannelAffinityUsageCacheFromContext(c *gin.Context, usage *dto.Usag
 	if !ok {
 		return
 	}
-	observeChannelAffinityUsageCache(statsCtx, usage, cachedTokenRateMode)
+	observation, ok := snapshotAffinityUsageObservation(statsCtx, usage, cachedTokenRateMode)
+	if !ok {
+		return
+	}
+	if channelAffinityUsageStatsSync() {
+		applyAffinityUsageObservation(observation)
+		return
+	}
+	enqueueAffinityUsageObservation(observation)
+}
+
+func snapshotAffinityUsageObservation(statsCtx ChannelAffinityStatsContext, usage *dto.Usage, cachedTokenRateMode string) (affinityUsageObservation, bool) {
+	if channelAffinityUsageCacheEntryKey(statsCtx.RuleName, statsCtx.UsingGroup, statsCtx.KeyFingerprint) == "" || statsCtx.TTLSeconds <= 0 {
+		return affinityUsageObservation{}, false
+	}
+	hit, cachedTokens, promptCacheHitTokens := usageCacheSignals(usage)
+	return affinityUsageObservation{
+		statsCtx:             statsCtx,
+		mode:                 cachedTokenRateMode,
+		hit:                  hit,
+		cachedTokens:         cachedTokens,
+		promptCacheHitTokens: promptCacheHitTokens,
+		promptTokens:         int64(usagePromptTokens(usage)),
+		completionTokens:     int64(usageCompletionTokens(usage)),
+		totalTokens:          int64(usageTotalTokens(usage)),
+	}, true
+}
+
+func enqueueAffinityUsageObservation(observation affinityUsageObservation) bool {
+	startAffinityUsageWorkers()
+	affinityUsagePending.Add(1)
+	select {
+	case affinityUsageQueue <- observation:
+		return true
+	default:
+		affinityUsagePending.Add(-1)
+		affinityUsageDrops.Add(1)
+		return false
+	}
+}
+
+func startAffinityUsageWorkers() {
+	affinityUsageStart.Do(func() {
+		for range channelAffinityUsageStatsWorkers {
+			go affinityUsageWorker()
+		}
+	})
+}
+
+func affinityUsageWorker() {
+	for observation := range affinityUsageQueue {
+		func() {
+			defer affinityUsagePending.Add(-1)
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					common.SysError("channel affinity usage stats worker recovered")
+				}
+			}()
+			applyAffinityUsageObservation(observation)
+		}()
+	}
+}
+
+// flushChannelAffinityUsageStats waits until queued display stats have been applied.
+// A full queue drops stats, so this returns when the queue and workers are idle.
+func flushChannelAffinityUsageStats() {
+	if channelAffinityUsageStatsSync() {
+		return
+	}
+	startAffinityUsageWorkers()
+	deadline := time.Now().Add(2 * time.Second)
+	for affinityUsagePending.Load() > 0 || len(affinityUsageQueue) > 0 {
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFp string) ChannelAffinityUsageCacheStats {
@@ -849,19 +959,18 @@ func GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFp string) Chann
 	}
 }
 
-func observeChannelAffinityUsageCache(statsCtx ChannelAffinityStatsContext, usage *dto.Usage, cachedTokenRateMode string) {
-	entryKey := channelAffinityUsageCacheEntryKey(statsCtx.RuleName, statsCtx.UsingGroup, statsCtx.KeyFingerprint)
-	if entryKey == "" {
+func applyAffinityUsageObservation(observation affinityUsageObservation) {
+	if hook := affinityUsageObserveHook.Load(); hook != nil {
+		(*hook)(observation)
 		return
 	}
-
-	windowSeconds := statsCtx.TTLSeconds
-	if windowSeconds <= 0 {
+	entryKey := channelAffinityUsageCacheEntryKey(observation.statsCtx.RuleName, observation.statsCtx.UsingGroup, observation.statsCtx.KeyFingerprint)
+	if entryKey == "" || observation.statsCtx.TTLSeconds <= 0 {
 		return
 	}
 
 	cache := getChannelAffinityUsageCacheStatsCache()
-	ttl := time.Duration(windowSeconds) * time.Second
+	ttl := time.Duration(observation.statsCtx.TTLSeconds) * time.Second
 
 	lock := channelAffinityUsageCacheStatsLock(entryKey)
 	lock.Lock()
@@ -875,7 +984,7 @@ func observeChannelAffinityUsageCache(statsCtx ChannelAffinityStatsContext, usag
 	if !found {
 		next = ChannelAffinityUsageCacheCounters{}
 	}
-	currentMode := normalizeCachedTokenRateMode(cachedTokenRateMode)
+	currentMode := normalizeCachedTokenRateMode(observation.mode)
 	if currentMode != "" {
 		if next.CachedTokenRateMode == "" {
 			next.CachedTokenRateMode = currentMode
@@ -884,17 +993,16 @@ func observeChannelAffinityUsageCache(statsCtx ChannelAffinityStatsContext, usag
 		}
 	}
 	next.Total++
-	hit, cachedTokens, promptCacheHitTokens := usageCacheSignals(usage)
-	if hit {
+	if observation.hit {
 		next.Hit++
 	}
-	next.WindowSeconds = windowSeconds
+	next.WindowSeconds = observation.statsCtx.TTLSeconds
 	next.LastSeenAt = time.Now().Unix()
-	next.CachedTokens += cachedTokens
-	next.PromptCacheHitTokens += promptCacheHitTokens
-	next.PromptTokens += int64(usagePromptTokens(usage))
-	next.CompletionTokens += int64(usageCompletionTokens(usage))
-	next.TotalTokens += int64(usageTotalTokens(usage))
+	next.CachedTokens += observation.cachedTokens
+	next.PromptCacheHitTokens += observation.promptCacheHitTokens
+	next.PromptTokens += observation.promptTokens
+	next.CompletionTokens += observation.completionTokens
+	next.TotalTokens += observation.totalTokens
 	_ = cache.SetWithTTL(entryKey, next, ttl)
 }
 

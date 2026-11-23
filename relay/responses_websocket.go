@@ -80,10 +80,13 @@ type responsesWSControl struct {
 // Only the request worker reads or changes billing state. Socket readers pass
 // bounded messages to it; cancellation never performs an independent refund.
 type responsesWSCallState struct {
-	inbox    chan responsesWSMessage
-	controls chan responsesWSControl
-	done     chan struct{}
-	terminal *responsesWSMessage
+	status    *relaycommon.StreamStatus
+	capture   *relaycommon.StreamResponseCapture
+	finishLog func()
+	inbox     chan responsesWSMessage
+	controls  chan responsesWSControl
+	done      chan struct{}
+	terminal  *responsesWSMessage
 	// A nonzero closeCode ends the connection after this request.
 	closeCode   int
 	closeReason string
@@ -121,6 +124,7 @@ type responsesWSSession struct {
 	lockedKeyIndex  int
 	lockedContext   map[appconstant.ContextKey]any
 	lockedRoute     dto.AdvancedCustomRoute
+	handshake       *http.Response // Bounded successful handshake metadata, no body or request.
 }
 
 func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn, runner ResponsesWSRequestRunner) *types.NewAPIError {
@@ -206,9 +210,13 @@ func (s *responsesWSSession) runRequest(state *responsesWSCallState, message []b
 		s.stateMu.Lock()
 		if outgoing != nil {
 			if err := s.client.SetWriteDeadline(s.clientWriteBudget.Deadline(time.Now(), len(outgoing.body))); err != nil {
+				state.observeClientWrite(outgoing.body, err)
 				state.closeCode = websocket.CloseInternalServerErr
 			} else if err := s.client.WriteMessage(outgoing.kind, outgoing.body); err != nil {
+				state.observeClientWrite(outgoing.body, err)
 				state.closeCode = websocket.CloseInternalServerErr
+			} else {
+				state.observeClientWrite(outgoing.body, nil)
 			}
 		}
 		if state.closeCode != 0 {
@@ -218,6 +226,10 @@ func (s *responsesWSSession) runRequest(state *responsesWSCallState, message []b
 		close(state.done)
 		s.stateMu.Unlock()
 		s.clientWriteMu.Unlock()
+		if state.finishLog != nil {
+			state.finishLog()
+			state.finishLog = nil
+		}
 	}()
 	request := s.request.Clone(s.ctx)
 	request.Body = io.NopCloser(bytes.NewReader(message))
@@ -280,6 +292,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		}
 		info = relaycommon.GenRelayInfoResponses(c, &create.Request)
 		info.IsStream = true
+		beginResponsesWSObservation(c, info, state, s.handshake)
 		common.SetContextKey(c, appconstant.ContextKeyIsStream, true)
 		if apiErr = PrepareRequestBilling(c, info); apiErr != nil {
 			return apiErr
@@ -291,6 +304,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			return apiErr
 		}
 		if err := s.writeTarget(websocket.TextMessage, payload); err != nil {
+			state.observeUpstreamFailure("write", err)
 			state.closeCode = websocket.CloseInternalServerErr
 			return types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
 		}
@@ -319,6 +333,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 				}
 			}
 			info.RetryIndex = retry.GetRetry()
+			beginResponsesWSObservation(c, info, state, nil)
 			policy.BeginAttempt(channel, info.UsingGroup)
 			var payload []byte
 			payload, apiErr = buildResponsesWSCreatePayload(c, info, create.Request, create.Generate, create.StreamID)
@@ -343,7 +358,12 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			if !s.setTarget(target) {
 				return types.NewError(context.Canceled, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
 			}
+			if info.StreamDiagnostic != nil {
+				handshake := info.StreamDiagnostic.Snapshot()
+				s.handshake = &http.Response{StatusCode: handshake.StatusCode, Header: handshake.ResponseHeaders}
+			}
 			if err := s.writeTarget(websocket.TextMessage, payload); err != nil {
+				state.observeUpstreamFailure("write", err)
 				state.closeCode = websocket.CloseInternalServerErr
 				return types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
 			}
@@ -375,6 +395,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 
 	accumulator := service.NewResponsesUsageAccumulator(info)
 	info.StreamStatus = relaycommon.NewStreamStatus()
+	state.status = info.StreamStatus
 	info.StreamStatus.RequireTerminal()
 	common.SetContextKey(c, appconstant.ContextKeyResponseStreamStatus, info.StreamStatus)
 	timeout := time.Duration(appconstant.StreamingTimeout) * time.Second
@@ -392,21 +413,30 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		case incoming := <-state.inbox:
 			idle.Reset(timeout)
 			if incoming.err != nil {
+				info.StreamDiagnostic.SetError(incoming.err)
+				if info.StreamDiagnostic != nil {
+					info.StreamDiagnostic.Termination.ObserveUpstreamRead(incoming.err)
+				}
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, incoming.err)
 				state.closeCode, state.closeReason = websocket.CloseInternalServerErr, "upstream connection closed"
 				ConsumeResponsesQuota(c, info, accumulator.Finish())
 				return nil
 			}
+			info.StreamDiagnostic.WriteStreamPayload(incoming.body)
 			info.SetFirstResponseTime()
 			var event struct {
 				dto.ResponsesStreamResponse
 				StreamID string `json:"stream_id"`
 			}
 			if err := common.Unmarshal(incoming.body, &event); err != nil {
+				info.StreamDiagnostic.SetError(err)
+				info.StreamDiagnostic.Termination.Observe("upstream", "protocol", err)
 				info.StreamStatus.RecordError("invalid upstream websocket event")
 			} else {
 				if event.Type != "error" && event.StreamID != "" && event.StreamID != create.StreamID {
-					if err := s.writeClient(incoming.kind, incoming.body); err != nil {
+					err := s.writeClient(incoming.kind, incoming.body)
+					state.observeClientWrite(incoming.body, err)
+					if err != nil {
 						s.shutdown(websocket.CloseInternalServerErr, "")
 					}
 					continue
@@ -423,8 +453,13 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 						continue
 					}
 					terminal, ambiguous, controlError := responsesWSErrorEndsRequest(rejection, create.StreamID, responseID, sentControl)
+					if terminal || controlError {
+						state.observeUpstreamFailure("provider_error", errors.New("upstream websocket error"))
+					}
 					if !terminal {
-						if err := s.writeClient(incoming.kind, incoming.body); err != nil {
+						err := s.writeClient(incoming.kind, incoming.body)
+						state.observeClientWrite(incoming.body, err)
+						if err != nil {
 							s.shutdown(websocket.CloseInternalServerErr, "")
 						}
 						// Only a control error in this stream resolves its pending control.
@@ -484,11 +519,14 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 				ConsumeResponsesQuota(c, info, accumulator.Finish())
 				return nil
 			}
-			if err := s.writeClient(incoming.kind, incoming.body); err != nil {
+			writeErr := s.writeClient(incoming.kind, incoming.body)
+			state.observeClientWrite(incoming.body, writeErr)
+			if writeErr != nil {
 				s.shutdown(websocket.CloseInternalServerErr, "")
 			}
 			if accepted && pendingControl != nil {
 				if err := s.writeTarget(websocket.TextMessage, pendingControl); err != nil {
+					state.observeUpstreamFailure("write", err)
 					s.shutdown(websocket.CloseInternalServerErr, "")
 				}
 				sentControl = pendingControl
@@ -504,15 +542,23 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 				continue
 			}
 			if err := s.writeTarget(websocket.TextMessage, control.body); err != nil {
+				state.observeUpstreamFailure("write", err)
 				s.shutdown(websocket.CloseInternalServerErr, "")
 			}
 			sentControl = control.body
 		case <-idle.C:
+			info.StreamDiagnostic.SetError(context.DeadlineExceeded)
+			if info.StreamDiagnostic != nil {
+				info.StreamDiagnostic.Termination.ObserveTimeout("idle", int(timeout/time.Second))
+			}
 			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, context.DeadlineExceeded)
 			state.closeCode, state.closeReason = websocket.CloseInternalServerErr, "upstream response timed out"
 			ConsumeResponsesQuota(c, info, accumulator.Finish())
 			return nil
 		case <-s.ctx.Done():
+			if info.StreamDiagnostic != nil {
+				info.StreamDiagnostic.Termination.ObserveContext()
+			}
 			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, s.ctx.Err())
 			ConsumeResponsesQuota(c, info, accumulator.Finish())
 			return nil

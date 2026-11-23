@@ -26,6 +26,8 @@ import type {
 export const MAX_RULES = 100
 export const MAX_MESSAGE_LENGTH = 500
 export const MAX_NAME_LENGTH = 100
+export const MAX_GROUPS = 100
+export const MAX_GROUP_LENGTH = 128
 const MAX_LIST_ITEMS = 20
 const MAX_KEYWORD_LENGTH = 100
 export const MAX_EDITS = 20
@@ -52,6 +54,7 @@ export type RuleRow = {
   // Stable key so edits and reordering do not remount rows.
   id: number
   name: string
+  groups: string[]
   source: RelayErrorRuleSource
   // Comma-separated as typed; parsed on save so partial input stays editable.
   statusCodes: string
@@ -65,7 +68,13 @@ export type RuleRow = {
 
 export type RuleFieldErrors = Partial<
   Record<
-    'name' | 'statusCodes' | 'lists' | 'message' | 'edits' | 'statusCode',
+    | 'name'
+    | 'groups'
+    | 'statusCodes'
+    | 'lists'
+    | 'message'
+    | 'edits'
+    | 'statusCode',
     string
   >
 >
@@ -83,6 +92,7 @@ export function emptyRuleRow(id: number): RuleRow {
   return {
     id,
     name: '',
+    groups: [],
     source: 'upstream',
     statusCodes: '',
     errorCodes: '',
@@ -95,9 +105,18 @@ export function emptyRuleRow(id: number): RuleRow {
 }
 
 export function toRow(rule: RelayErrorRule, id: number): RuleRow {
+  // Keep malformed scopes invalid until explicitly corrected, rather than
+  // silently making the rule apply to all groups.
+  let groups: string[] = []
+  if (rule.groups != null) {
+    groups = Array.isArray(rule.groups)
+      ? rule.groups.map((group) => (typeof group === 'string' ? group : ''))
+      : ['']
+  }
   return {
     id,
     name: rule.name ?? '',
+    groups,
     source: rule.source,
     statusCodes: (rule.status_codes ?? []).join(', '),
     errorCodes: (rule.error_codes ?? []).join(', '),
@@ -119,6 +138,7 @@ export function toRow(rule: RelayErrorRule, id: number): RuleRow {
 export function toRule(row: RuleRow): RelayErrorRule {
   const rule: RelayErrorRule = { source: row.source, action: row.action }
   if (row.name.trim()) rule.name = row.name.trim()
+  if (row.groups.length) rule.groups = [...new Set(row.groups)]
   const statusCodes = splitList(row.statusCodes).map(Number)
   if (statusCodes.length) rule.status_codes = statusCodes
   const errorCodes = splitList(row.errorCodes)
@@ -170,6 +190,21 @@ export function validateRuleRow(row: RuleRow, t: Translate): RuleFieldErrors {
   const errors: RuleFieldErrors = {}
   if (charCount(row.name.trim()) > MAX_NAME_LENGTH) {
     errors.name = t('The name is too long.')
+  }
+  if (row.groups.length > MAX_GROUPS) {
+    errors.groups = t('Use at most 100 groups per rule.')
+  } else if (
+    row.groups.some(
+      (group) => !group.trim() || charCount(group) > MAX_GROUP_LENGTH
+    )
+  ) {
+    errors.groups = t(
+      'Each group name must be nonblank and at most 128 characters.'
+    )
+  } else if (row.groups.includes('auto')) {
+    errors.groups = t(
+      'For auto routing, select the actual groups instead of auto.'
+    )
   }
   const statusCodes = splitList(row.statusCodes)
   if (
@@ -308,6 +343,7 @@ function validateEdits(edits: EditRow[], t: Translate): string | undefined {
 export function firstRuleError(errors: RuleFieldErrors): string {
   return (
     errors.name ??
+    errors.groups ??
     errors.statusCodes ??
     errors.lists ??
     errors.message ??

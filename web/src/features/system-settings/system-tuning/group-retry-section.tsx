@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { handleServerError } from '@/lib/handle-server-error'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { getGroups } from '../../users/api'
 import { updateSystemOptionGroup } from '../api'
@@ -194,7 +195,7 @@ export function GroupRetrySection(props: {
 
   const { data: groupsData } = useQuery({
     queryKey: ['groups'],
-    queryFn: getGroups,
+    queryFn: async () => requireServerSuccess(await getGroups()),
     staleTime: 5 * 60 * 1000,
   })
   const groups = useMemo(

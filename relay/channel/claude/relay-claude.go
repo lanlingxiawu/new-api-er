@@ -298,7 +298,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	// was streamed, so a refusal before any output keeps its zeros.
 	missingInputUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage).PromptTokens == 0
 	missingOutputUsage := claudeInfo.Usage.CompletionTokens == 0 && claudeInfo.ResponseText.Len() > 0
-	if info.ReceivedResponseCount == 0 {
+	if !info.ClaudeStreamMainMode && info.ReceivedResponseCount == 0 {
 		// 上游零响应：HTTP 200 进入了流式分支，但整段流一条 SSE 数据都没发过来
 		// （连接挂起后断开 / 首字超时）。此时既没有 message_start 也没有任何输出，
 		// 绝不能用请求体估算的输入 token 兜底计费——否则会对一个零输出的失败请求
@@ -312,7 +312,12 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 			common.SysLog(common.LogText("claude response usage is not complete, maybe upstream error"))
 		}
 		// 只补缺失字段，不整份覆盖——保留 message_start 已拿到的 cache 字段
-		fallback := service.ResponseText2UsageFromStream(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens(), info.ReceivedResponseCount)
+		var fallback *dto.Usage
+		if info.ClaudeStreamMainMode {
+			fallback = service.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		} else {
+			fallback = service.ResponseText2UsageFromStream(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens(), info.ReceivedResponseCount)
+		}
 		// Each tool_use block costs about 40 output tokens beyond its name and JSON
 		// input (measured on Claude Haiku 4.5 and Sonnet 5 agent turns).
 		fallback.CompletionTokens += claudeInfo.ToolUseCount * 40
@@ -329,6 +334,9 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		claudeInfo.Usage.UsageSemantic = "anthropic"
 	}
 	relayconvert.FinalizeClaudeStreamBillingUsage(claudeInfo)
+	if info.ClaudeStreamMainMode {
+		info.StreamFinalUsage = claudeInfo.Usage
+	}
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		// 受管流未完成时不补发用量尾帧（与 OpenAI 路径一致，见 openai.HandleFinalResponse）。
@@ -390,7 +398,8 @@ func buildFinalClaudeUsage(usage *dto.Usage) *dto.ClaudeUsage {
 // 参数 c：请求和下游响应上下文；resp：上游流式 HTTP 响应；info：渠道、输出格式及计费状态。
 // 返回解析后的用量及中转错误；严格路径通过 outcome 记录已在流内发送的异常。
 func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
-	if info.RelayFormat == types.RelayFormatClaude && info.UseStrictClaudeStream() {
+	prepareClaudeMainStream(resp, info)
+	if !info.ClaudeStreamMainMode && info.RelayFormat == types.RelayFormatClaude && info.UseStrictClaudeStream() {
 		return strictClaudeStream(c, resp, info)
 	}
 	claudeInfo := &ClaudeResponseInfo{
@@ -409,7 +418,10 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	})
 	info.StreamStatus.RequireTerminal()
 	if err != nil {
-		if info.RelayFormat == types.RelayFormatClaude {
+		if info.StreamDiagnostic != nil {
+			info.StreamDiagnostic.SetError(err)
+		}
+		if !info.ClaudeStreamMainMode && info.RelayFormat == types.RelayFormatClaude {
 			HandleStreamFinalResponse(c, info, claudeInfo)
 		}
 		return nil, err

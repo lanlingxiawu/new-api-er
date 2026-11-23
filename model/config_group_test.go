@@ -307,6 +307,29 @@ func TestSaveRelayTimeoutConfigGroupPersistsAndPublishes(t *testing.T) {
 	assert.Equal(t, "false", value)
 }
 
+func TestSaveRelayTimeoutConfigGroupHotUpdate(t *testing.T) {
+	db := useConfigGroupDB(t)
+	for _, seconds := range []int{1200, 2200} {
+		previous := operation_setting.GetRelayTimeoutSnapshot()
+		previousSeconds := previous.ResponseTimeoutSeconds
+		applied, err := SaveConfigGroup("relay_timeout_setting", map[string]string{
+			"enabled":                  "true",
+			"response_timeout_seconds": strconv.Itoa(seconds),
+			"total_timeout_seconds":    "0",
+		})
+		require.NoError(t, err)
+		require.True(t, applied)
+		current := operation_setting.GetRelayTimeoutSnapshot()
+		assert.True(t, current.Enabled)
+		assert.Equal(t, seconds, current.ResponseTimeoutSeconds)
+		assert.Zero(t, current.TotalTimeoutSeconds)
+		assert.Equal(t, previousSeconds, previous.ResponseTimeoutSeconds)
+		value, exists := optionRowValue(t, db, "relay_timeout_setting.response_timeout_seconds")
+		require.True(t, exists)
+		assert.Equal(t, strconv.Itoa(seconds), value)
+	}
+}
+
 func TestSaveRelayTimeoutConfigGroupRejectsInvalidValuesBeforePersistence(t *testing.T) {
 	db := useConfigGroupDB(t)
 

@@ -31,6 +31,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import { ComboboxInput } from '@/components/ui/combobox-input'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -43,7 +44,9 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { getGroups } from '@/features/users/api'
 import { api } from '@/lib/api'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import {
   getRelayErrorDisplayPresets,
@@ -54,6 +57,7 @@ import { useSettingsPageAccess } from '../components/settings-page-access-contex
 import { SettingsSection } from '../components/settings-section'
 import type {
   RelayErrorDisplayDraft,
+  RelayErrorPreviewRequest,
   RelayErrorPreviewResponse,
   SystemTuningSettings,
 } from '../types'
@@ -132,7 +136,17 @@ export function RelayErrorDisplaySection({
 }) {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
-  const { scope } = useSettingsPageAccess()
+  const { scope, canEdit } = useSettingsPageAccess()
+  const [loadedSettings, setLoadedSettings] = useState(settings)
+  const [baseline, setBaseline] = useState(() => storedDraft(settings))
+  const groupsQuery = useQuery({
+    queryKey: ['groups'],
+    queryFn: async () => requireServerSuccess(await getGroups()),
+    staleTime: 5 * 60 * 1000,
+  })
+  const groups = (groupsQuery.data?.data ?? []).filter(
+    (group) => group !== 'auto'
+  )
 
   const storedRules = settings['relay_error_display_setting.rules'] ?? ''
   const [enabled, setEnabled] = useState(
@@ -160,23 +174,6 @@ export function RelayErrorDisplaySection({
     ),
   ]
 
-  useEffect(() => {
-    setEnabled(Boolean(settings['relay_error_display_setting.enabled']))
-    setHideUpstream(
-      Boolean(settings['relay_error_display_setting.hide_upstream_errors'])
-    )
-    setDefaultMessage(
-      settings['relay_error_display_setting.default_message'] ?? ''
-    )
-    const parsed = parseRows(
-      settings['relay_error_display_setting.rules'] ?? ''
-    )
-    setRows(parsed)
-    // Never lower it: a dialog may still hold a rule with an id handed out
-    // before this reset, and reusing that id would make two rules one.
-    setNextId((current) => Math.max(current, parsed.length))
-  }, [settings])
-
   const draft = useMemo<RelayErrorDisplayDraft>(
     () => ({
       enabled,
@@ -187,14 +184,13 @@ export function RelayErrorDisplaySection({
     [enabled, hideUpstream, defaultMessage, rows]
   )
   const dirty = useMemo(() => {
-    const stored = storedDraft(settings)
     return (
-      stored.enabled !== draft.enabled ||
-      stored.hide_upstream_errors !== draft.hide_upstream_errors ||
-      stored.default_message !== draft.default_message ||
-      stored.rules !== draft.rules
+      baseline.enabled !== draft.enabled ||
+      baseline.hide_upstream_errors !== draft.hide_upstream_errors ||
+      baseline.default_message !== draft.default_message ||
+      baseline.rules !== draft.rules
     )
-  }, [settings, draft])
+  }, [baseline, draft])
 
   // ---- rule editing
   const [editing, setEditing] = useState<{
@@ -225,6 +221,8 @@ export function RelayErrorDisplaySection({
     })
 
   // ---- save
+  const latestSettings = useRef(settings)
+  latestSettings.current = settings
   const saveMutation = useMutation({
     mutationFn: (value: RelayErrorDisplayDraft) =>
       updateSystemOptionGroup({
@@ -237,11 +235,13 @@ export function RelayErrorDisplaySection({
           rules: value.rules,
         },
       }),
-    onSuccess: (response) => {
+    onSuccess: (response, sent) => {
       if (!response.success) {
         toast.error(response.message)
         return
       }
+      setLoadedSettings(latestSettings.current)
+      setBaseline(sent)
       queryClient.invalidateQueries({ queryKey: ['system-options', scope] })
       queryClient.invalidateQueries({
         queryKey: [relayErrorDisplayStatusKey],
@@ -251,7 +251,7 @@ export function RelayErrorDisplaySection({
     onError: (error: Error) => toast.error(error.message),
   })
 
-  const save = async () => {
+  const save = () => {
     if (charCount(defaultMessage.trim()) > MAX_MESSAGE_LENGTH) {
       toast.error(t('The message can be at most 500 characters.'))
       return
@@ -272,7 +272,7 @@ export function RelayErrorDisplaySection({
       setEditing({ rule: rows[invalid], isNew: false })
       return
     }
-    await saveMutation.mutateAsync(draft)
+    saveMutation.mutate(draft)
   }
 
   const presetMutation = useMutation({
@@ -301,40 +301,77 @@ export function RelayErrorDisplaySection({
   const [sampleStatus, setSampleStatus] = useState('503')
   const [sampleCode, setSampleCode] = useState('')
   const [sampleMessage, setSampleMessage] = useState('')
-  const [preview, setPreview] = useState<RelayErrorPreviewResponse['data']>()
+  const [sampleGroup, setSampleGroup] = useState('')
+  const previewRequest = useMemo<RelayErrorPreviewRequest>(
+    () => ({
+      scope,
+      setting: draft,
+      sample: {
+        group: sampleGroup,
+        source: sampleSource,
+        status_code: Number(sampleStatus) || 0,
+        error_code: sampleCode.trim(),
+        message: sampleMessage,
+      },
+    }),
+    [
+      scope,
+      draft,
+      sampleGroup,
+      sampleSource,
+      sampleStatus,
+      sampleCode,
+      sampleMessage,
+    ]
+  )
+  const [previewResult, setPreviewResult] = useState<{
+    request: RelayErrorPreviewRequest
+    data: RelayErrorPreviewResponse['data']
+  }>()
+  const preview =
+    previewResult?.request === previewRequest ? previewResult.data : undefined
 
   // A result describes the draft it was computed for; drop it once the draft
   // changes, and ignore a result that arrives for an older draft, so a rule
   // number never points at a different rule.
-  const latestDraft = useRef(draft)
+  const latestRequest = useRef(previewRequest)
   useEffect(() => {
-    latestDraft.current = draft
-    setPreview(undefined)
-  }, [draft])
+    latestRequest.current = previewRequest
+  }, [previewRequest])
 
   const previewMutation = useMutation({
-    mutationFn: (sent: RelayErrorDisplayDraft) =>
-      previewRelayErrorDisplay({
-        scope,
-        setting: sent,
-        sample: {
-          source: sampleSource,
-          status_code: Number(sampleStatus) || 0,
-          error_code: sampleCode.trim(),
-          message: sampleMessage,
-        },
-      }),
+    mutationFn: previewRelayErrorDisplay,
     onSuccess: (response, sent) => {
-      if (sent !== latestDraft.current) return
+      if (sent !== latestRequest.current) return
       if (!response.success || !response.data) {
-        setPreview(undefined)
+        setPreviewResult(undefined)
         toast.error(response.message)
         return
       }
-      setPreview(response.data)
+      setPreviewResult({ request: sent, data: response.data })
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error, sent) => {
+      if (sent === latestRequest.current) toast.error(error.message)
+    },
   })
+
+  // Refresh a clean editor only; skipped refreshes remain pending.
+  if (
+    loadedSettings !== settings &&
+    !dirty &&
+    !editing &&
+    !saveMutation.isPending
+  ) {
+    const stored = storedDraft(settings)
+    const parsed = parseRows(stored.rules)
+    setLoadedSettings(settings)
+    setBaseline(stored)
+    setEnabled(stored.enabled)
+    setHideUpstream(stored.hide_upstream_errors)
+    setDefaultMessage(stored.default_message)
+    setRows(parsed)
+    setNextId((current) => Math.max(current, parsed.length))
+  }
 
   const matchedRule =
     preview && preview.rule_index >= 0 ? rows[preview.rule_index] : undefined
@@ -377,6 +414,7 @@ export function RelayErrorDisplaySection({
           <Switch
             id='relay-error-display-enabled'
             checked={enabled}
+            disabled={!canEdit}
             onCheckedChange={setEnabled}
           />
         </div>
@@ -392,6 +430,7 @@ export function RelayErrorDisplaySection({
                 {t('Upstream errors no rule matches')}
               </Label>
               <Select
+                disabled={!canEdit}
                 items={[
                   { value: 'hide', label: t('Show the default message') },
                   { value: 'keep', label: t('Show the original message') },
@@ -426,6 +465,7 @@ export function RelayErrorDisplaySection({
                 </Label>
                 <Input
                   id='relay-error-display-default-message'
+                  disabled={!canEdit}
                   value={defaultMessage}
                   maxLength={MAX_MESSAGE_LENGTH}
                   placeholder={t(
@@ -461,19 +501,47 @@ export function RelayErrorDisplaySection({
                 <Button
                   variant='outline'
                   size='sm'
-                  disabled={presetMutation.isPending}
+                  disabled={!canEdit || presetMutation.isPending}
                   onClick={() => presetMutation.mutate()}
                 >
                   {presetMutation.isPending
                     ? t('Loading...')
                     : t('Add preset rules')}
                 </Button>
-                <Button variant='outline' size='sm' onClick={openNewRule}>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  disabled={!canEdit}
+                  onClick={openNewRule}
+                >
                   <Plus className='mr-1 h-3 w-3' />
                   {t('Add rule')}
                 </Button>
               </div>
             </div>
+
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'Group rules follow the same order. Move them above all-group rules when they should take priority.'
+              )}
+            </p>
+            {groupsQuery.isError && (
+              <div className='flex flex-wrap items-center gap-2 text-xs'>
+                <span className='text-destructive'>
+                  {t(
+                    'Could not load groups. Existing selections are kept; enter a group name or retry.'
+                  )}
+                </span>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  disabled={groupsQuery.isFetching}
+                  onClick={() => groupsQuery.refetch()}
+                >
+                  {t('Retry')}
+                </Button>
+              </div>
+            )}
 
             <StaticDataTable
               data={rows}
@@ -493,6 +561,19 @@ export function RelayErrorDisplaySection({
                   className: 'w-10',
                   cellClassName: 'text-muted-foreground align-top',
                   cell: (_row, index) => index + 1,
+                },
+                {
+                  id: 'groups',
+                  header: t('Applies to groups'),
+                  cellClassName: 'align-top',
+                  cell: (row) =>
+                    row.groups.length ? (
+                      <BadgeList items={row.groups} />
+                    ) : (
+                      <span className='text-muted-foreground text-sm'>
+                        {t('All groups')}
+                      </span>
+                    ),
                 },
                 {
                   id: 'conditions',
@@ -560,7 +641,7 @@ export function RelayErrorDisplaySection({
                         className='h-7 w-7'
                         aria-label={t('Move up')}
                         title={t('Move up')}
-                        disabled={index === 0}
+                        disabled={!canEdit || index === 0}
                         onClick={() => moveRow(index, -1)}
                       >
                         <ChevronUp className='h-3 w-3' />
@@ -571,7 +652,7 @@ export function RelayErrorDisplaySection({
                         className='h-7 w-7'
                         aria-label={t('Move down')}
                         title={t('Move down')}
-                        disabled={index === rows.length - 1}
+                        disabled={!canEdit || index === rows.length - 1}
                         onClick={() => moveRow(index, 1)}
                       >
                         <ChevronDown className='h-3 w-3' />
@@ -582,6 +663,7 @@ export function RelayErrorDisplaySection({
                         className='h-7 w-7'
                         aria-label={t('Edit')}
                         title={t('Edit')}
+                        disabled={!canEdit}
                         onClick={() => setEditing({ rule: row, isNew: false })}
                       >
                         <Edit className='h-3 w-3' />
@@ -592,6 +674,7 @@ export function RelayErrorDisplaySection({
                         className='h-7 w-7'
                         aria-label={t('Remove')}
                         title={t('Remove')}
+                        disabled={!canEdit}
                         onClick={() =>
                           setRows((current) =>
                             current.filter((item) => item.id !== row.id)
@@ -635,7 +718,26 @@ export function RelayErrorDisplaySection({
                   onChange={(event) => setSampleMessage(event.target.value)}
                 />
               </div>
-              <div className='grid gap-3 sm:grid-cols-3'>
+              <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
+                <div className='grid gap-1.5'>
+                  <Label htmlFor='red-sample-group'>{t('Request group')}</Label>
+                  <ComboboxInput
+                    id='red-sample-group'
+                    value={sampleGroup}
+                    onValueChange={setSampleGroup}
+                    allowCustomValue
+                    placeholder={t('Unknown group')}
+                    options={[
+                      { value: '', label: t('Unknown group') },
+                      ...[
+                        ...new Set([
+                          ...groups,
+                          ...rows.flatMap((row) => row.groups),
+                        ]),
+                      ].map((group) => ({ value: group, label: group })),
+                    ]}
+                  />
+                </div>
                 <div className='grid gap-1.5'>
                   <Label htmlFor='red-sample-source'>
                     {t('Error comes from')}
@@ -688,7 +790,7 @@ export function RelayErrorDisplaySection({
                   variant='outline'
                   size='sm'
                   disabled={previewMutation.isPending || !sampleMessage.trim()}
-                  onClick={() => previewMutation.mutate(draft)}
+                  onClick={() => previewMutation.mutate(previewRequest)}
                 >
                   {previewMutation.isPending ? t('Checking...') : t('Test')}
                 </Button>
@@ -707,6 +809,13 @@ export function RelayErrorDisplaySection({
                   </p>
                   <p className='text-muted-foreground flex flex-wrap items-center gap-x-1 text-xs'>
                     <span>
+                      {t('Request group')}:{' '}
+                      {sampleGroup.trim() && sampleGroup !== 'auto'
+                        ? sampleGroup
+                        : t('Unknown group')}{' '}
+                      ·
+                    </span>
+                    <span>
                       {t('HTTP status')} {preview.status_code} ·
                     </span>
                     {matchedRule ? (
@@ -714,6 +823,7 @@ export function RelayErrorDisplaySection({
                         variant='link'
                         size='sm'
                         className='h-auto p-0 text-xs'
+                        disabled={!canEdit}
                         onClick={() =>
                           setEditing({ rule: matchedRule, isNew: false })
                         }
@@ -750,13 +860,13 @@ export function RelayErrorDisplaySection({
               {t('Unsaved changes')}
             </span>
           )}
-          <Button disabled={saveMutation.isPending} onClick={save}>
+          <Button disabled={!canEdit || saveMutation.isPending} onClick={save}>
             {saveMutation.isPending ? t('Saving...') : t('Save')}
           </Button>
         </div>
       </div>
 
-      {editing && (
+      {editing && canEdit && (
         // Mounted per edit, so every open starts from the rule it was given.
         <RelayErrorRuleDialog
           key={editing.rule.id}
@@ -767,6 +877,13 @@ export function RelayErrorDisplaySection({
           rule={editing.rule}
           isNew={editing.isNew}
           onConfirm={confirmRule}
+          groups={groups}
+          groupsLoaded={groupsQuery.isSuccess}
+          groupsLoading={groupsQuery.isFetching}
+          groupsError={groupsQuery.isError}
+          onRetryGroups={() => {
+            void groupsQuery.refetch()
+          }}
         />
       )}
     </SettingsSection>
