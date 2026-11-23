@@ -37,6 +37,7 @@ type FilterDef = {
   options: {
     label: string
     value: string
+    translateLabel?: boolean
     icon?: React.ComponentType<{ className?: string }>
     iconNode?: React.ReactNode
     count?: number

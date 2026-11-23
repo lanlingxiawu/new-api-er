@@ -400,7 +400,6 @@ export function ApiInfoSection({ enabled, data }: ApiInfoSectionProps) {
         open={showDialog}
         onOpenChange={setShowDialog}
         title={editingApiInfo ? t('Edit API Shortcut') : t('Add API Shortcut')}
-        description={t('Configure API documentation links for the dashboard')}
         contentHeight='auto'
         bodyClassName='space-y-4'
         footer={

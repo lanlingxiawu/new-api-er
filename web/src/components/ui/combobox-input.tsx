@@ -51,6 +51,9 @@ interface ComboboxInputProps {
   'aria-labelledby'?: string
   'aria-invalid'?: React.AriaAttributes['aria-invalid']
   dropdownFooter?: React.ReactNode
+  onOpenChange?: (open: boolean) => void
+  filterOptions?: boolean
+  onListScroll?: React.UIEventHandler<HTMLUListElement>
 }
 
 export function ComboboxInput({
@@ -71,9 +74,13 @@ export function ComboboxInput({
   'aria-labelledby': ariaLabelledBy,
   'aria-invalid': ariaInvalid,
   dropdownFooter,
+  onOpenChange,
+  filterOptions = true,
+  onListScroll,
 }: ComboboxInputProps) {
   const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
+  React.useEffect(() => onOpenChange?.(open), [open, onOpenChange])
   const [searchValue, setSearchValue] = React.useState('')
   const [searchChanged, setSearchChanged] = React.useState(false)
   const [highlightedIndex, setHighlightedIndex] = React.useState(-1)
@@ -93,6 +100,8 @@ export function ComboboxInput({
     top: number
     left: number
     width: number
+    above: boolean
+    maxHeight: number
   } | null>(null)
   const pointerFocusRef = React.useRef(false)
   const initialValueRef = React.useRef(value)
@@ -109,14 +118,14 @@ export function ComboboxInput({
       : placeholder
 
   const filteredOptions = React.useMemo(() => {
-    if (!searchChanged || !searchValue.trim()) return options
+    if (!filterOptions || !searchChanged || !searchValue.trim()) return options
     const search = searchValue.toLowerCase().trim()
     return options.filter(
       (option) =>
         option.label.toLowerCase().includes(search) ||
         option.value.toLowerCase().includes(search)
     )
-  }, [options, searchValue, searchChanged])
+  }, [options, searchValue, searchChanged, filterOptions])
 
   // Reset highlight when filtered options change
   React.useEffect(() => {
@@ -157,18 +166,24 @@ export function ComboboxInput({
     const measure = () => {
       const rect = input.getBoundingClientRect()
       const dialogRect = dialog?.getBoundingClientRect()
+      // The modal itself can scroll/clip too. Keep the popup within both its
+      // visible bounds and the viewport, flipping upward when space is tight.
+      const topEdge = Math.max(0, dialogRect?.top ?? 0) + 8
+      const bottomEdge =
+        Math.min(window.innerHeight, dialogRect?.bottom ?? window.innerHeight) -
+        8
+      const spaceAbove = Math.max(0, rect.top - topEdge - 4)
+      const spaceBelow = Math.max(0, bottomEdge - rect.bottom - 4)
+      const above = spaceBelow < 200 && spaceAbove > spaceBelow
+      const top = above ? rect.top - 4 : rect.bottom + 4
       setDropdown({
         container,
         // A translated dialog establishes a containing block even for fixed
         // children. Use its local coordinates so the menu stays at the input.
         position: dialog ? 'absolute' : 'fixed',
         top: dialogRect
-          ? rect.bottom -
-            dialogRect.top +
-            container.scrollTop -
-            container.clientTop +
-            4
-          : rect.bottom + 4,
+          ? top - dialogRect.top + container.scrollTop - container.clientTop
+          : top,
         left: dialogRect
           ? rect.left -
             dialogRect.left +
@@ -176,18 +191,26 @@ export function ComboboxInput({
             container.clientLeft
           : rect.left,
         width: rect.width,
+        above,
+        maxHeight: above ? spaceAbove : spaceBelow,
       })
     }
     measure()
     window.addEventListener('scroll', measure, true)
     window.addEventListener('resize', measure)
+    const observer = new ResizeObserver(measure)
+    observer.observe(input)
+    if (dialog) observer.observe(dialog)
     return () => {
       window.removeEventListener('scroll', measure, true)
       window.removeEventListener('resize', measure)
+      observer.disconnect()
     }
   }, [open])
 
   const handleSelect = (selectedValue: string) => {
+    if (options.find((option) => option.value === selectedValue)?.disabled)
+      return
     onValueChange(selectedValue)
     setOpen(false)
     setSearchValue('')
@@ -314,7 +337,12 @@ export function ComboboxInput({
           }
           pointerFocusRef.current = false
         }}
-        onBlur={() => {
+        onBlur={(event) => {
+          if (
+            event.relatedTarget instanceof Node &&
+            dropdownRef.current?.contains(event.relatedTarget)
+          )
+            return
           setOpen(false)
           setSearchValue('')
           onSearchValueChange?.('')
@@ -332,14 +360,37 @@ export function ComboboxInput({
         createPortal(
           <div
             ref={dropdownRef}
+            onBlur={(event) => {
+              if (
+                event.relatedTarget instanceof Node &&
+                (event.currentTarget.contains(event.relatedTarget) ||
+                  containerRef.current?.contains(event.relatedTarget))
+              ) {
+                return
+              }
+              setOpen(false)
+              setSearchValue('')
+              onSearchValueChange?.('')
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return
+              event.preventDefault()
+              event.stopPropagation()
+              inputRef.current?.focus()
+              setOpen(false)
+              setSearchValue('')
+              onSearchValueChange?.('')
+            }}
             style={{
               position: dropdown.position,
               top: dropdown.top,
               left: dropdown.left,
               width: dropdown.width,
+              maxHeight: dropdown.maxHeight,
+              transform: dropdown.above ? 'translateY(-100%)' : undefined,
             }}
             className={cn(
-              'bg-popover text-popover-foreground z-100 rounded-md border shadow-md',
+              'bg-popover text-popover-foreground z-100 flex flex-col overflow-hidden rounded-md border shadow-md',
               popupClassName
             )}
           >
@@ -348,7 +399,8 @@ export function ComboboxInput({
                 ref={listRef}
                 id={listboxId}
                 role='listbox'
-                className='max-h-[200px] overflow-y-auto p-1'
+                onScroll={onListScroll}
+                className='max-h-[200px] min-h-0 overflow-y-auto p-1'
               >
                 {filteredOptions.map((option, index) => (
                   <li
@@ -356,9 +408,11 @@ export function ComboboxInput({
                     id={`${listboxId}-option-${index}`}
                     role='option'
                     aria-selected={value === option.value}
+                    aria-disabled={option.disabled || undefined}
                     data-highlighted={index === highlightedIndex}
                     className={cn(
                       'relative flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm select-none',
+                      option.disabled && 'cursor-not-allowed opacity-50',
                       index === highlightedIndex &&
                         'bg-accent text-accent-foreground',
                       value === option.value && 'font-medium'
@@ -376,12 +430,19 @@ export function ComboboxInput({
                       )}
                     />
                     {option.icon && <span aria-hidden>{option.icon}</span>}
-                    <span className='truncate'>{option.label}</span>
+                    <span className='min-w-0'>
+                      <span className='block truncate'>{option.label}</span>
+                      {option.description && (
+                        <span className='text-muted-foreground block truncate text-xs'>
+                          {option.description}
+                        </span>
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>
             ) : (
-              <div className='px-2 py-6 text-center text-sm'>
+              <div className='min-h-0 overflow-y-auto px-2 py-6 text-center text-sm'>
                 {t(emptyText)}
                 {allowCustomValue && searchValue.trim() && (
                   <div className='text-muted-foreground mt-1 text-xs'>
@@ -392,7 +453,7 @@ export function ComboboxInput({
                 )}
               </div>
             )}
-            {dropdownFooter}
+            {dropdownFooter && <div className='shrink-0'>{dropdownFooter}</div>}
           </div>,
           dropdown.container
         )}

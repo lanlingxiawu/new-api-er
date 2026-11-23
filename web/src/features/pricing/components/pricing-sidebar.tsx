@@ -263,9 +263,6 @@ export const PricingSidebar = memo(function PricingSidebar(
       <div className='mb-2.5 flex items-center justify-between gap-2'>
         <div>
           <h2 className='text-foreground text-sm font-bold'>{t('Filter')}</h2>
-          <p className='text-muted-foreground mt-1 text-xs'>
-            {t('Refine models by provider, group, type, and tags.')}
-          </p>
         </div>
         <Button
           type='button'

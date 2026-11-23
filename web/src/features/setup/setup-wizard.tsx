@@ -29,7 +29,6 @@ import { LoadingState } from '@/components/loading-state'
 import {
   Card,
   CardContent,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
@@ -307,11 +306,6 @@ export function SetupWizard() {
               {t('Initialize')} {systemName}
             </h1>
           )}
-          <p className='text-muted-foreground text-center text-sm sm:text-base'>
-            {t(
-              'Follow the guided steps to prepare your workspace before the first login.'
-            )}
-          </p>
         </div>
 
         <Card className='shadow-lg'>
@@ -319,9 +313,6 @@ export function SetupWizard() {
             <CardTitle className='text-xl font-semibold'>
               {t('System setup wizard')}
             </CardTitle>
-            <CardDescription>
-              {t('Complete these steps to finish the initial installation.')}
-            </CardDescription>
           </CardHeader>
 
           <CardContent className='space-y-6'>

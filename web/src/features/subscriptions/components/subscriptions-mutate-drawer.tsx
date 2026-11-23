@@ -56,7 +56,6 @@ import {
   Sheet,
   SheetClose,
   SheetContent,
-  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -290,13 +289,6 @@ export function SubscriptionsMutateDrawer({
           <SheetTitle>
             {isEdit ? t('Update plan info') : t('Create new subscription plan')}
           </SheetTitle>
-          <SheetDescription>
-            {isEdit
-              ? t('Modify existing subscription plan configuration')
-              : t(
-                  'Fill in the following info to create a new subscription plan'
-                )}
-          </SheetDescription>
         </SheetHeader>
         <Form {...form}>
           <form

@@ -16,23 +16,25 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Check, ChevronDown, Info } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
 import { useId } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
-import { Toggle } from '@/components/ui/toggle'
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+} from '@/components/ui/field'
+import { Switch } from '@/components/ui/switch'
 import type {
   AdminPermissionMatrix,
   PermissionResourceDef,
@@ -57,7 +59,6 @@ type PermissionMatrixProps = {
 )
 
 type PermissionResourceRowProps = {
-  idPrefix: string
   resource: PermissionResourceDef
   value: AdminPermissionMatrix
   onChange: (value: AdminPermissionMatrix) => void
@@ -65,19 +66,15 @@ type PermissionResourceRowProps = {
   className: string
 }
 
-// PermissionMatrix renders one toggle per resource action of a permission
-// catalog. Each resource lists its action descriptions in a tooltip, and the
-// toggles announce them as their descriptions.
+// PermissionMatrix keeps permission selection and descriptions consistent with administrator editing.
 export function PermissionMatrix(props: PermissionMatrixProps) {
   const { t } = useTranslation()
-  const idPrefix = useId()
   if (!('groups' in props)) {
     return (
       <div className='divide-y rounded-md border'>
         {props.resources.map((resource) => (
           <PermissionResourceRow
             key={resource.resource}
-            idPrefix={idPrefix}
             resource={resource}
             value={props.value}
             onChange={props.onChange}
@@ -142,7 +139,6 @@ export function PermissionMatrix(props: PermissionMatrixProps) {
                   {group.resources.map((resource) => (
                     <PermissionResourceRow
                       key={resource.resource}
-                      idPrefix={idPrefix}
                       resource={resource}
                       value={props.value}
                       onChange={props.onChange}
@@ -160,78 +156,74 @@ export function PermissionMatrix(props: PermissionMatrixProps) {
   )
 }
 
+export function PermissionOption(props: {
+  label: string
+  description: string
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+  disabled?: boolean
+  control?: 'checkbox' | 'switch'
+}) {
+  const id = useId()
+  const Control = props.control === 'switch' ? Switch : Checkbox
+  return (
+    <Field
+      orientation='horizontal'
+      data-disabled={props.disabled}
+      className='min-w-0 gap-3'
+    >
+      <Control
+        id={id}
+        checked={props.checked}
+        disabled={props.disabled}
+        onCheckedChange={props.onCheckedChange}
+        aria-describedby={`${id}-description`}
+      />
+      <FieldContent className='min-w-0'>
+        <FieldLabel htmlFor={id}>{props.label}</FieldLabel>
+        <FieldDescription
+          id={`${id}-description`}
+          className='text-xs leading-relaxed'
+        >
+          {props.description}
+        </FieldDescription>
+      </FieldContent>
+    </Field>
+  )
+}
+
 function PermissionResourceRow(props: PermissionResourceRowProps) {
   const { t } = useTranslation()
   const resource = props.resource
-  const label = t(resource.label_key)
   return (
     <div
       role='group'
-      aria-label={label}
-      className={cn('flex items-start gap-3 py-2', props.className)}
+      aria-label={t(resource.label_key)}
+      className={cn(
+        'grid min-w-0 gap-3 py-4 sm:grid-cols-[8rem_minmax(0,1fr)]',
+        props.className
+      )}
     >
-      <div className='flex w-32 shrink-0 items-center gap-1.5 pt-1 text-sm'>
-        {label}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type='button'
-                className='text-muted-foreground hover:text-foreground inline-flex'
-                aria-label={t('Details')}
-              />
+      <span className='text-sm font-medium'>{t(resource.label_key)}</span>
+      <div className='grid min-w-0 gap-4'>
+        {resource.actions.map((option) => (
+          <PermissionOption
+            key={option.action}
+            label={t(option.label_key)}
+            description={t(option.description_key)}
+            checked={props.value[resource.resource]?.[option.action] === true}
+            disabled={props.disabled}
+            onCheckedChange={(checked) =>
+              props.onChange({
+                ...props.value,
+                [resource.resource]: {
+                  ...props.value[resource.resource],
+                  [option.action]: checked,
+                },
+              })
             }
-          >
-            <Info className='size-3.5' aria-hidden='true' />
-          </TooltipTrigger>
-          <TooltipContent className='block max-w-sm py-2 text-left'>
-            <dl className='space-y-1.5'>
-              {resource.actions.map((option) => (
-                <div key={option.action}>
-                  <dt className='font-medium'>{t(option.label_key)}</dt>
-                  <dd className='opacity-80'>{t(option.description_key)}</dd>
-                </div>
-              ))}
-            </dl>
-          </TooltipContent>
-        </Tooltip>
-      </div>
-      <div className='flex min-w-0 flex-1 flex-wrap gap-1.5'>
-        {resource.actions.map((option) => {
-          const pressed =
-            props.value[resource.resource]?.[option.action] === true
-          const descriptionId = `${props.idPrefix}-${resource.resource}-${option.action}`
-          return (
-            <Toggle
-              key={option.action}
-              variant='outline'
-              size='sm'
-              pressed={pressed}
-              disabled={props.disabled}
-              aria-describedby={descriptionId}
-              onPressedChange={(next) => {
-                props.onChange({
-                  ...props.value,
-                  [resource.resource]: {
-                    ...props.value[resource.resource],
-                    [option.action]: next,
-                  },
-                })
-              }}
-              className={cn(
-                'h-auto min-h-7 max-w-full font-normal whitespace-normal',
-                pressed &&
-                  'border-primary bg-primary/10! text-primary hover:bg-primary/15'
-              )}
-            >
-              {pressed && <Check aria-hidden='true' />}
-              {t(option.label_key)}
-              <span id={descriptionId} hidden>
-                {t(option.description_key)}
-              </span>
-            </Toggle>
-          )
-        })}
+          />
+        ))}
       </div>
     </div>
   )

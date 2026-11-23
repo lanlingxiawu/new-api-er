@@ -73,6 +73,7 @@ export function ContentSettings() {
       getSectionMeta={getContentSectionMeta}
       loadingMessage='Loading content settings...'
       resolveSettings={resolveContentSettings}
+      interactiveReadOnlySections={['chat']}
     />
   )
 }

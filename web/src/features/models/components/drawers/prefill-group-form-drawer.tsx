@@ -57,7 +57,6 @@ import {
   Sheet,
   SheetClose,
   SheetContent,
-  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -203,11 +202,6 @@ export function PrefillGroupFormDrawer({
           <SheetTitle>
             {isEdit ? t('Edit Prefill Group') : t('Create Prefill Group')}
           </SheetTitle>
-          <SheetDescription>
-            {isEdit
-              ? t('Update the reusable bundle below.')
-              : t('Capture a reusable bundle of models, tags, or endpoints.')}
-          </SheetDescription>
         </SheetHeader>
 
         <Form {...form}>
@@ -219,11 +213,6 @@ export function PrefillGroupFormDrawer({
             <SideDrawerSection>
               <div className='flex flex-col gap-1'>
                 <h3 className='text-sm font-semibold'>{t('Group details')}</h3>
-                <p className='text-muted-foreground text-sm'>
-                  {t(
-                    'Give the group a recognizable name and optional description.'
-                  )}
-                </p>
               </div>
 
               <FormField
@@ -238,9 +227,6 @@ export function PrefillGroupFormDrawer({
                         {...field}
                       />
                     </FormControl>
-                    <FormDescription>
-                      {t('Give this group a recognizable name.')}
-                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -261,11 +247,6 @@ export function PrefillGroupFormDrawer({
                         {...field}
                       />
                     </FormControl>
-                    <FormDescription>
-                      {t(
-                        'Make it easier for teammates to pick the right group.'
-                      )}
-                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -275,9 +256,6 @@ export function PrefillGroupFormDrawer({
             <SideDrawerSection>
               <div className='flex flex-col gap-1'>
                 <h3 className='text-sm font-semibold'>{t('Configuration')}</h3>
-                <p className='text-muted-foreground text-sm'>
-                  {t('Choose the bundle type and define the items inside it.')}
-                </p>
               </div>
 
               <FormField
@@ -288,24 +266,22 @@ export function PrefillGroupFormDrawer({
                     <FormLabel>{t('Group Type')}</FormLabel>
                     <Select
                       items={PREFILL_GROUP_TYPES.map((type) => {
-                          const text = getPrefillGroupTypeText(type.value, t)
-                          return {
-                            value: type.value,
-                            label: (
-                              <div className='flex flex-col text-left'>
-                                <span className='font-medium'>
-                                  {text.label}
-                                </span>
-                                <span
-                                  data-prefill-description
-                                  className='text-muted-foreground text-xs'
-                                >
-                                  {text.description}
-                                </span>
-                              </div>
-                            ),
-                          }
-                        })}
+                        const text = getPrefillGroupTypeText(type.value, t)
+                        return {
+                          value: type.value,
+                          label: (
+                            <div className='flex flex-col text-left'>
+                              <span className='font-medium'>{text.label}</span>
+                              <span
+                                data-prefill-description
+                                className='text-muted-foreground text-xs'
+                              >
+                                {text.description}
+                              </span>
+                            </div>
+                          ),
+                        }
+                      })}
                       value={field.value}
                       onValueChange={(value) =>
                         value !== null &&
@@ -340,9 +316,6 @@ export function PrefillGroupFormDrawer({
                         </SelectGroup>
                       </SelectContent>
                     </Select>
-                    <FormDescription>
-                      {t('Determines how this group is applied elsewhere.')}
-                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}

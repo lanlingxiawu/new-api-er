@@ -18,8 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useTranslation } from 'react-i18next'
 
-import { Button } from '@/components/ui/button'
-
 export function MaintenanceError() {
   const { t } = useTranslation()
   return (
@@ -33,9 +31,6 @@ export function MaintenanceError() {
           {t('The site is not available at the moment.')} <br />
           {t("We'll be back online shortly.")}
         </p>
-        <div className='mt-6 flex gap-4'>
-          <Button variant='outline'>{t('Learn more')}</Button>
-        </div>
       </div>
     </div>
   )

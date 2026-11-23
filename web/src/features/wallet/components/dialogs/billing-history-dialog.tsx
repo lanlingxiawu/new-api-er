@@ -65,7 +65,6 @@ import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -237,9 +236,6 @@ export function BillingHistoryDialog({
         <DialogContent className='flex max-h-[calc(100dvh-2rem)] flex-col max-sm:h-dvh max-sm:w-screen max-sm:max-w-none max-sm:rounded-none max-sm:p-4 sm:h-[min(820px,calc(100dvh-2rem))] sm:w-[92vw] sm:max-w-5xl'>
           <DialogHeader>
             <DialogTitle>{t('Billing History')}</DialogTitle>
-            <DialogDescription>
-              {t('View your topup transaction records and payment history')}
-            </DialogDescription>
           </DialogHeader>
 
           <div className='flex min-h-0 flex-1 flex-col gap-3 sm:gap-4'>

@@ -28,6 +28,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 
 type ConfirmDialogProps = {
@@ -61,7 +62,12 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     ...actions
   } = props
   return (
-    <AlertDialog {...actions}>
+    <AlertDialog
+      {...actions}
+      onOpenChange={(open) => {
+        if (!isLoading) actions.onOpenChange(open)
+      }}
+    >
       <AlertDialogContent className={cn(className)}>
         <AlertDialogHeader className='text-start'>
           <AlertDialogTitle>{title}</AlertDialogTitle>
@@ -75,10 +81,13 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
             {cancelBtnText ?? t('Cancel')}
           </AlertDialogCancel>
           <Button
+            type='button'
             variant={destructive ? 'destructive' : 'default'}
             onClick={handleConfirm}
             disabled={disabled || isLoading}
+            aria-busy={isLoading}
           >
+            {isLoading && <Spinner aria-hidden='true' />}
             {confirmText ?? t('Continue')}
           </Button>
         </AlertDialogFooter>

@@ -1036,11 +1036,6 @@ export const ModelPricingEditorPanel = forwardRef<
                                   'This is a task model billed by usage (e.g. seconds, resolution). Prices entered here act as a per-call base rate, not per-token prices.'
                                 )}
                               </p>
-                              <p>
-                                {t(
-                                  'Tip: after configuring one model, select others in the table and use bulk copy.'
-                                )}
-                              </p>
                               <Button
                                 type='button'
                                 variant='outline'

@@ -122,9 +122,6 @@ export function SystemTaskHistory(props: { activeRefreshAt: number }) {
     <div className='space-y-3'>
       <div>
         <h4 className='text-sm font-medium'>{t('Task History')}</h4>
-        <p className='text-muted-foreground mt-0.5 text-xs'>
-          {t('Recently completed or failed system task runs.')}
-        </p>
       </div>
       <DataTableToolbar
         table={table}

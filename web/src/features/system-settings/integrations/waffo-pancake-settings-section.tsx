@@ -21,6 +21,7 @@ import type { SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
@@ -79,6 +80,8 @@ export function WaffoPancakeSettingsSection({
   const [phase, setPhase] = React.useState<'idle' | 'verifying'>('idle')
   const [catalog, setCatalog] = React.useState<CatalogStore[]>([])
   const [creatingPair, setCreatingPair] = React.useState(false)
+  const [confirmEmptyReturn, setConfirmEmptyReturn] = React.useState(false)
+  const creatingPairRef = React.useRef(false)
   const chosenStoreID = selectedBinding.storeID
   const chosenProductID = selectedBinding.productID
   const storeID = savedBinding.storeID
@@ -268,7 +271,8 @@ export function WaffoPancakeSettingsSection({
 
   // The minted product's SuccessURL is pinned to the current Return URL
   // field, so we prompt before creating when that field is empty.
-  const handleCreatePair = async () => {
+  const handleCreatePair = async (allowEmptyReturn = false) => {
+    if (creatingPairRef.current) return
     if (!credsReady) {
       toast.error(
         t('Fill in both Merchant ID and API Private Key before creating.')
@@ -277,17 +281,11 @@ export function WaffoPancakeSettingsSection({
     }
     const { merchantID, privateKey } = readCreds()
     const trimmedReturn = removeTrailingSlash(returnURL.trim())
-    if (!trimmedReturn) {
-      if (
-        !window.confirm(
-          t(
-            'Payment return URL is empty. Create the product without a SuccessURL redirect?'
-          )
-        )
-      ) {
-        return
-      }
+    if (!trimmedReturn && !allowEmptyReturn) {
+      setConfirmEmptyReturn(true)
+      return
     }
+    creatingPairRef.current = true
     setCreatingPair(true)
     try {
       const body = await createWaffoPancakePair({
@@ -339,7 +337,9 @@ export function WaffoPancakeSettingsSection({
         `${t('Creation failed')}: ${err instanceof Error ? err.message : String(err)}`
       )
     } finally {
+      creatingPairRef.current = false
       setCreatingPair(false)
+      setConfirmEmptyReturn(false)
     }
   }
 
@@ -378,13 +378,19 @@ export function WaffoPancakeSettingsSection({
 
   return (
     <div className='space-y-4 pt-4'>
+      <ConfirmDialog
+        open={confirmEmptyReturn}
+        onOpenChange={setConfirmEmptyReturn}
+        title={t('Create store and product')}
+        desc={t(
+          'Payment return URL is empty. Create the product without a SuccessURL redirect?'
+        )}
+        confirmText={t('Create')}
+        isLoading={creatingPair}
+        handleConfirm={() => void handleCreatePair(true)}
+      />
       <div>
         <h3 className='text-lg font-medium'>{t('Waffo Pancake MoR')}</h3>
-        <p className='text-muted-foreground text-sm'>
-          {t(
-            'Start collecting payments globally without registering a company. Built for indie developers, OPC sole proprietorships, and startups. Waffo Pancake acts as your Merchant of Record, taking on the compliance burden of global payment collection — consumption tax, invoicing, subscription management, refunds, and chargebacks. Solo developers can launch fast and stay focused on product instead of compliance. Onboard in minutes — one prompt to a full integration.'
-          )}
-        </p>
       </div>
       <div className='grid min-w-0 gap-x-5 gap-y-4 lg:grid-cols-2'>
         {/* Blue box — webhook configuration only. */}
@@ -515,7 +521,7 @@ export function WaffoPancakeSettingsSection({
               <Button
                 type='button'
                 variant='outline'
-                onClick={handleCreatePair}
+                onClick={() => void handleCreatePair()}
                 disabled={creatingPair || verifying || !credsReady}
                 className='shrink-0'
               >

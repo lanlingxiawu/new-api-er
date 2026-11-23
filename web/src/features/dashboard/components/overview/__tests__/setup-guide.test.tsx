@@ -189,8 +189,8 @@ describe('overview setup guide', () => {
     )
     expect(screen.getByText('Setup progress: 1/3')).toBeVisible()
     expect(
-      screen.getByText('Setup guide is collapsed. Expand it anytime.')
-    ).toBeVisible()
+      screen.getByRole('button', { name: 'Show setup guide' })
+    ).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByRole('button', { name: 'API Keys' })).toBeVisible()
     expect(
       screen.queryByRole('button', { name: 'Setup guide' })

@@ -17,10 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useTranslation } from 'react-i18next'
+
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+
 import { SettingsSwitchField } from '../components/settings-form-layout'
 
 export interface InfiniSettingsValues {
@@ -89,9 +91,6 @@ export function InfiniSettingsSection({ values, onValueChange }: Props) {
     <div className='space-y-4 pt-4'>
       <div>
         <h3 className='text-lg font-medium'>{t('Infini Payment Gateway')}</h3>
-        <p className='text-muted-foreground text-sm'>
-          {t('Configuration for Infini merchant API payment integration')}
-        </p>
       </div>
       <Alert>
         <AlertDescription className='text-xs'>
@@ -127,7 +126,9 @@ export function InfiniSettingsSection({ values, onValueChange }: Props) {
           />
         </div>
         <div className='grid gap-1.5'>
-          <Label htmlFor='infini-v2-private-key'>{t('Ed25519 private key (PKCS#8 PEM)')}</Label>
+          <Label htmlFor='infini-v2-private-key'>
+            {t('Ed25519 private key (PKCS#8 PEM)')}
+          </Label>
           <Textarea
             id='infini-v2-private-key'
             rows={5}
@@ -135,7 +136,9 @@ export function InfiniSettingsSection({ values, onValueChange }: Props) {
             spellCheck={false}
             className='font-mono text-xs'
             value={values.InfiniV2PrivateKey}
-            onChange={(e) => onValueChange('InfiniV2PrivateKey', e.target.value)}
+            onChange={(e) =>
+              onValueChange('InfiniV2PrivateKey', e.target.value)
+            }
           />
         </div>
       </div>
@@ -145,9 +148,7 @@ export function InfiniSettingsSection({ values, onValueChange }: Props) {
         <Input
           type='password'
           value={values.InfiniWebhookSecret}
-          onChange={(e) =>
-            onValueChange('InfiniWebhookSecret', e.target.value)
-          }
+          onChange={(e) => onValueChange('InfiniWebhookSecret', e.target.value)}
         />
       </div>
 
@@ -160,11 +161,15 @@ export function InfiniSettingsSection({ values, onValueChange }: Props) {
             onChange={(e) => onValueChange('InfiniCurrency', e.target.value)}
           />
           <p className='text-muted-foreground text-xs'>
-            {t('Only USD is supported. Top-ups in other currencies are rejected at checkout.')}
+            {t(
+              'Only USD is supported. Top-ups in other currencies are rejected at checkout.'
+            )}
           </p>
           {currencyUnsupported && (
             <p className='text-destructive text-xs'>
-              {t('This currency is not supported and cannot be saved. Change it to USD.')}
+              {t(
+                'This currency is not supported and cannot be saved. Change it to USD.'
+              )}
             </p>
           )}
         </div>
@@ -261,15 +266,34 @@ export function InfiniSettingsSection({ values, onValueChange }: Props) {
         />
         {currenciesUnsupported && (
           <p className='text-destructive text-xs'>
-            {t('This currency is not supported and cannot be saved. Change it to USD.')}
+            {t(
+              'This currency is not supported and cannot be saved. Change it to USD.'
+            )}
           </p>
         )}
         <div className='text-muted-foreground space-y-1 text-xs'>
-          <p>{t('JSON array. Each item configures one selectable currency for users. Overrides single currency fields above.')}</p>
+          <p>
+            {t(
+              'JSON array. Each item configures one selectable currency for users. Overrides single currency fields above.'
+            )}
+          </p>
           <ul className='ml-3 list-disc space-y-0.5'>
-            <li><code className='text-xs'>currency</code> — {t('Settlement currency code. Only USD is supported; entries in any other currency are rejected on save and at checkout.')}</li>
-            <li><code className='text-xs'>unit_price</code> — {t('Price per quota unit in USD. Example: if 1 unit costs $1 USD, set 1.0')}</li>
-            <li><code className='text-xs'>min_topup</code> — {t('Minimum quota units users must buy in one order')}</li>
+            <li>
+              <code className='text-xs'>currency</code> —{' '}
+              {t(
+                'Settlement currency code. Only USD is supported; entries in any other currency are rejected on save and at checkout.'
+              )}
+            </li>
+            <li>
+              <code className='text-xs'>unit_price</code> —{' '}
+              {t(
+                'Price per quota unit in USD. Example: if 1 unit costs $1 USD, set 1.0'
+              )}
+            </li>
+            <li>
+              <code className='text-xs'>min_topup</code> —{' '}
+              {t('Minimum quota units users must buy in one order')}
+            </li>
           </ul>
         </div>
       </div>
@@ -283,10 +307,11 @@ export function InfiniSettingsSection({ values, onValueChange }: Props) {
           className='font-mono text-xs'
         />
         <p className='text-muted-foreground text-xs'>
-          {t('Restrict checkout payment methods. 1=Crypto, 2=Card, 3=Binance Pay, 5=Apple Pay, 6=Google Pay. Leave empty for merchant default.')}
+          {t(
+            'Restrict checkout payment methods. 1=Crypto, 2=Card, 3=Binance Pay, 5=Apple Pay, 6=Google Pay. Leave empty for merchant default.'
+          )}
         </p>
       </div>
-
     </div>
   )
 }

@@ -47,7 +47,6 @@ export function FAQPanel() {
           {t('FAQ')}
         </span>
       }
-      description={t('Answers for common access and billing questions')}
       loading={loading}
       empty={!list.length}
       emptyMessage={t('No FAQ entries available')}

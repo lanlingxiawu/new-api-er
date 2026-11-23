@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Database, HardDrive, Server } from 'lucide-react'
+import { Database, HardDrive } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { StatusBadge } from '@/components/status-badge'
@@ -32,26 +32,19 @@ const DATABASE_META: Record<
   string,
   {
     label: string
-    descriptionKey: string
     variant: 'info' | 'success' | 'warning'
   }
 > = {
   sqlite: {
     label: 'SQLite',
-    descriptionKey:
-      'SQLite stores all data in a single file. Make sure that file is persisted when running in containers.',
     variant: 'warning',
   },
   mysql: {
     label: 'MySQL',
-    descriptionKey:
-      'MySQL is a production-ready relational database. Keep your credentials secure.',
     variant: 'success',
   },
   postgres: {
     label: 'PostgreSQL',
-    descriptionKey:
-      'PostgreSQL offers advanced reliability and data integrity for production workloads.',
     variant: 'success',
   },
 }
@@ -62,7 +55,6 @@ function resolveDatabaseMeta(type?: string) {
   return (
     DATABASE_META[normalized] ?? {
       label: type,
-      descriptionKey: 'Custom database driver detected.',
       variant: 'info' as const,
     }
   )
@@ -86,15 +78,6 @@ export function DatabaseStep({ status }: DatabaseStepProps) {
         <div className='space-y-1'>
           <p className='text-muted-foreground text-sm font-medium'>
             {t('Detected database')}
-          </p>
-          <p className='text-foreground text-base font-semibold'>
-            {meta?.label ?? t('Unknown')}
-          </p>
-          <p className='text-muted-foreground text-sm'>
-            {t(
-              meta?.descriptionKey ??
-                'The setup wizard will use this database during initialization.'
-            )}
           </p>
         </div>
         <StatusBadge
@@ -129,34 +112,6 @@ export function DatabaseStep({ status }: DatabaseStepProps) {
                   'Data is stored locally on this device. Use system backups to keep a safe copy.'
                 )}
               </p>
-            )}
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {status?.database_type === 'mysql' && (
-        <Alert className='border-emerald-200 bg-emerald-50 dark:border-emerald-900/60 dark:bg-emerald-950/40'>
-          <AlertTitle className='flex items-center gap-2'>
-            <Server className='size-4 text-emerald-500' />
-            {t('MySQL detected')}
-          </AlertTitle>
-          <AlertDescription>
-            {t(
-              'MySQL is production ready. Ensure automated backups and a dedicated user with the minimal required privileges are configured.'
-            )}
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {status?.database_type === 'postgres' && (
-        <Alert className='border-sky-200 bg-sky-50 dark:border-sky-900/60 dark:bg-sky-950/40'>
-          <AlertTitle className='flex items-center gap-2'>
-            <Server className='size-4 text-sky-500' />
-            {t('PostgreSQL detected')}
-          </AlertTitle>
-          <AlertDescription>
-            {t(
-              'PostgreSQL offers strong reliability guarantees. Double check your maintenance window and retention policies before going live.'
             )}
           </AlertDescription>
         </Alert>

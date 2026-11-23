@@ -202,11 +202,7 @@ export function ModelDetailsPerformance(props: { model: PricingModel }) {
       </div>
 
       <section>
-        <SectionHeader
-          icon={HeartPulse}
-          title={t('Per-group performance')}
-          description={t('Average latency, TTFT, TPS, and success rate')}
-        />
+        <SectionHeader icon={HeartPulse} title={t('Per-group performance')} />
         <StaticDataTable
           className='rounded-lg'
           tableClassName='text-sm'

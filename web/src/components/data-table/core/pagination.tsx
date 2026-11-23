@@ -34,11 +34,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { toIntlLocale } from '@/i18n/languages'
+import { formatNumber } from '@/lib/format'
 import { cn, getPageNumbers } from '@/lib/utils'
 
 type DataTablePaginationProps<TData> = {
   table: Table<TData>
   compact?: boolean
+  /** Cursor APIs provide the next-page boundary, without a total or random access. */
+  cursor?: {
+    hasNextPage: boolean
+    isFetching?: boolean
+    allowPageSizeChange?: boolean
+    numberedPages?: boolean
+  }
 }
 
 const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100] as const
@@ -50,14 +59,24 @@ const PAGE_SIZE_SELECT_ITEMS = PAGE_SIZE_OPTIONS.map((pageSize) => ({
 export function DataTablePagination<TData>({
   table,
   compact = false,
+  cursor,
 }: DataTablePaginationProps<TData>) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n?.resolvedLanguage || i18n?.language)
   const pagination = table.getState().pagination
   const currentPage = pagination.pageIndex + 1
   const pageSize = pagination.pageSize
   const totalPages = table.getPageCount()
   const totalRows = table.getRowCount()
-  const pageNumbers = getPageNumbers(currentPage, totalPages)
+  const canPreviousPage = table.getCanPreviousPage() && !cursor?.isFetching
+  const canNextPage =
+    (cursor ? cursor.hasNextPage : table.getCanNextPage()) &&
+    !cursor?.isFetching
+  const rowCountLabel = cursor ? t('Rows on this page:') : t('Total:')
+  const pageNumbers = getPageNumbers(
+    currentPage,
+    cursor ? currentPage + Number(cursor.hasNextPage) : totalPages
+  )
   const pageItems = pageNumbers.map((page, index) => ({
     page,
     key: page === '...' ? `gap-after-${pageNumbers[index - 1]}` : String(page),
@@ -70,7 +89,7 @@ export function DataTablePagination<TData>({
         className='flex w-full min-w-0 flex-wrap items-center justify-between gap-2 text-sm'
       >
         <span className='text-muted-foreground min-w-0 [overflow-wrap:anywhere]'>
-          {t('Total:')} {totalRows.toLocaleString()}
+          {rowCountLabel} {formatNumber(totalRows, locale)}
         </span>
         <div className='flex items-center gap-2'>
           <Button
@@ -79,12 +98,14 @@ export function DataTablePagination<TData>({
             className='size-11'
             aria-label={t('Go to previous page')}
             onClick={() => table.previousPage()}
-            disabled={!table.getCanPreviousPage()}
+            disabled={!canPreviousPage}
           >
             <ChevronLeftIcon />
           </Button>
           <span className='tabular-nums' aria-live='polite'>
-            {currentPage} / {Math.max(1, totalPages)}
+            {cursor
+              ? t('Page {{page}}', { page: currentPage })
+              : `${currentPage} / ${Math.max(1, totalPages)}`}
           </span>
           <Button
             variant='outline'
@@ -92,7 +113,7 @@ export function DataTablePagination<TData>({
             className='size-11'
             aria-label={t('Go to next page')}
             onClick={() => table.nextPage()}
-            disabled={!table.getCanNextPage()}
+            disabled={!canNextPage}
           >
             <ChevronRightIcon />
           </Button>
@@ -102,44 +123,67 @@ export function DataTablePagination<TData>({
   }
 
   return (
-    <div
+    <nav
+      aria-label={t('Page')}
       className={cn(
         '@container/pagination flex min-w-0 items-center justify-end overflow-clip'
       )}
       style={{ overflowClipMargin: 1 }}
     >
-      <div className='flex min-w-0 shrink-0 items-center gap-2 @xl/pagination:gap-3'>
+      <div
+        className={cn(
+          'flex min-w-0 items-center gap-2 @xl/pagination:gap-3',
+          cursor ? 'flex-wrap justify-end' : 'shrink-0'
+        )}
+      >
         <div className='flex shrink-0 items-baseline gap-1.5 text-xs font-medium whitespace-nowrap sm:text-sm'>
-          <span className='text-muted-foreground/80'>{t('Total:')}</span>
+          <span className='text-muted-foreground/80'>{rowCountLabel}</span>
           <span className='text-foreground tabular-nums'>
-            {totalRows.toLocaleString()}
+            {formatNumber(totalRows, locale)}
           </span>
         </div>
 
         <div className='flex shrink-0 items-center gap-1.5 @lg/pagination:gap-2'>
-          <p className='text-muted-foreground/80 hidden text-sm font-medium whitespace-nowrap @2xl/pagination:block'>
+          <p
+            className={cn(
+              'text-muted-foreground/80 font-medium whitespace-nowrap',
+              cursor
+                ? 'text-xs sm:text-sm'
+                : 'hidden text-sm @2xl/pagination:block'
+            )}
+          >
             {t('Rows per page')}
           </p>
-          <Select
-            items={PAGE_SIZE_SELECT_ITEMS}
-            value={`${pageSize}`}
-            onValueChange={(value) => {
-              table.setPageSize(Number(value))
-            }}
-          >
-            <SelectTrigger className='text-foreground h-8 w-[64px] font-medium tabular-nums sm:w-[70px]'>
-              <SelectValue placeholder={pageSize} />
-            </SelectTrigger>
-            <SelectContent side='top' alignItemWithTrigger={false}>
-              <SelectGroup>
-                {PAGE_SIZE_OPTIONS.map((pageSize) => (
-                  <SelectItem key={pageSize} value={`${pageSize}`}>
-                    {pageSize}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          {cursor && !cursor.allowPageSizeChange ? (
+            <span className='text-foreground text-xs font-medium tabular-nums sm:text-sm'>
+              {formatNumber(pageSize, locale)}
+            </span>
+          ) : (
+            <Select
+              items={PAGE_SIZE_SELECT_ITEMS}
+              value={`${pageSize}`}
+              disabled={cursor?.isFetching}
+              onValueChange={(value) => {
+                table.setPageSize(Number(value))
+              }}
+            >
+              <SelectTrigger
+                aria-label={t('Rows per page')}
+                className='text-foreground h-8 w-[64px] font-medium tabular-nums sm:w-[70px]'
+              >
+                <SelectValue placeholder={pageSize} />
+              </SelectTrigger>
+              <SelectContent side='top' alignItemWithTrigger={false}>
+                <SelectGroup>
+                  {PAGE_SIZE_OPTIONS.map((pageSize) => (
+                    <SelectItem key={pageSize} value={`${pageSize}`}>
+                      {pageSize}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          )}
         </div>
 
         <div className='flex min-w-0 shrink-0 items-center gap-1 @lg/pagination:gap-1.5 @xl/pagination:gap-2'>
@@ -147,7 +191,7 @@ export function DataTablePagination<TData>({
             variant='outline'
             className='text-muted-foreground hover:text-foreground disabled:text-muted-foreground/50 size-8 p-0 @max-lg/pagination:hidden'
             onClick={() => table.setPageIndex(0)}
-            disabled={!table.getCanPreviousPage()}
+            disabled={!canPreviousPage}
           >
             <span className='sr-only'>{t('Go to first page')}</span>
             <DoubleArrowLeftIcon className='h-4 w-4' />
@@ -156,58 +200,75 @@ export function DataTablePagination<TData>({
             variant='outline'
             className='text-muted-foreground hover:text-foreground disabled:text-muted-foreground/50 size-8 p-0'
             onClick={() => table.previousPage()}
-            disabled={!table.getCanPreviousPage()}
+            disabled={!canPreviousPage}
           >
             <span className='sr-only'>{t('Go to previous page')}</span>
             <ChevronLeftIcon className='h-4 w-4' />
           </Button>
 
-          {pageItems.map(({ page: pageNumber, key }) => (
-            <div key={key} className='flex items-center'>
-              {pageNumber === '...' ? (
-                <span className='text-muted-foreground/60 px-0.5 text-sm @lg/pagination:px-1'>
-                  ...
-                </span>
-              ) : (
-                <Button
-                  variant={currentPage === pageNumber ? 'default' : 'outline'}
-                  className={cn(
-                    'h-8 min-w-8 px-2 tabular-nums',
-                    currentPage === pageNumber
-                      ? 'font-semibold'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                  onClick={() => table.setPageIndex((pageNumber as number) - 1)}
-                >
-                  <span className='sr-only'>
-                    {t('Go to page {{page}}', { page: pageNumber })}
+          {cursor && !cursor.numberedPages ? (
+            <span
+              className='px-2 text-xs font-medium whitespace-nowrap tabular-nums sm:text-sm'
+              aria-live='polite'
+            >
+              {t('Page {{page}}', { page: currentPage })}
+            </span>
+          ) : (
+            pageItems.map(({ page: pageNumber, key }) => (
+              <div key={key} className='flex items-center'>
+                {pageNumber === '...' ? (
+                  <span className='text-muted-foreground/60 px-0.5 text-sm @lg/pagination:px-1'>
+                    ...
                   </span>
-                  {pageNumber}
-                </Button>
-              )}
-            </div>
-          ))}
+                ) : (
+                  <Button
+                    variant={currentPage === pageNumber ? 'default' : 'outline'}
+                    className={cn(
+                      'h-8 min-w-8 px-2 tabular-nums',
+                      currentPage === pageNumber
+                        ? 'font-semibold'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                    onClick={() =>
+                      table.setPageIndex((pageNumber as number) - 1)
+                    }
+                    disabled={cursor?.isFetching}
+                    aria-current={
+                      currentPage === pageNumber ? 'page' : undefined
+                    }
+                  >
+                    <span className='sr-only'>
+                      {t('Go to page {{page}}', { page: pageNumber })}
+                    </span>
+                    {pageNumber}
+                  </Button>
+                )}
+              </div>
+            ))
+          )}
 
           <Button
             variant='outline'
             className='text-muted-foreground hover:text-foreground disabled:text-muted-foreground/50 size-8 p-0'
             onClick={() => table.nextPage()}
-            disabled={!table.getCanNextPage()}
+            disabled={!canNextPage}
           >
             <span className='sr-only'>{t('Go to next page')}</span>
             <ChevronRightIcon className='h-4 w-4' />
           </Button>
-          <Button
-            variant='outline'
-            className='text-muted-foreground hover:text-foreground disabled:text-muted-foreground/50 size-8 p-0 @max-lg/pagination:hidden'
-            onClick={() => table.setPageIndex(table.getPageCount() - 1)}
-            disabled={!table.getCanNextPage()}
-          >
-            <span className='sr-only'>{t('Go to last page')}</span>
-            <DoubleArrowRightIcon className='h-4 w-4' />
-          </Button>
+          {!cursor && (
+            <Button
+              variant='outline'
+              className='text-muted-foreground hover:text-foreground disabled:text-muted-foreground/50 size-8 p-0 @max-lg/pagination:hidden'
+              onClick={() => table.setPageIndex(table.getPageCount() - 1)}
+              disabled={!table.getCanNextPage()}
+            >
+              <span className='sr-only'>{t('Go to last page')}</span>
+              <DoubleArrowRightIcon className='h-4 w-4' />
+            </Button>
+          )}
         </div>
       </div>
-    </div>
+    </nav>
   )
 }

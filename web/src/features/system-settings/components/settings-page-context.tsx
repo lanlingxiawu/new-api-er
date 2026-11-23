@@ -44,7 +44,7 @@ type SettingsPageProviderProps = {
 
 export function SettingsPageProvider(props: SettingsPageProviderProps) {
   return (
-    <SettingsSaveConfirmationProvider>
+    <SettingsSaveConfirmationProvider key={`${props.scope}:${props.canEdit}`}>
       <SettingsPageContext.Provider
         value={{
           actionsContainer: props.actionsContainer,
@@ -68,7 +68,12 @@ export function SettingsPageTabsContent(
   props: ComponentProps<typeof TabsContent>
 ) {
   const { canEdit } = useContext(SettingsPageContext)
-  return <TabsContent {...props} render={<fieldset disabled={!canEdit} />} />
+  return (
+    <TabsContent
+      {...props}
+      render={<fieldset disabled={!canEdit} className='min-w-0' />}
+    />
+  )
 }
 
 type SettingsPageTitleStatusPortalProps = {

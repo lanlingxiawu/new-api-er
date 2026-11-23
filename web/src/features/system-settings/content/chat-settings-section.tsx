@@ -32,10 +32,13 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import { SettingsForm } from '../components/settings-form-layout'
-import { SettingsPageFormActions } from '../components/settings-page-context'
+import {
+  SettingsPageFormActions,
+  SettingsPageTabsContent as TabsContent,
+} from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
@@ -144,6 +147,7 @@ export function ChatSettingsSection({
             saveLabel='Save chat settings'
           />
           <Tabs
+            className='min-w-0'
             value={editMode}
             onValueChange={(value) => setEditMode(value as 'visual' | 'json')}
           >

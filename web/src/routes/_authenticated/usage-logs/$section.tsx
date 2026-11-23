@@ -37,6 +37,7 @@ const logTypeSearchSchema = z
   .catch([])
 
 const usageLogsSearchSchema = z.object({
+  exportSource: z.enum(['usage', 'quota']).optional().catch('usage'),
   exportFilters: z
     .object({
       scope: z.enum(['all', 'mine']).optional(),

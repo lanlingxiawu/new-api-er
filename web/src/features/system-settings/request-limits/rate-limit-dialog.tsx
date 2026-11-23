@@ -107,9 +107,6 @@ export function RateLimitDialog({
       title={
         isEditMode ? t('Edit group rate limit') : t('Add group rate limit')
       }
-      description={t(
-        'Configure rate limiting rules for a specific user group.'
-      )}
       contentClassName='sm:max-w-[500px]'
       contentHeight='auto'
       bodyClassName='space-y-4'

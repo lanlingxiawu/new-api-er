@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Check, Copy } from 'lucide-react'
-import type { ReactNode } from 'react'
+import type { ComponentProps, ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -35,7 +35,7 @@ interface CopyButtonProps {
   className?: string
   iconClassName?: string
   variant?: 'ghost' | 'outline' | 'default' | 'secondary' | 'destructive'
-  size?: 'default' | 'sm' | 'lg' | 'icon'
+  size?: ComponentProps<typeof Button>['size']
   tooltip?: string
   successTooltip?: string
   'aria-label'?: string
@@ -62,6 +62,7 @@ export function CopyButton({
 
   const button = (
     <Button
+      type='button'
       variant={variant}
       size={size}
       className={cn('shrink-0', className)}

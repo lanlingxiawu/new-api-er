@@ -332,7 +332,6 @@ export function FAQSection({ enabled, data }: FAQSectionProps) {
         open={showDialog}
         onOpenChange={setShowDialog}
         title={editingFaq ? t('Edit FAQ') : t('Add FAQ')}
-        description={t('Create or update frequently asked questions for users')}
         contentClassName='max-w-2xl'
         contentHeight='auto'
         bodyClassName='space-y-4'

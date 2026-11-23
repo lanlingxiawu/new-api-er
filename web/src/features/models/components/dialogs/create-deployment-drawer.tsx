@@ -56,7 +56,6 @@ import {
   Sheet,
   SheetClose,
   SheetContent,
-  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -394,9 +393,6 @@ export function CreateDeploymentDrawer({
       <SheetContent className={sideDrawerContentClassName('sm:max-w-[600px]')}>
         <SheetHeader className={sideDrawerHeaderClassName()}>
           <SheetTitle>{t('Create deployment')}</SheetTitle>
-          <SheetDescription>
-            {t('Configure and deploy a new container instance.')}
-          </SheetDescription>
         </SheetHeader>
 
         <Form {...form}>

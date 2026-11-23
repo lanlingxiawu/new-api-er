@@ -35,12 +35,14 @@ type DialogProps = React.ComponentProps<typeof DialogRoot> & {
   children: React.ReactNode
   trigger?: React.ReactElement
   footer?: React.ReactNode
+  navigation?: React.ReactNode
   contentHeight?: React.CSSProperties['height']
   contentClassName?: string
   headerClassName?: string
   titleClassName?: string
   descriptionClassName?: string
   bodyClassName?: string
+  scrollAreaClassName?: string
   footerClassName?: string
   initialFocus?: boolean
   showCloseButton?: boolean
@@ -55,12 +57,14 @@ export function Dialog({
   children,
   trigger,
   footer,
+  navigation,
   contentHeight = 'auto',
   contentClassName,
   headerClassName,
   titleClassName,
   descriptionClassName,
   bodyClassName,
+  scrollAreaClassName,
   footerClassName,
   initialFocus,
   showCloseButton,
@@ -94,10 +98,13 @@ export function Dialog({
           ) : null}
         </DialogHeader>
 
+        {navigation && <div className='min-w-0 shrink-0'>{navigation}</div>}
+
         <div
           className={cn(
             '-mx-1 min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain',
-            'h-[var(--dialog-content-height)]'
+            'h-[var(--dialog-content-height)]',
+            scrollAreaClassName
           )}
         >
           <div

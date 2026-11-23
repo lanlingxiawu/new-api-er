@@ -42,7 +42,6 @@ import { Button } from '@/components/ui/button'
 import {
   Sheet,
   SheetContent,
-  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -91,7 +90,6 @@ export function ConfigDrawer() {
             size='icon'
             variant='ghost'
             aria-label={t('Open theme settings')}
-            aria-describedby='config-drawer-description'
             className='max-md:hidden'
           />
         }
@@ -101,9 +99,6 @@ export function ConfigDrawer() {
       <SheetContent className={sideDrawerContentClassName('sm:max-w-md')}>
         <SheetHeader className={sideDrawerHeaderClassName()}>
           <SheetTitle>{t('Theme Settings')}</SheetTitle>
-          <SheetDescription id='config-drawer-description'>
-            {t('Adjust the appearance and layout to suit your preferences.')}
-          </SheetDescription>
         </SheetHeader>
         <div className={sideDrawerFormClassName()}>
           <ThemeConfig />

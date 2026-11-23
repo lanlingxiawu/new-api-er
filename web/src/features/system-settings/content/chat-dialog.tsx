@@ -97,7 +97,6 @@ export function ChatDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={isEditMode ? t('Edit chat preset') : t('Add chat preset')}
-      description={t('Configure a predefined chat link for end users.')}
       contentClassName='sm:max-w-[500px]'
       contentHeight='auto'
       bodyClassName='space-y-4'

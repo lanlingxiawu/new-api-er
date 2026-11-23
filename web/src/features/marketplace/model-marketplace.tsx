@@ -57,7 +57,7 @@ export function ModelMarketplace() {
         <Alert>
           <AlertCircle className='h-4 w-4' />
           <AlertDescription>
-            {t('No models available. Please configure your groups.')}
+            {t('No models available. Please contact the administrator.')}
           </AlertDescription>
         </Alert>
       )}

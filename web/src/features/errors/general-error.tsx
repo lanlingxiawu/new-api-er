@@ -84,9 +84,7 @@ export function GeneralError({
           <h1 className='text-[7rem] leading-tight font-bold'>{status}</h1>
         )}
         <span className='font-medium'>{title}</span>
-        <p className='text-muted-foreground text-center'>
-          {t('We apologize for the inconvenience.')} <br /> {description}
-        </p>
+        <p className='text-muted-foreground text-center'>{description}</p>
         {!minimal && (
           <p className='text-muted-foreground text-center text-sm'>
             {t('If this keeps happening, please report it on GitHub Issues.')}

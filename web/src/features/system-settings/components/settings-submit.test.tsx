@@ -13,6 +13,16 @@ import {
   SettingsPageFormActions,
   SettingsPageProvider,
 } from './settings-page-context'
+import { useSettingsSaveConfirmation } from './settings-save-confirmation'
+
+function ConfirmedSettingsSave({ save }: { save: () => Promise<void> }) {
+  const confirm = useSettingsSaveConfirmation()
+  return (
+    <button type='button' onClick={() => void confirm(save)}>
+      Review changes
+    </button>
+  )
+}
 
 afterEach(() => {
   cleanup()
@@ -36,6 +46,33 @@ it('does not submit a settings form after edit access is revoked', () => {
   fireEvent.submit(screen.getByRole('form', { name: 'settings' }))
   expect(save).not.toHaveBeenCalled()
 })
+
+it.each([
+  { scope: 'auth.oauth', canEdit: false },
+  { scope: 'site.system-info', canEdit: true },
+])(
+  'cancels a pending save when settings access changes to $scope/$canEdit',
+  async (next) => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    const { rerender } = render(
+      <SettingsPageProvider actionsContainer={null} scope='auth.oauth' canEdit>
+        <ConfirmedSettingsSave save={save} />
+      </SettingsPageProvider>
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+    expect(await screen.findByRole('alertdialog')).toBeVisible()
+    rerender(
+      <SettingsPageProvider actionsContainer={null} {...next}>
+        <ConfirmedSettingsSave save={save} />
+      </SettingsPageProvider>
+    )
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Save Changes' })
+    ).not.toBeInTheDocument()
+    expect(save).not.toHaveBeenCalled()
+  }
+)
 
 it.each(['page action', 'form submit'])(
   'handles a rejected %s without losing the draft and allows retry',

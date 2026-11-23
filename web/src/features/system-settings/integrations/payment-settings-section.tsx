@@ -1673,9 +1673,6 @@ export function PaymentSettingsSection({
               <div className='space-y-4'>
                 <div>
                   <h3 className='text-lg font-medium'>{t('Stripe Gateway')}</h3>
-                  <p className='text-muted-foreground text-sm'>
-                    {t('Configuration for Stripe payment integration')}
-                  </p>
                 </div>
 
                 <div className='rounded-md bg-blue-50 p-4 text-sm text-blue-900 dark:bg-blue-950 dark:text-blue-100'>

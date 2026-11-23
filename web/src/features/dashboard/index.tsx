@@ -316,7 +316,6 @@ export function Dashboard() {
           onFilterChange={handleFilterChange}
           onReset={handleResetFilters}
           titleKey='Flow Filters'
-          descriptionKey='Filter the traffic flow view by time range and user.'
         />
       </>
     ) : null
@@ -396,7 +395,7 @@ export function Dashboard() {
               </FadeIn>
             </>
           )}
-          {activeSection === 'users' && (
+          {activeSection === 'users' && isAdmin && (
             <FadeIn>
               <Suspense fallback={<ModelChartsFallback />}>
                 <LazyUserCharts

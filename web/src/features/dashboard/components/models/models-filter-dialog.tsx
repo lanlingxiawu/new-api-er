@@ -58,7 +58,6 @@ interface ModelsFilterProps {
   onFilterChange: (filters: DashboardFilters) => void
   onReset: () => void
   titleKey?: string
-  descriptionKey?: string
 }
 
 // Quick-range presets imply a sensible granularity (matching the app's
@@ -150,8 +149,9 @@ export function ModelsFilter(props: ModelsFilterProps) {
     value: Date | string | undefined
   ) => {
     setFilters((prev) => ({ ...prev, [field]: value }))
-    if (field === 'start_timestamp' || field === 'end_timestamp')
-      {setSelectedRange(null)}
+    if (field === 'start_timestamp' || field === 'end_timestamp') {
+      setSelectedRange(null)
+    }
   }
 
   const handleQuickRange = (days: number) => {
@@ -177,10 +177,6 @@ export function ModelsFilter(props: ModelsFilterProps) {
         </Button>
       }
       title={t(props.titleKey ?? 'Model Analytics Filters')}
-      description={t(
-        props.descriptionKey ??
-          'Filter the model analytics view by time range and user.'
-      )}
       contentClassName='max-sm:h-dvh max-sm:w-screen max-sm:max-w-none max-sm:rounded-none max-sm:p-4 sm:max-w-lg'
       contentHeight='min(48vh, 460px)'
       footerClassName='grid grid-cols-2 gap-2 sm:flex'
@@ -258,9 +254,9 @@ export function ModelsFilter(props: ModelsFilterProps) {
             <Label htmlFor='time_granularity'>{t('Time Granularity')}</Label>
             <Select
               items={TIME_GRANULARITY_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: t(option.label),
-                }))}
+                value: option.value,
+                label: t(option.label),
+              }))}
               value={filters.time_granularity}
               onValueChange={(value) =>
                 handleChange('time_granularity', value as TimeGranularity)

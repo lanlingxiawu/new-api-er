@@ -189,9 +189,6 @@ export function PrefillGroupManagementDialog({
             )}
           </EmptyDescription>
         </EmptyHeader>
-        <EmptyDescription>
-          {t('Prefill groups help you keep complex configurations in sync.')}
-        </EmptyDescription>
       </Empty>
     )
   } else if (isMobile) {
@@ -401,15 +398,11 @@ export function PrefillGroupManagementDialog({
             {t('Prefill Group Management')}
           </>
         }
-        description={t(
-          'Create reusable bundles of models, tags, endpoints, and user groups to speed up configuration elsewhere in the console.'
-        )}
         contentClassName={cn(
           'w-[calc(100vw-2rem)] sm:max-w-[52rem]',
           isMobile && 'max-w-none rounded-none'
         )}
         titleClassName='flex flex-wrap items-center gap-2 text-lg'
-        descriptionClassName='text-sm leading-relaxed'
         contentHeight='auto'
         bodyClassName={cn(
           'space-y-3',

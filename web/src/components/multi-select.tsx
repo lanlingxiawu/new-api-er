@@ -77,6 +77,9 @@ interface MultiSelectProps {
   emptyText?: string
   /** Optional `id` to wire labels/aria-describedby to the input. */
   id?: string
+  'aria-label'?: string
+  /** Keep Escape from clearing a scope where empty means unrestricted. */
+  preserveSelectionOnEscape?: boolean
   /** Disable the entire control. */
   disabled?: boolean
   /**
@@ -306,11 +309,29 @@ export function MultiSelect(props: MultiSelectProps) {
       multiple
       items={items}
       value={props.selected}
-      onValueChange={handleValueChange}
+      onValueChange={(next, details) => {
+        if (
+          props.preserveSelectionOnEscape &&
+          details.reason === 'escape-key'
+        ) {
+          details.cancel()
+          details.allowPropagation()
+          return
+        }
+        handleValueChange(next)
+      }}
       inputValue={inputValue}
       onInputValueChange={handleInputValueChange}
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(nextOpen, details) => {
+        // Keep batch selection open after a search. Closing and immediately
+        // reopening can retain Base UI's frozen exit query and hide matches.
+        if (!nextOpen && details.reason === 'item-press') {
+          details.cancel()
+          return
+        }
+        setOpen(nextOpen)
+      }}
       disabled={props.disabled}
       filter={
         props.searchByLabel
@@ -430,7 +451,7 @@ export function MultiSelect(props: MultiSelectProps) {
           }
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          aria-label={placeholder}
+          aria-label={props['aria-label'] ?? placeholder}
         />
       </ComboboxChips>
 

@@ -959,9 +959,6 @@ function DetectionSettingsDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={t('Detection Settings')}
-      description={t(
-        'Configure the Veridrop monitor backend used by this page.'
-      )}
       contentClassName='sm:max-w-4xl'
       contentHeight='min(70vh, 620px)'
       footer={

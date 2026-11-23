@@ -17,10 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useTranslation } from 'react-i18next'
+
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+
 import { SettingsSwitchField } from '../components/settings-form-layout'
 
 export interface WechatSettingsValues {
@@ -49,9 +51,6 @@ export function WechatSettingsSection({ values, onValueChange }: Props) {
     <div className='space-y-4 pt-4'>
       <div>
         <h3 className='text-lg font-medium'>{t('WeChat Pay Gateway')}</h3>
-        <p className='text-muted-foreground text-sm'>
-          {t('Configuration for official WeChat Pay (Native) integration')}
-        </p>
       </div>
       <Alert>
         <AlertDescription className='text-xs'>

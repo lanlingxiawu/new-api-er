@@ -45,7 +45,6 @@ import {
   Sheet,
   SheetClose,
   SheetContent,
-  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -270,14 +269,6 @@ export function RedemptionsMutateDrawer({
                 ? t('Update Redemption Code')
                 : t('Create Redemption Code')}
             </SheetTitle>
-            <SheetDescription>
-              {isUpdate
-                ? t('Update the redemption code by providing necessary info.')
-                : t(
-                    'Add new redemption code(s) by providing necessary info.'
-                  )}{' '}
-              {t('Click save when you&apos;re done.')}
-            </SheetDescription>
           </SheetHeader>
           <Form {...form}>
             <form

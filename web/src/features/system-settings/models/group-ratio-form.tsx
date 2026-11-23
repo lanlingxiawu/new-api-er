@@ -114,16 +114,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
 
   return (
     <div className='space-y-6'>
-      <div className='flex flex-wrap items-center justify-between gap-3'>
-        <p className='text-muted-foreground text-sm'>
-          {editMode === 'visual'
-            ? t(
-                'Manage pricing, visibility and automatic routing for your groups.'
-              )
-            : t(
-                'Edit group settings as JSON. Changes are shared with the visual editor.'
-              )}
-        </p>
+      <div className='flex flex-wrap items-center justify-end gap-3'>
         <div className='flex shrink-0 gap-2'>
           <Button
             variant='outline'

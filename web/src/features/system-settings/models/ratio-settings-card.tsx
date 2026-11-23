@@ -28,7 +28,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   buildPricingChanges,
   useModelPricing,
@@ -39,7 +39,11 @@ import { pricingOptions } from '@/features/model-pricing/pricing'
 import { useMediaQuery } from '@/hooks'
 import { handleServerError } from '@/lib/handle-server-error'
 
-import { SettingsPageTitleStatusPortal } from '../components/settings-page-context'
+import { useSettingsPageAccess } from '../components/settings-page-access-context'
+import {
+  SettingsPageTitleStatusPortal,
+  SettingsPageTabsContent as TabsContent,
+} from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -199,6 +203,7 @@ export function RatioSettingsCard({
 }: RatioSettingsCardProps) {
   const { t } = useTranslation()
   const isMobile = useMediaQuery('(max-width: 639px)')
+  const { canEdit } = useSettingsPageAccess()
   const updateOption = useUpdateOption()
   const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -530,13 +535,13 @@ export function RatioSettingsCard({
   )
 
   const handleResetRatios = useCallback(() => {
-    setConfirmOpen(true)
-  }, [])
+    if (canEdit) setConfirmOpen(true)
+  }, [canEdit])
 
   const { mutate: resetMutate } = resetMutation
   const handleConfirmReset = useCallback(() => {
-    resetMutate()
-  }, [resetMutate])
+    if (canEdit) resetMutate()
+  }, [canEdit, resetMutate])
 
   const tabLabels: Record<RatioTabId, string> = {
     models: 'Model prices',
@@ -686,7 +691,7 @@ export function RatioSettingsCard({
       )}
 
       <ConfirmDialog
-        open={confirmOpen}
+        open={confirmOpen && canEdit}
         onOpenChange={setConfirmOpen}
         title={t('Reset all model prices?')}
         desc={t(

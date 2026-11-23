@@ -42,6 +42,7 @@ import {
   SettingsSwitchContent,
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
+import { useSettingsPageAccess } from '../components/settings-page-access-context'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
@@ -90,6 +91,7 @@ type RateLimitSectionProps = {
 
 export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
   const { t } = useTranslation()
+  const { canEdit } = useSettingsPageAccess()
   const updateOption = useUpdateOption()
   const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [useVisualEditor, setUseVisualEditor] = useState(true)
@@ -145,6 +147,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                 </SettingsSwitchContent>
                 <FormControl>
                   <Switch
+                    disabled={!canEdit}
                     checked={field.value}
                     onCheckedChange={field.onChange}
                   />
@@ -163,6 +166,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                   <FormControl>
                     <div className='flex items-center gap-2'>
                       <Input
+                        disabled={!canEdit}
                         type='number'
                         min={0}
                         step={1}
@@ -193,6 +197,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                   <FormControl>
                     <div className='flex items-center gap-2'>
                       <Input
+                        disabled={!canEdit}
                         type='number'
                         min={0}
                         max={100000000}
@@ -224,6 +229,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                   <FormControl>
                     <div className='flex items-center gap-2'>
                       <Input
+                        disabled={!canEdit}
                         type='number'
                         min={1}
                         max={100000000}
@@ -251,8 +257,8 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
             control={form.control}
             name='ModelRequestRateLimitGroup'
             render={({ field }) => (
-              <FormItem>
-                <div className='flex items-center justify-between'>
+              <FormItem className='min-w-0'>
+                <div className='flex flex-wrap items-center justify-between gap-2'>
                   <FormLabel>{t('Group-based rate limits')}</FormLabel>
                   <Button
                     type='button'
@@ -273,26 +279,28 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                     )}
                   </Button>
                 </div>
-                <FormControl>
-                  {useVisualEditor ? (
-                    <RateLimitVisualEditor
-                      value={field.value || ''}
-                      onChange={field.onChange}
-                    />
-                  ) : (
-                    <JsonCodeEditor
-                      value={field.value || ''}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                      placeholder={`{\n  "default": [200, 100],\n  "vip": [0, 1000]\n}`}
-                      aria-invalid={Boolean(
-                        form.formState.errors.ModelRequestRateLimitGroup
-                      )}
-                    />
-                  )}
-                </FormControl>
+                <fieldset disabled={!canEdit} className='min-w-0'>
+                  <FormControl>
+                    {useVisualEditor ? (
+                      <RateLimitVisualEditor
+                        value={field.value || ''}
+                        onChange={field.onChange}
+                      />
+                    ) : (
+                      <JsonCodeEditor
+                        value={field.value || ''}
+                        onChange={field.onChange}
+                        name={field.name}
+                        onBlur={field.onBlur}
+                        textareaRef={field.ref}
+                        placeholder={`{\n  "default": [200, 100],\n  "vip": [0, 1000]\n}`}
+                        aria-invalid={Boolean(
+                          form.formState.errors.ModelRequestRateLimitGroup
+                        )}
+                      />
+                    )}
+                  </FormControl>
+                </fieldset>
                 {!useVisualEditor && (
                   <FormDescription>
                     <div className='space-y-1 text-xs'>

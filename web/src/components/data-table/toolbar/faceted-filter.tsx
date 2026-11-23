@@ -46,6 +46,8 @@ type DataTableFacetedFilterProps<TData, TValue> = {
   options: {
     label: string
     value: string
+    /** Set false for user-defined names that must be displayed verbatim. */
+    translateLabel?: boolean
     icon?: React.ComponentType<{ className?: string }>
     iconNode?: React.ReactNode
     count?: number
@@ -122,7 +124,9 @@ function DataTableFacetedFilterInner<TData, TValue>({
                       key={option.value}
                       className='rounded-sm px-1 font-normal'
                     >
-                      {t(option.label)}
+                      {option.translateLabel === false
+                        ? option.label
+                        : t(option.label)}
                     </Badge>
                   ))
               )}
@@ -138,6 +142,10 @@ function DataTableFacetedFilterInner<TData, TValue>({
             <CommandGroup>
               {options.map((option) => {
                 const isSelected = selectedValues.has(option.value)
+                const label =
+                  option.translateLabel === false
+                    ? option.label
+                    : t(option.label)
 
                 let optionIcon: React.ReactNode = null
                 if (option.iconNode) {
@@ -183,11 +191,8 @@ function DataTableFacetedFilterInner<TData, TValue>({
                       <CheckIcon className={cn('text-background h-4 w-4')} />
                     </div>
                     {optionIcon}
-                    <span
-                      className='min-w-0 flex-1 truncate'
-                      title={t(option.label)}
-                    >
-                      {t(option.label)}
+                    <span className='min-w-0 flex-1 truncate' title={label}>
+                      {label}
                     </span>
                     {optionCount}
                   </CommandItem>

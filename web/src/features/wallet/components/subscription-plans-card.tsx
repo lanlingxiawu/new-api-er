@@ -262,7 +262,6 @@ export function SubscriptionPlansCard({
     <>
       <TitledCard
         title={t('Subscription Plans')}
-        description={t('Subscribe to a plan for model access')}
         icon={<Crown className='h-4 w-4' />}
         iconTone='warning'
         disableHoverEffect
@@ -513,12 +512,6 @@ export function SubscriptionPlansCard({
                 })}
               </div>
             </>
-          )}
-
-          {!hasAny && (
-            <p className='text-muted-foreground mt-2 text-xs'>
-              {t('Subscribe to a plan for model access')}
-            </p>
           )}
         </div>
 

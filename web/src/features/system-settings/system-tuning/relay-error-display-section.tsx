@@ -373,9 +373,6 @@ export function RelayErrorDisplaySection({
             <Label htmlFor='relay-error-display-enabled'>
               {t('Replace error messages')}
             </Label>
-            <p className='text-muted-foreground text-xs'>
-              {t('When off, users see error messages exactly as before.')}
-            </p>
           </div>
           <Switch
             id='relay-error-display-enabled'

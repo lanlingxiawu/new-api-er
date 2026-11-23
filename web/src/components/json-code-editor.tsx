@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { AlertCircle, Braces, CheckCircle2, Code2, Copy } from 'lucide-react'
 import {
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -76,6 +77,7 @@ export function JsonCodeEditor({
   ...rootProps
 }: JsonCodeEditorProps) {
   const { t } = useTranslation()
+  const statusId = useId()
   const mountRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<Yace | null>(null)
   const latestValueRef = useRef(value)
@@ -196,7 +198,7 @@ export function JsonCodeEditor({
       return
     }
 
-    const resolvedAriaInvalid = ariaInvalid ?? !jsonStatus.isValid
+    const resolvedAriaInvalid = !jsonStatus.isValid || ariaInvalid
 
     editor.textarea.disabled = Boolean(disabled)
     editor.textarea.id = id ?? ''
@@ -226,13 +228,13 @@ export function JsonCodeEditor({
       editor.textarea.removeAttribute('aria-invalid')
     }
 
-    if (ariaDescribedBy) {
-      editor.textarea.setAttribute('aria-describedby', ariaDescribedBy)
-    } else {
-      editor.textarea.removeAttribute('aria-describedby')
-    }
+    editor.textarea.setAttribute(
+      'aria-describedby',
+      [ariaDescribedBy, statusId].filter(Boolean).join(' ')
+    )
   }, [
     ariaDescribedBy,
+    statusId,
     ariaInvalid,
     ariaLabel,
     disabled,
@@ -286,6 +288,7 @@ export function JsonCodeEditor({
               'flex items-center gap-1 text-xs',
               jsonStatus.isValid ? 'text-emerald-600' : 'text-destructive'
             )}
+            id={statusId}
           >
             {jsonStatus.isValid ? (
               <CheckCircle2 className='h-3.5 w-3.5' aria-hidden='true' />

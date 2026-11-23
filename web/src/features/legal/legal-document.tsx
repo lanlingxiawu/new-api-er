@@ -99,11 +99,6 @@ export function LegalDocument({
               <CardTitle>{title}</CardTitle>
             </CardHeader>
             <CardContent className='space-y-4'>
-              <p className='text-muted-foreground text-sm'>
-                {t(
-                  'The administrator configured an external link for this document.'
-                )}
-              </p>
               <Button
                 render={
                   <a

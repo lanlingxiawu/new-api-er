@@ -55,7 +55,6 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import {
   Sheet,
   SheetContent,
-  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -225,7 +224,6 @@ export function ModelMutateDrawer(props: {
             <SheetTitle className='pr-6 break-all'>
               {hasModelName ? currentRow?.model_name : t('Create Model')}
             </SheetTitle>
-            <SheetDescription>{t('Model metadata')}</SheetDescription>
           </SheetHeader>
           <Tabs
             value={section}

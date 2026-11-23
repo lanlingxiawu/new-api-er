@@ -92,6 +92,9 @@ export type DataTablePageProps<TData> = {
    */
   isFetching?: boolean
 
+  /** Stable query/cursor identity for lists with pagination outside TanStack Table. */
+  scrollResetKey?: string | number
+
   /**
    * Empty-state title (used for both desktop {@link TableEmpty} and mobile fallback).
    */
@@ -209,6 +212,11 @@ export type DataTablePageProps<TData> = {
   /** Minimal previous/next pagination for narrow feature layouts. */
   compactPagination?: boolean
 
+  /** Use the shared pagination bar with a server cursor and no total count. */
+  cursorPagination?: React.ComponentProps<
+    typeof DataTablePagination<TData>
+  >['cursor']
+
   /**
    * Render pagination via `PageFooterPortal` (sticks to page footer).
    * Defaults to `true`. Set `false` to render inline below the table.
@@ -317,6 +325,11 @@ export type DataTablePageProps<TData> = {
 export function DataTablePage<TData>(props: DataTablePageProps<TData>) {
   const isMobile = useMediaQuery('(max-width: 640px)')
   const showMobile = isMobile && !props.hideMobile
+  const mobileScrollRef = React.useRef<HTMLDivElement>(null)
+  const { pageIndex, pageSize } = props.table.getState().pagination
+  React.useLayoutEffect(() => {
+    if (mobileScrollRef.current) mobileScrollRef.current.scrollTop = 0
+  }, [pageIndex, pageSize, props.scrollResetKey])
 
   const [internalViewMode, setInternalViewMode] = useDataTableViewMode({
     storageKey: props.viewModeStorageKey,
@@ -336,7 +349,13 @@ export function DataTablePage<TData>(props: DataTablePageProps<TData>) {
   ) : undefined
 
   const toolbarNode = renderToolbar(props, viewToggle)
-  const mobileNode = renderMobile(props, showMobile, cardViewActive, viewMode)
+  const mobileNode = renderMobile(
+    props,
+    showMobile,
+    cardViewActive,
+    viewMode,
+    mobileScrollRef
+  )
   const desktopNode = renderDesktop(props, showMobile, cardViewActive, viewMode)
   const paginationNode = renderPagination(props)
 
@@ -399,6 +418,7 @@ function renderPagination<TData>(
     <DataTablePagination
       table={props.table}
       compact={props.compactPagination}
+      cursor={props.cursorPagination}
     />
   )
 
@@ -413,7 +433,8 @@ function renderMobile<TData>(
   props: DataTablePageProps<TData>,
   showMobile: boolean,
   cardViewActive: boolean,
-  viewMode: DataTableViewMode
+  viewMode: DataTableViewMode,
+  scrollRef: React.RefObject<HTMLDivElement | null>
 ): React.ReactNode {
   if (!showMobile) {
     return null
@@ -487,7 +508,16 @@ function renderMobile<TData>(
     }
   }
 
-  return <div className='min-h-0 flex-1 overflow-y-auto'>{mobileContent}</div>
+  return (
+    <div
+      ref={scrollRef}
+      data-page-scroll
+      data-scroll-restoration-id='mobile-table-content'
+      className='min-h-0 flex-1 overflow-y-auto'
+    >
+      {mobileContent}
+    </div>
+  )
 }
 
 function renderDesktop<TData>(

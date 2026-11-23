@@ -22,13 +22,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { IconBadge } from '@/components/ui/icon-badge'
 import { Switch } from '@/components/ui/switch'
 import { parseSidebarModulesAdmin } from '@/features/system-settings/maintenance/config'
@@ -238,9 +232,6 @@ export function SidebarModulesCard() {
             <CardTitle className='text-lg tracking-tight sm:text-xl'>
               {t('Sidebar Personal Settings')}
             </CardTitle>
-            <CardDescription className='text-xs sm:text-sm'>
-              {t('Customize sidebar display content')}
-            </CardDescription>
           </div>
         </div>
       </CardHeader>

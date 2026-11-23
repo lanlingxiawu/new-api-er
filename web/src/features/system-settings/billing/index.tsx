@@ -154,7 +154,11 @@ export function BillingSettings() {
       defaultSection={BILLING_DEFAULT_SECTION}
       getSectionContent={getBillingSectionContent}
       getSectionMeta={getBillingSectionMeta}
-      interactiveReadOnlySections={['group-pricing', 'payment']}
+      interactiveReadOnlySections={[
+        'model-pricing',
+        'group-pricing',
+        'payment',
+      ]}
     />
   )
 }

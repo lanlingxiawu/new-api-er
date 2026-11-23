@@ -74,7 +74,6 @@ import { Separator } from '@/components/ui/separator'
 import {
   Sheet,
   SheetContent,
-  SheetDescription,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
@@ -1119,9 +1118,6 @@ function GroupOverrideRules({
         open={userGroupDialogOpen && !readOnly}
         onOpenChange={setUserGroupDialogOpen}
         title={t('Add user group')}
-        description={t(
-          'Create a new user group to configure ratio overrides for.'
-        )}
         contentHeight='auto'
         bodyClassName='space-y-4'
         footer={
@@ -1389,9 +1385,6 @@ function GroupDetailSheet(props: GroupDetailSheetProps) {
             {t('Group details')}
             {name ? `: ${name}` : ''}
           </SheetTitle>
-          <SheetDescription>
-            {t('Everything configured for this group, in one place.')}
-          </SheetDescription>
         </SheetHeader>
 
         {detail && (

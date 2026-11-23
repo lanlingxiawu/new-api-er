@@ -65,11 +65,6 @@ export function SystemTasksPanel() {
             </span>
             <div className='min-w-0'>
               <h3 className='text-sm font-semibold'>{t('System Tasks')}</h3>
-              <p className='text-muted-foreground mt-0.5 text-xs'>
-                {t(
-                  'Recent maintenance tasks running across instances and their execution status.'
-                )}
-              </p>
             </div>
           </div>
         </div>

@@ -36,6 +36,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 
+import { FormNavigationGuard } from '../components/form-navigation-guard'
 import {
   SettingsForm,
   SettingsSwitchContent,
@@ -230,6 +231,7 @@ export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
           value: normalized[key],
         })
       }
+      form.reset(values)
     })
   }
 
@@ -240,6 +242,7 @@ export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
 
   return (
     <SettingsSection title={t('Gemini')}>
+      <FormNavigationGuard when={form.formState.isDirty} />
       <Form {...form}>
         <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
           <SettingsPageFormActions

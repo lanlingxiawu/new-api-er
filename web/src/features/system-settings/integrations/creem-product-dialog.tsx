@@ -120,7 +120,6 @@ export function CreemProductDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={isEditMode ? t('Edit product') : t('Add product')}
-      description={t('Configure a Creem product for user recharge options.')}
       contentClassName='sm:max-w-[500px]'
       contentHeight='auto'
       bodyClassName='space-y-4'

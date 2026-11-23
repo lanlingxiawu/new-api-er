@@ -115,9 +115,6 @@ export function AmountDiscountDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={isEditMode ? t('Edit discount tier') : t('Add discount tier')}
-      description={t(
-        'Set a discount rate for a specific recharge amount threshold.'
-      )}
       contentClassName='sm:max-w-[500px]'
       contentHeight='auto'
       bodyClassName='space-y-4'

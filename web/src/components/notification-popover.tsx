@@ -188,13 +188,7 @@ function NoticeContent({
   t: TFunction
 }) {
   if (loading) {
-    return (
-      <EmptyState
-        icon={<Bell />}
-        title={t('Loading...')}
-        description={t('Latest platform updates and notices')}
-      />
-    )
+    return <EmptyState icon={<Bell />} title={t('Loading...')} />
   }
 
   if (!notice) {
@@ -223,13 +217,7 @@ function AnnouncementsContent({
   t: TFunction
 }) {
   if (loading) {
-    return (
-      <EmptyState
-        icon={<Megaphone />}
-        title={t('Loading...')}
-        description={t('Latest platform updates and notices')}
-      />
-    )
+    return <EmptyState icon={<Megaphone />} title={t('Loading...')} />
   }
 
   if (announcements.length === 0) {
@@ -332,9 +320,6 @@ export function NotificationPopover({
       >
         <PopoverHeader className='gap-1 px-1'>
           <PopoverTitle>{t('System Announcements')}</PopoverTitle>
-          <p className='text-muted-foreground text-xs'>
-            {t('Latest platform updates and notices')}
-          </p>
         </PopoverHeader>
 
         <Tabs

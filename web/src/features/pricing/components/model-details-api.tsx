@@ -430,8 +430,9 @@ function buildSample(
 ): string {
   if (endpointType === 'anthropic') return buildAnthropicSample(lang, ctx)
   if (endpointType === 'gemini') return buildGeminiSample(lang, ctx)
-  if (endpointType === 'embeddings' || endpointType === 'jina-rerank')
-    {return buildEmbeddingSample(lang, ctx)}
+  if (endpointType === 'embeddings' || endpointType === 'jina-rerank') {
+    return buildEmbeddingSample(lang, ctx)
+  }
   if (endpointType === 'image-generation') return buildImageSample(lang, ctx)
   return buildChatSample(lang, ctx)
 }
@@ -502,7 +503,7 @@ function CodeSamplesSection(props: {
       <div className='flex flex-wrap items-center gap-2'>
         {endpoints.length > 1 && (
           <Tabs value={endpointType} onValueChange={setEndpointType}>
-            <TabsList className='bg-muted/40 h-8 p-0.5'>
+            <TabsList className='h-8'>
               {endpoints.map((ep) => (
                 <TabsTrigger
                   key={ep.type}
@@ -521,7 +522,7 @@ function CodeSamplesSection(props: {
           onValueChange={(v) => setLang(v as Lang)}
           className='ml-auto'
         >
-          <TabsList className='bg-muted/40 h-8 p-0.5'>
+          <TabsList className='h-8'>
             {(Object.keys(LANG_LABELS) as Lang[]).map((l) => (
               <TabsTrigger key={l} value={l} className='h-7 px-2.5 text-xs'>
                 {LANG_LABELS[l]}

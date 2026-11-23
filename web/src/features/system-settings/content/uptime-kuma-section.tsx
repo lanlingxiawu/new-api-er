@@ -353,9 +353,6 @@ export function UptimeKumaSection({ enabled, data }: UptimeKumaSectionProps) {
             ? t('Edit Uptime Kuma Group')
             : t('Add Uptime Kuma Group')
         }
-        description={t(
-          'Configure monitoring status page groups for the dashboard'
-        )}
         contentHeight='auto'
         bodyClassName='space-y-4'
         footer={

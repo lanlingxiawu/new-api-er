@@ -146,11 +146,6 @@ export function WaffoSettingsSection({
           <h3 className='text-lg font-medium'>
             {t('Waffo Aggregator Gateway')}
           </h3>
-          <p className='text-muted-foreground text-sm'>
-            {t(
-              'Payment aggregator mode — onboard with your own registered company (offshore entity). Built for Enterprise.'
-            )}
-          </p>
         </div>
         <Alert>
           <AlertDescription className='text-xs'>

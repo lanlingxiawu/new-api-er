@@ -121,9 +121,9 @@ export function RateLimitVisualEditor({
   }
 
   return (
-    <div className='space-y-4'>
-      <div className='flex items-center gap-4'>
-        <div className='relative flex-1'>
+    <div className='min-w-0 space-y-4'>
+      <div className='flex flex-wrap items-center gap-2'>
+        <div className='relative min-w-0 flex-1'>
           <Search className='text-muted-foreground absolute top-2.5 left-2.5 h-4 w-4' />
           <Input
             placeholder={t('Search group names...')}

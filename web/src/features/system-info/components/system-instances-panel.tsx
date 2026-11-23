@@ -670,11 +670,6 @@ export function SystemInstancesPanel() {
               </span>
               <div className='min-w-0'>
                 <h3 className='text-sm font-semibold'>{t('Instances')}</h3>
-                <p className='text-muted-foreground mt-0.5 text-xs'>
-                  {t(
-                    'Nodes reporting from this deployment and their latest heartbeat.'
-                  )}
-                </p>
               </div>
             </div>
           </div>

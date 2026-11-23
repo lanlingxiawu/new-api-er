@@ -38,14 +38,7 @@ function EmptyAboutState() {
         <div className='flex justify-center'>
           <Construction className='text-muted-foreground h-24 w-24' />
         </div>
-        <div className='space-y-2'>
-          <h2 className='text-2xl font-bold'>{t('No About Content Set')}</h2>
-          <p className='text-muted-foreground'>
-            {t(
-              'The administrator has not configured any about content yet. You can set it in the settings page, supporting HTML or URL.'
-            )}
-          </p>
-        </div>
+        <h2 className='text-2xl font-bold'>{t('No introduction available')}</h2>
         <div className='space-y-4 text-sm'>
           <p>
             {t('NEXAXIS API Project Repository:')}{' '}

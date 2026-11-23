@@ -83,6 +83,7 @@ export function OperationsSettings() {
   return (
     <SettingsPage
       group='operations'
+      interactiveReadOnlySections={['performance']}
       routePath='/_authenticated/system-settings/operations/$section'
       defaultSettings={defaultOperationsSettings}
       defaultSection={OPERATIONS_DEFAULT_SECTION}

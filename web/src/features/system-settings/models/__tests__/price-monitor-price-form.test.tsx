@@ -7,7 +7,13 @@ by the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  within,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Toaster, toast } from 'sonner'
 import { afterEach, assert, expect, test, vi } from 'vitest'
@@ -675,6 +681,11 @@ test('restoring defaults clears the model conversion problem and unblocks saving
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
   await userEvent.click(
     screen.getByRole('button', { name: 'Restore default pricing' })
+  )
+  await userEvent.click(
+    within(screen.getByRole('alertdialog')).getByRole('button', {
+      name: 'Restore default pricing',
+    })
   )
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()

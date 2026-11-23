@@ -40,6 +40,7 @@ import routeLineSix from '@/assets/home/Vector 6.png'
 import routeLineSeven from '@/assets/home/Vector 7.png'
 import { RichContent } from '@/components/rich-content'
 import { Markdown } from '@/components/ui/markdown'
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { useTheme } from '@/context/theme-provider'
 import { useStatus } from '@/hooks/use-status'
 import {
@@ -569,6 +570,18 @@ function FigmaHomeHeader() {
   const { t, i18n } = useTranslation()
   const user = useAuthStore((s) => s.auth.user)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const mobileMenuTriggerRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    const desktop = window.matchMedia('(min-width: 861px)')
+    const closeOnDesktop = () => {
+      if (desktop.matches) {
+        setMobileMenuOpen(false)
+        setMobileExpandedMenu(null)
+      }
+    }
+    desktop.addEventListener('change', closeOnDesktop)
+    return () => desktop.removeEventListener('change', closeOnDesktop)
+  }, [])
   const [mobileExpandedMenu, setMobileExpandedMenu] = useState<string | null>(
     null
   )
@@ -724,6 +737,7 @@ function FigmaHomeHeader() {
             type='button'
             aria-label={t('切换菜单')}
             aria-expanded={mobileMenuOpen}
+            ref={mobileMenuTriggerRef}
             onClick={() => setMobileMenuOpen((open) => !open)}
           >
             {mobileMenuOpen ? <X size={18} /> : <Menu size={18} />}
@@ -731,108 +745,121 @@ function FigmaHomeHeader() {
         </div>
       </header>
 
-      <div
-        className={`figma-home-mobile-panel${mobileMenuOpen ? 'is-open' : ''}`}
+      <Sheet
+        open={mobileMenuOpen}
+        onOpenChange={(open) => {
+          if (open) setMobileMenuOpen(true)
+          else closeMobileMenu()
+        }}
       >
-        <div className='figma-home-mobile-panel-top'>
-          <img
-            className='figma-home-mobile-logo-image'
-            src={HOME_PRIMARY_LOGO}
-            alt=''
-          />
-          <button
-            type='button'
-            className='figma-home-mobile-close'
-            aria-label={t('关闭菜单')}
-            onClick={closeMobileMenu}
-          >
-            <X size={28} strokeWidth={1.8} />
-          </button>
-        </div>
+        <SheetContent
+          className='figma-home figma-home-mobile-panel is-open w-full sm:max-w-full'
+          showCloseButton={false}
+          finalFocus={mobileMenuTriggerRef}
+        >
+          <SheetTitle className='sr-only'>{t('主导航')}</SheetTitle>
+          <div className='figma-home-mobile-panel-top'>
+            <img
+              className='figma-home-mobile-logo-image'
+              src={HOME_PRIMARY_LOGO}
+              alt=''
+            />
+            <button
+              type='button'
+              className='figma-home-mobile-close'
+              aria-label={t('关闭菜单')}
+              onClick={closeMobileMenu}
+            >
+              <X size={28} strokeWidth={1.8} />
+            </button>
+          </div>
 
-        <div className='figma-home-mobile-links'>
-          {mobileMenuItems.map((item) => {
-            const isExpanded = mobileExpandedMenu === item.label
-            const visibleChildren = getVisibleChildren(item.children)
-            if (item.to && !visibleChildren.length) {
+          <div className='figma-home-mobile-links'>
+            {mobileMenuItems.map((item) => {
+              const isExpanded = mobileExpandedMenu === item.label
+              const visibleChildren = getVisibleChildren(item.children)
+              if (item.to && !visibleChildren.length) {
+                return (
+                  <div key={item.label} className='figma-home-mobile-menu-item'>
+                    <a
+                      href={item.to}
+                      target={item.target}
+                      rel={
+                        item.target === '_blank'
+                          ? 'noopener noreferrer'
+                          : undefined
+                      }
+                      className='figma-home-mobile-link'
+                      onClick={closeMobileMenu}
+                    >
+                      <span>{t(item.label)}</span>
+                    </a>
+                  </div>
+                )
+              }
+
               return (
-                <div key={item.label} className='figma-home-mobile-menu-item'>
-                  <a
-                    href={item.to}
-                    target={item.target}
-                    rel={
-                      item.target === '_blank'
-                        ? 'noopener noreferrer'
-                        : undefined
-                    }
+                <div
+                  key={item.label}
+                  className={`figma-home-mobile-menu-item ${
+                    isExpanded ? 'is-expanded' : ''
+                  }`}
+                >
+                  <button
+                    type='button'
                     className='figma-home-mobile-link'
-                    onClick={closeMobileMenu}
+                    aria-expanded={isExpanded}
+                    onClick={() =>
+                      setMobileExpandedMenu((current) =>
+                        current === item.label ? null : item.label
+                      )
+                    }
                   >
                     <span>{t(item.label)}</span>
-                  </a>
+                    <span className='figma-home-mobile-link-meta'>
+                      {item.value ? <span>{item.value}</span> : null}
+                      <ChevronDown size={24} strokeWidth={2} />
+                    </span>
+                  </button>
+
+                  {isExpanded ? (
+                    <div className='figma-home-mobile-submenu'>
+                      {visibleChildren.map((child) =>
+                        child.to ? (
+                          <a
+                            key={child.label}
+                            href={child.to}
+                            target={child.target}
+                            rel={
+                              child.target === '_blank'
+                                ? 'noopener noreferrer'
+                                : undefined
+                            }
+                            onClick={closeMobileMenu}
+                          >
+                            {t(child.label || '')}
+                          </a>
+                        ) : (
+                          <button
+                            key={child.key}
+                            type='button'
+                            className={child.active ? 'is-active' : ''}
+                            onClick={() =>
+                              handleLanguageSelect(child.key || '')
+                            }
+                          >
+                            {child.fullLabel}
+                          </button>
+                        )
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               )
-            }
-
-            return (
-              <div
-                key={item.label}
-                className={`figma-home-mobile-menu-item${
-                  isExpanded ? 'is-expanded' : ''
-                }`}
-              >
-                <button
-                  type='button'
-                  className='figma-home-mobile-link'
-                  aria-expanded={isExpanded}
-                  onClick={() =>
-                    setMobileExpandedMenu((current) =>
-                      current === item.label ? null : item.label
-                    )
-                  }
-                >
-                  <span>{t(item.label)}</span>
-                  <span className='figma-home-mobile-link-meta'>
-                    {item.value ? <span>{item.value}</span> : null}
-                    <ChevronDown size={24} strokeWidth={2} />
-                  </span>
-                </button>
-
-                {isExpanded ? (
-                  <div className='figma-home-mobile-submenu'>
-                    {visibleChildren.map((child) =>
-                      child.to ? (
-                        <a
-                          key={child.label}
-                          href={child.to}
-                          target={child.target}
-                          rel={
-                            child.target === '_blank'
-                              ? 'noopener noreferrer'
-                              : undefined
-                          }
-                          onClick={closeMobileMenu}
-                        >
-                          {t(child.label || '')}
-                        </a>
-                      ) : (
-                        <button
-                          key={child.key}
-                          type='button'
-                          className={child.active ? 'is-active' : ''}
-                          onClick={() => handleLanguageSelect(child.key || '')}
-                        >
-                          {child.fullLabel}
-                        </button>
-                      )
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            )
-          })}
-        </div>
-      </div>
+            })}
+          </div>
+        </SheetContent>
+      </Sheet>
     </>
   )
 }

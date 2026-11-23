@@ -23,6 +23,21 @@ import { describe, expect, test, vi } from 'vitest'
 import { JsonCodeEditor } from '../../json-code-editor'
 
 describe('JsonCodeEditor component', () => {
+  test('syntax errors override an explicitly valid form state', () => {
+    const rendered = render(
+      <JsonCodeEditor value='{' onChange={() => {}} aria-invalid={false} />
+    )
+    const textarea = screen.getByRole('textbox')
+    expect(textarea).toHaveAttribute('aria-invalid', 'true')
+    rendered.rerender(
+      <JsonCodeEditor value='{}' onChange={() => {}} aria-invalid={false} />
+    )
+    expect(textarea).not.toHaveAttribute('aria-invalid')
+    rendered.rerender(
+      <JsonCodeEditor value='{}' onChange={() => {}} aria-invalid='grammar' />
+    )
+    expect(textarea).toHaveAttribute('aria-invalid', 'grammar')
+  })
   test('forwards form attributes and the textarea ref', () => {
     const textareaRef = vi.fn()
     const rendered = render(
@@ -48,7 +63,16 @@ describe('JsonCodeEditor component', () => {
     expect(textarea).toHaveAttribute('name', 'model_config')
     expect(textarea).toHaveAttribute('placeholder', '{"model":"gpt"}')
     expect(textarea).toBeDisabled()
-    expect(textarea).toHaveAttribute('aria-describedby', 'model-help')
+    expect(textarea.getAttribute('aria-describedby')?.split(' ')).toContain(
+      'model-help'
+    )
+    const statusId = textarea
+      .getAttribute('aria-describedby')
+      ?.split(' ')
+      .at(-1)
+    expect(document.querySelector(`[id="${statusId}"]`)).toHaveTextContent(
+      'JSON'
+    )
     expect(textarea).toHaveAttribute('aria-invalid', 'true')
     expect(textarea).toHaveAttribute('data-form-root', 'settings-form')
     expect(textareaRef).toHaveBeenCalledWith(textarea)

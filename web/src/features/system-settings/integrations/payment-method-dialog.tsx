@@ -164,7 +164,6 @@ export function PaymentMethodDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={isEditMode ? t('Edit payment method') : t('Add payment method')}
-      description={t('Configure a payment method for user recharge options.')}
       contentClassName='sm:max-w-[500px]'
       contentHeight='auto'
       bodyClassName='space-y-4'

@@ -46,7 +46,6 @@ import { Input } from '@/components/ui/input'
 import {
   Sheet,
   SheetContent,
-  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -148,9 +147,6 @@ export function VendorMutateDialog(props: {
             <SheetTitle className='pr-6 break-all'>
               {id ? props.currentVendor?.name : t('Create Vendor')}
             </SheetTitle>
-            <SheetDescription>
-              {t('Manage vendor details and linked model records.')}
-            </SheetDescription>
           </SheetHeader>
           {id && (
             <Tabs

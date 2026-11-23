@@ -13,6 +13,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Dialog } from '@/components/dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -263,6 +264,7 @@ function PriceFormSession(
       ])
     )
   )
+  const [resetTarget, setResetTarget] = useState<string | null>(null)
   const [resetModels, setResetModels] = useState<Set<string>>(new Set())
   const [working, setWorking] = useState(false)
   const [sourceKey, setSourceKey] = useState(
@@ -1289,6 +1291,32 @@ function PriceFormSession(
           </Button>
         </FieldGroup>
       )}
+      <ConfirmDialog
+        open={resetTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setResetTarget(null)
+        }}
+        title={t('Restore default pricing')}
+        desc={t('Restore default pricing for this model?')}
+        confirmText={t('Restore default pricing')}
+        disabled={working}
+        handleConfirm={() => {
+          if (!resetTarget || working) return
+          update(resetTarget, {})
+          setResetModels((current) => new Set([...current, resetTarget]))
+          setBatchProblems((current) =>
+            current.filter(
+              (problem) =>
+                !(
+                  problem.model === resetTarget &&
+                  problem.source === 'conversion'
+                )
+            )
+          )
+          setEditorRevision((current) => current + 1)
+          setResetTarget(null)
+        }}
+      />
       {props.footerTarget &&
         createPortal(
           <div className='flex flex-col gap-2'>
@@ -1301,27 +1329,7 @@ function PriceFormSession(
               <Button
                 variant='outline'
                 disabled={working}
-                onClick={() => {
-                  if (
-                    !window.confirm(
-                      t('Restore default pricing for this model?')
-                    )
-                  ) {
-                    return
-                  }
-                  update(active, {})
-                  setResetModels((current) => new Set([...current, active]))
-                  setBatchProblems((current) =>
-                    current.filter(
-                      (problem) =>
-                        !(
-                          problem.model === active &&
-                          problem.source === 'conversion'
-                        )
-                    )
-                  )
-                  setEditorRevision((current) => current + 1)
-                }}
+                onClick={() => setResetTarget(active)}
               >
                 {t('Restore default pricing')}
               </Button>
