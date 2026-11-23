@@ -98,6 +98,41 @@ func TestScanLogExportBatch_KeysetCrossesSameSecondBoundary(t *testing.T) {
 	}
 }
 
+func TestScanLogExportBatch_CursorPreservesOriginalWindowBounds(t *testing.T) {
+	requireLogDB(t)
+	username := uniq("cursor_bounds")
+	base := time.Now().Unix() - 7200
+	var rows []*Log
+	for _, offset := range []int64{-1, 0, 0, 1, 2, 2, 3} {
+		rows = append(rows, mkExportLog(t, func(l *Log) {
+			l.Username, l.CreatedAt = username, base+offset
+		}))
+	}
+	filter := LogExportFilter{Username: username, StartTimestamp: base, EndTimestamp: base + 2}
+	for _, tc := range []struct {
+		name   string
+		cursor *logExportCursor
+		want   []*Log
+	}{
+		{"no cursor", nil, rows[1:6]},
+		{"before window", nextLogExportCursor(rows[:1]), rows[1:6]},
+		{"same second at start", nextLogExportCursor(rows[:2]), rows[2:6]},
+		{"inside window", nextLogExportCursor(rows[:4]), rows[4:6]},
+		{"same second at end", nextLogExportCursor(rows[:5]), rows[5:6]},
+		{"at final row", nextLogExportCursor(rows[:6]), nil},
+		{"after window", nextLogExportCursor(rows), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := scanLogExportBatch(context.Background(), filter, exportTestFields(), base, base+2, tc.cursor, 10)
+			require.NoError(t, err)
+			require.Len(t, got, len(tc.want))
+			for i, row := range got {
+				assert.Equal(t, tc.want[i].Id, row.Id)
+			}
+		})
+	}
+}
+
 // 导出按时间正序：第一个分片装区间最早的数据，命中上限或中途失败时留下的是一段
 // 完整的期初数据。列表接口的倒序与此无关。
 func TestScanLogExportBatch_AscendingOrderAndNoOverlap(t *testing.T) {

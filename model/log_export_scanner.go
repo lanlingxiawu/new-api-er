@@ -2,8 +2,11 @@ package model
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
@@ -13,14 +16,15 @@ import (
 // 窗口宽度自适应全部只有这一份实现。聚合模式另写一套循环会让「窗口边界不重不漏」
 // 这类不变式出现第二个必须单独维护的副本——而那正是最容易出错、后果最隐蔽的地方。
 type logExportScanner struct {
+	reader          LogExportDataReader
 	job             *LogExportJob
 	fields          []string
 	needChannelName bool
 	rctx            *rowCtx
 	gate            *exportGate
 
-	// startedAt/timeout 构成超时预算：闸门让出的时间不计入，
-	// 否则一开低峰模式，白天创建的任务会先干等几小时再以超时失败。
+	// Preserve the scanner's active-work budget. The outer job context separately
+	// bounds total wall time, including resource and off-peak waits.
 	startedAt time.Time
 	timeout   time.Duration
 	lastSaved time.Time
@@ -48,20 +52,23 @@ func newLogExportScanner(job *LogExportJob, fields []string, needChannelName boo
 }
 
 func (s *logExportScanner) exceededBudget() bool {
-	worked := time.Since(s.startedAt) - time.Duration(s.job.ThrottledMs)*time.Millisecond
-	return worked > s.timeout
+	return time.Since(s.startedAt)-time.Duration(s.gate.ThrottledMs())*time.Millisecond > s.timeout
 }
 
 // run 扫描整个时间范围，每读到一批就调用 onBatch。
 // onBatch 返回错误即中止整次扫描（写入失败、分片数上限等都走这条路）。
 func (s *logExportScanner) run(ctx context.Context, onBatch func(logs []*Log) error) error {
+	return s.runUsageBatches(ctx, func(batch LogExportBatch) error { return onBatch(batch.Logs) })
+}
+
+func (s *logExportScanner) runUsageBatches(ctx context.Context, onBatch func(LogExportBatch) error) error {
 	if s.job.SelfExport {
 		if !s.job.IsSelfExportFor(s.job.UserID) {
 			return ErrEmployeeExportAccess
 		}
 	}
 	if s.job.EmployeeScope == nil {
-		return s.runCustomer(ctx, onBatch)
+		return s.runBatches(ctx, onBatch)
 	}
 	original := s.job.Filters.UserId
 	defer func() { s.job.Filters.UserId = original }()
@@ -71,15 +78,23 @@ func (s *logExportScanner) run(ctx context.Context, onBatch func(logs []*Log) er
 	s.lastValidated = time.Now()
 	for _, id := range s.job.EmployeeScope.CustomerIDs {
 		s.job.Filters.UserId = id
-		if err := s.runCustomer(ctx, onBatch); err != nil {
+		if err := s.runBatches(ctx, onBatch); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *logExportScanner) runCustomer(ctx context.Context, onBatch func(logs []*Log) error) error {
+func (s *logExportScanner) runBatches(ctx context.Context, onBatch func(LogExportBatch) error) error {
 	job := s.job
+	s.gate.ResetQueryBaselines()
+	rawExport := LogExportHasRawColumn(job.Columns)
+	if rawExport {
+		if err := job.validateRawLogExport(ctx); err != nil {
+			return err
+		}
+		s.lastValidated = time.Now()
+	}
 	exportStart := job.Filters.StartTimestamp
 	exportEnd := job.Filters.EndTimestamp
 
@@ -90,24 +105,37 @@ func (s *logExportScanner) runCustomer(ctx context.Context, onBatch func(logs []
 	// 否则边界那一秒会被相邻两个窗口各扫一次——每个窗口的游标是独立重置的，
 	// 重复扫到的行会真的写进文件。时间戳是整秒，加 1 既不重叠也不留缝。
 	//
-	// 窗口宽度自适应：配置的 window_sec 是**起点与下限**而不是固定值。稀疏时间段里
-	// 一个窗口连一批都读不满，固定 1 小时窗口会让 31 天的导出白跑 744 次数据库往返；
-	// 读不满就把下个窗口翻倍，读得很满就减半收回。密集数据下宽度收敛回配置值，
-	// 「把单次索引区间限死」的原始意图不变。
-	windowSec := operation_setting.GetLogExportSetting().GetWindowSec()
+	// The configured width is a starting point. Cheap sparse windows can grow;
+	// expensive reads can shrink below it. A timeout lowers the maximum width
+	// for the remainder of this scan, preventing immediate repeated expansion.
+	configuredWindowSec := operation_setting.GetLogExportSetting().GetWindowSec()
+	windowSec := configuredWindowSec
+	maxWindowSec := int64(operation_setting.MaxLogExportWindowSec)
 	windowStart := exportStart
+	remainingEnd := exportEnd
+	reverse := s.reader != nil && s.reader.Reverse()
 	for windowStart <= exportEnd {
 		cfgWindowSec := operation_setting.GetLogExportSetting().GetWindowSec()
-		// 配置被调大时立刻跟上；上限沿用配置层的硬上限，不另设一套。
-		windowSec = min(max(windowSec, cfgWindowSec), operation_setting.MaxLogExportWindowSec)
+		// Honor live configuration changes within the learned timeout ceiling.
+		if cfgWindowSec != configuredWindowSec {
+			windowSec = cfgWindowSec
+			configuredWindowSec = cfgWindowSec
+		}
+		windowSec = min(max(windowSec, operation_setting.MinLogExportWindowSec), maxWindowSec)
 
 		windowEnd := windowStart + windowSec - 1
 		if windowEnd > exportEnd {
 			windowEnd = exportEnd
 		}
-		var cursor *logExportCursor
+		if reverse {
+			windowEnd = remainingEnd
+			windowStart = max(exportStart, windowEnd-windowSec+1)
+		}
+		var cursor any
+		var cursorPosition int64
 		// windowRows/windowBatches 只服务于窗口宽度自适应，不参与计费与进度。
 		var windowRows, windowBatches int
+		var maxQueryCost time.Duration
 		lastBatchSize := 0
 		for {
 			if err := ctx.Err(); err != nil {
@@ -118,6 +146,12 @@ func (s *logExportScanner) runCustomer(ctx context.Context, onBatch func(logs []
 			}
 
 			batchSize := operation_setting.GetLogExportSetting().GetBatchSize()
+			if rawExport {
+				batchSize = min(batchSize, logExportRawBatchSize)
+			}
+			if s.reader != nil {
+				batchSize = s.reader.BatchSize(batchSize)
+			}
 			lastBatchSize = batchSize
 			// 开工前只过「系统忙不忙」这道闸；计费放到这一批读完之后，
 			// 因为只有查完才知道实际读到了多少行。
@@ -136,43 +170,121 @@ func (s *logExportScanner) runCustomer(ctx context.Context, onBatch func(logs []
 				}
 				s.lastValidated = time.Now()
 			}
-			queryCtx, queryCancel := context.WithTimeout(ctx,
-				logExportQueryTimeout(operation_setting.GetLogExportSetting().GetBatchQueryTimeoutSec()))
-			started := time.Now()
-			logs, err := scanLogExportBatch(queryCtx, job.Filters, s.fields, windowStart, windowEnd, cursor, batchSize)
-			queryCancel()
-			if err != nil {
-				return err
+			if rawExport && time.Since(s.lastValidated) >= time.Second {
+				if err := job.validateRawLogExport(ctx); err != nil {
+					return err
+				}
+				s.lastValidated = time.Now()
 			}
-			s.gate.Observe(time.Since(started))
+			queryTimeout := logExportQueryTimeout(operation_setting.GetLogExportSetting().GetBatchQueryTimeoutSec())
+			queryCtx, queryCancel := context.WithTimeout(ctx, queryTimeout)
+			if s.reader != nil {
+				if err := s.reader.Validate(queryCtx, false); err != nil {
+					queryCancel()
+					return err
+				}
+			}
+			observation := exportQuerySample{windowSec: windowEnd - windowStart + 1, batchSize: batchSize}
+			started := time.Now()
+			var batch LogExportBatch
+			var err error
+			if s.reader != nil {
+				batch, err = s.reader.Read(queryCtx, windowStart, windowEnd, cursor, batchSize)
+			} else {
+				position, _ := cursor.(*logExportCursor)
+				if rawExport {
+					batch, err = scanRawLogExportBatch(queryCtx, job.Filters, windowStart, windowEnd, position, batchSize)
+				} else {
+					batch.Logs, err = scanLogExportBatch(queryCtx, job.Filters, s.fields, windowStart, windowEnd, position, batchSize)
+				}
+				batch.Scanned = len(batch.Logs)
+				batch.Done = batch.Scanned < batchSize
+				batch.Position = windowEnd
+				if len(batch.Logs) > 0 {
+					next := nextLogExportCursor(batch.Logs)
+					batch.Cursor, batch.Position = next, next.CreatedAt
+				}
+			}
+			queryErr := queryCtx.Err()
+			queryCancel()
+			queryCost := time.Since(started)
+			observation.cost = queryCost
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if errors.Is(err, ErrLogExportAccessChanged) || errors.Is(err, ErrLogExportRiskChanged) ||
+					(!errors.Is(err, context.DeadlineExceeded) && !errors.Is(queryErr, context.DeadlineExceeded)) {
+					return err
+				}
+				// Discard failed rows. Keep the last successful secondary cursor at
+				// the boundary second while shrinking only the unread interval.
+				unreadStart, unreadEnd := windowStart, windowEnd
+				if cursor != nil {
+					if reverse {
+						unreadEnd = min(windowEnd, cursorPosition)
+					} else {
+						unreadStart = max(windowStart, cursorPosition)
+					}
+				}
+				unreadSec := unreadEnd - unreadStart + 1
+				if windowEnd-windowStart+1 <= operation_setting.MinLogExportWindowSec {
+					return context.DeadlineExceeded
+				}
+				// A cursor near the end of a wide query may leave a short tail.
+				// Try that bounded tail once before applying the hard minimum.
+				windowSec = max(unreadSec/2, operation_setting.MinLogExportWindowSec)
+				maxWindowSec = min(maxWindowSec, windowSec)
+				if reverse {
+					windowEnd = unreadEnd
+					windowStart = max(unreadStart, windowEnd-windowSec+1)
+				} else {
+					windowStart = unreadStart
+					windowEnd = min(unreadEnd, windowStart+windowSec-1)
+				}
+				windowRows, windowBatches, maxQueryCost = 0, 0, 0
+				common.SysLog(fmt.Sprintf("log export: retrying timed-out read job=%s start=%d end=%d query_ms=%d", job.JobID, windowStart, windowEnd, queryCost.Milliseconds()))
+				observation.timedOut = true
+				s.gate.Observe(observation)
+				s.gate.Charge(ctx, 0, batchSize)
+				continue
+			}
+			maxQueryCost = max(maxQueryCost, queryCost)
+			observation.rowsRead = batch.Scanned
+			s.gate.Observe(observation)
 
 			if s.needChannelName {
-				fillLogExportChannelNames(ctx, logs, s.rctx.channelNames)
+				fillLogExportChannelNames(ctx, batch.Logs, s.rctx.channelNames)
 			}
 
-			job.ScannedRows += int64(len(logs))
-			if err := onBatch(logs); err != nil {
+			job.ScannedRows += int64(batch.Scanned)
+			if err := onBatch(batch); err != nil {
 				return err
 			}
 
 			// 为刚处理完的这一批付费。放在处理之后，让休眠成为两次数据库查询之间
 			// 真实的间隔；放在 break 之前，保证窗口最后那一批（必然读不满）也计费。
-			windowRows += len(logs)
+			windowRows += batch.Scanned
 			windowBatches++
-			s.gate.Charge(ctx, len(logs), batchSize)
+			s.gate.Charge(ctx, batch.Scanned, batchSize)
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			job.ThrottledMs = s.gate.ThrottledMs()
 
-			if len(logs) > 0 {
-				cursor = nextLogExportCursor(logs)
-			}
+			cursor = batch.Cursor
+			cursorPosition = batch.Position
 			// 进度取游标当前所在时刻；没有游标（窗口空/已扫完）才退回窗口末尾。
 			// 直接用 windowEnd 会让进度在窗口刚开始时就跳到窗口末尾，虚报进度。
-			position := windowEnd
-			if cursor != nil && cursor.CreatedAt > 0 {
-				position = cursor.CreatedAt
+			position := batch.Position
+			if batch.Done {
+				position = windowEnd
+			}
+			if reverse {
+				if batch.Done {
+					position = windowStart
+				}
+				position = exportEnd - position + exportStart
 			}
 			job.Progress = logExportProgress(exportStart, exportEnd, position)
 			if job.EmployeeScope != nil {
@@ -187,17 +299,25 @@ func (s *logExportScanner) runCustomer(ctx context.Context, onBatch func(logs []
 				UpdateLogExportJob(job)
 				s.lastSaved = time.Now()
 			}
-			if len(logs) < batchSize {
+			if batch.Done {
 				break
 			}
 		}
 
 		// 宽度自适应。只在窗口跑满整个宽度时调整——被 exportEnd 截断的最后一个
 		// 窗口行数天然偏少，拿它当「稀疏」的证据会得出错误结论。
-		if windowEnd < exportEnd {
-			windowSec = nextLogExportWindowSec(windowSec, cfgWindowSec, windowRows, windowBatches, lastBatchSize)
+		if windowEnd < exportEnd || (reverse && windowStart > exportStart) {
+			queryTimeout := logExportQueryTimeout(operation_setting.GetLogExportSetting().GetBatchQueryTimeoutSec())
+			windowSec = nextLogExportWindowSec(windowSec, cfgWindowSec, windowRows, windowBatches, lastBatchSize, maxQueryCost, queryTimeout)
 		}
-		windowStart = windowEnd + 1
+		if reverse {
+			if windowStart == exportStart {
+				break
+			}
+			remainingEnd = windowStart - 1
+		} else {
+			windowStart = windowEnd + 1
+		}
 	}
 	return nil
 }

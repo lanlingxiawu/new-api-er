@@ -128,7 +128,7 @@ func TestSysTask_FailSystemTask(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, reloaded)
 	assert.EqualValues(t, model.SystemTaskStatusFailed, reloaded.Status)
-	assert.Contains(t, reloaded.Error, "boom")
+	assert.Equal(t, "cleanup.failed", reloaded.Error)
 }
 
 type assertErr string

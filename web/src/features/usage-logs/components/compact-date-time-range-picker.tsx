@@ -36,6 +36,7 @@ interface CompactDateTimeRangePickerProps {
   onChange: (range: { start?: Date; end?: Date }) => void
   className?: string
   disabled?: boolean
+  maxRangeSec?: number
 }
 
 function toInputValue(date?: Date): string {
@@ -54,11 +55,28 @@ export function CompactDateTimeRangePicker({
   onChange,
   className,
   disabled = false,
+  maxRangeSec,
 }: CompactDateTimeRangePickerProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [draftStart, setDraftStart] = useState(toInputValue(start))
   const [draftEnd, setDraftEnd] = useState(toInputValue(end))
+  const draftStartDate = fromInputValue(draftStart)
+  const draftEndDate = fromInputValue(draftEnd)
+  const draftStartSec =
+    draftStartDate && Math.floor(draftStartDate.getTime() / 1000)
+  const draftEndSec = draftEndDate && Math.floor(draftEndDate.getTime() / 1000)
+  const invalidOrder =
+    draftStartSec === undefined ||
+    draftEndSec === undefined ||
+    draftStartSec <= 0 ||
+    draftEndSec < draftStartSec
+  const tooLong =
+    !invalidOrder &&
+    maxRangeSec !== undefined &&
+    draftEndSec - draftStartSec > maxRangeSec
+  // Other log filters retain their existing unrestricted selection behavior.
+  const invalidDraft = maxRangeSec !== undefined && (invalidOrder || tooLong)
 
   const label = useMemo(() => {
     if (!start && !end) return t('Date Range')
@@ -84,6 +102,7 @@ export function CompactDateTimeRangePicker({
   }
 
   const applyDraft = () => {
+    if (invalidDraft) return
     onChange({
       start: fromInputValue(draftStart),
       end: fromInputValue(draftEnd),
@@ -118,6 +137,14 @@ export function CompactDateTimeRangePicker({
     const range = presets[kind]
     setDraftStart(toInputValue(range.start))
     setDraftEnd(toInputValue(range.end))
+    if (
+      maxRangeSec !== undefined &&
+      Math.floor(range.end.getTime() / 1000) -
+        Math.floor(range.start.getTime() / 1000) >
+        maxRangeSec
+    ) {
+      return
+    }
     onChange(range)
     setOpen(false)
   }
@@ -160,6 +187,17 @@ export function CompactDateTimeRangePicker({
                 step={1}
                 value={draftStart}
                 aria-label={t('Start Time')}
+                min={
+                  maxRangeSec !== undefined && draftEndSec !== undefined
+                    ? toInputValue(new Date((draftEndSec - maxRangeSec) * 1000))
+                    : undefined
+                }
+                max={
+                  maxRangeSec !== undefined
+                    ? toInputValue(draftEndDate)
+                    : undefined
+                }
+                aria-invalid={invalidDraft || undefined}
                 onChange={(e) => setDraftStart(e.target.value)}
                 className='h-8 text-sm leading-5 tabular-nums'
               />
@@ -176,6 +214,19 @@ export function CompactDateTimeRangePicker({
                 step={1}
                 value={draftEnd}
                 aria-label={t('End Time')}
+                min={
+                  maxRangeSec !== undefined
+                    ? toInputValue(draftStartDate)
+                    : undefined
+                }
+                max={
+                  maxRangeSec !== undefined && draftStartSec !== undefined
+                    ? toInputValue(
+                        new Date((draftStartSec + maxRangeSec) * 1000)
+                      )
+                    : undefined
+                }
+                aria-invalid={invalidDraft || undefined}
                 onChange={(e) => setDraftEnd(e.target.value)}
                 className='h-8 text-sm leading-5 tabular-nums'
               />
@@ -230,8 +281,22 @@ export function CompactDateTimeRangePicker({
             </Button>
           </div>
 
+          {invalidDraft && (
+            <p role='alert' className='text-destructive text-sm'>
+              {tooLong && maxRangeSec !== undefined
+                ? t('The time range cannot exceed {{days}} days', {
+                    days: maxRangeSec / 86400,
+                  })
+                : t('Please select a valid time range')}
+            </p>
+          )}
           <div className='flex justify-end'>
-            <Button size='sm' className='h-8' onClick={applyDraft}>
+            <Button
+              size='sm'
+              className='h-8'
+              disabled={invalidDraft}
+              onClick={applyDraft}
+            >
               {t('Confirm')}
             </Button>
           </div>

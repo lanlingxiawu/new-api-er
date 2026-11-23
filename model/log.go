@@ -11,7 +11,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -104,7 +103,13 @@ func ensureLogRequestId(log *Log) {
 
 func createLog(log *Log) error {
 	ensureLogRequestId(log)
-	return LOG_DB.Create(log).Error
+	if err := LOG_DB.Create(log).Error; err != nil {
+		return err
+	}
+	if log.Type == LogTypeConsume || log.Type == LogTypeError {
+		QueueSecurityRelayIP(log.UserId, log.Ip, log.CreatedAt)
+	}
+	return nil
 }
 
 func clickHouseLogOrder(prefix string) string {
@@ -408,30 +413,28 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		))
 	}
 	otherStr := other.JSONString()
-	// 判断是否需要记录 IP
-	needRecordIp := contextWantsIPLog(c)
+	// Relay logs always capture the request IP, regardless of user settings.
+	ip := ""
+	if c.Request != nil {
+		ip = c.ClientIP()
+	}
 	log := &Log{
-		UserId:           userId,
-		Username:         username,
-		CreatedAt:        common.GetTimestamp(),
-		Type:             LogTypeError,
-		Content:          content,
-		PromptTokens:     0,
-		CompletionTokens: 0,
-		TokenName:        tokenName,
-		ModelName:        modelName,
-		Quota:            0,
-		ChannelId:        channelId,
-		TokenId:          tokenId,
-		UseTime:          useTimeSeconds,
-		IsStream:         isStream,
-		Group:            group,
-		Ip: func() string {
-			if needRecordIp {
-				return c.ClientIP()
-			}
-			return ""
-		}(),
+		UserId:            userId,
+		Username:          username,
+		CreatedAt:         common.GetTimestamp(),
+		Type:              LogTypeError,
+		Content:           content,
+		PromptTokens:      0,
+		CompletionTokens:  0,
+		TokenName:         tokenName,
+		ModelName:         modelName,
+		Quota:             0,
+		ChannelId:         channelId,
+		TokenId:           tokenId,
+		UseTime:           useTimeSeconds,
+		IsStream:          isStream,
+		Group:             group,
+		Ip:                ip,
 		RequestId:         requestId,
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
@@ -517,44 +520,32 @@ func buildConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) 
 	if createdAt == 0 {
 		createdAt = common.GetTimestamp()
 	}
-	needRecordIp := contextWantsIPLog(c)
+	ip := ""
+	if c.Request != nil {
+		ip = c.ClientIP()
+	}
 	content := params.Other.setContent(params.Content)
 	return &Log{
-		UserId:           userId,
-		Username:         c.GetString("username"),
-		CreatedAt:        createdAt,
-		Type:             LogTypeConsume,
-		Content:          content,
-		PromptTokens:     params.PromptTokens,
-		CompletionTokens: params.CompletionTokens,
-		TokenName:        params.TokenName,
-		ModelName:        params.ModelName,
-		Quota:            params.Quota,
-		ChannelId:        params.ChannelId,
-		TokenId:          params.TokenId,
-		UseTime:          params.UseTimeSeconds,
-		IsStream:         params.IsStream,
-		Group:            params.Group,
-		Ip: func() string {
-			if needRecordIp {
-				return c.ClientIP()
-			}
-			return ""
-		}(),
+		UserId:            userId,
+		Username:          c.GetString("username"),
+		CreatedAt:         createdAt,
+		Type:              LogTypeConsume,
+		Content:           content,
+		PromptTokens:      params.PromptTokens,
+		CompletionTokens:  params.CompletionTokens,
+		TokenName:         params.TokenName,
+		ModelName:         params.ModelName,
+		Quota:             params.Quota,
+		ChannelId:         params.ChannelId,
+		TokenId:           params.TokenId,
+		UseTime:           params.UseTimeSeconds,
+		IsStream:          params.IsStream,
+		Group:             params.Group,
+		Ip:                ip,
 		RequestId:         c.GetString(common.RequestIdKey),
 		UpstreamRequestId: c.GetString(common.UpstreamRequestIdKey),
 		Other:             params.Other.JSONString(),
 	}
-}
-
-// contextWantsIPLog uses only the user-setting snapshot installed by auth
-// middleware. It must never fall back to the main database on the relay path.
-func contextWantsIPLog(c *gin.Context) bool {
-	if c == nil {
-		return false
-	}
-	settingMap, ok := common.GetContextKeyType[dto.UserSetting](c, constant.ContextKeyUserSetting)
-	return ok && settingMap.RecordIpLog
 }
 
 const (
@@ -698,6 +689,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) int {
 // Username and Channel are administrator filters.
 type LogFilter struct {
 	LogId             int
+	UserID            int
 	Type              int
 	StartTimestamp    int64
 	EndTimestamp      int64
@@ -712,6 +704,9 @@ type LogFilter struct {
 
 func (f LogFilter) apply(tx *gorm.DB) (*gorm.DB, error) {
 	var err error
+	if f.UserID > 0 {
+		tx = tx.Where("logs.user_id = ?", f.UserID)
+	}
 	if f.Type != LogTypeUnknown {
 		tx = tx.Where("logs.type = ?", f.Type)
 	}
@@ -762,7 +757,7 @@ func GetAllLogsWithContext(ctx context.Context, filter LogFilter, startIdx int, 
 	if err != nil {
 		return nil, 0, err
 	}
-	hasNonTypeFilter := filter.ModelName != "" || filter.Username != "" || filter.TokenName != "" || filter.Channel != 0 || filter.LogId > 0 || filter.Group != "" || filter.RequestId != "" || filter.UpstreamRequestId != ""
+	hasNonTypeFilter := filter.UserID > 0 || filter.ModelName != "" || filter.Username != "" || filter.TokenName != "" || filter.Channel != 0 || filter.LogId > 0 || filter.Group != "" || filter.RequestId != "" || filter.UpstreamRequestId != ""
 	total, err = countLogsWithHourCache(ctx, filter.Type, filter.StartTimestamp, filter.EndTimestamp, hasNonTypeFilter, func() *gorm.DB { return tx.Model(&Log{}) })
 	if err != nil {
 		return nil, 0, err
@@ -843,7 +838,7 @@ type EmployeeCustomerLogFilter struct {
 	PageSize          int
 }
 
-func getEmployeeCustomerLogUserIds(employeeUserId, customerUserId int) ([]int, error) {
+func getEmployeeCustomerLogUserIds(ctx context.Context, employeeUserId, customerUserId int) ([]int, error) {
 	if employeeUserId <= 0 {
 		return nil, nil
 	}
@@ -852,7 +847,7 @@ func getEmployeeCustomerLogUserIds(employeeUserId, customerUserId int) ([]int, e
 		userIds = append(userIds, employeeUserId)
 	}
 	customerUserIds := make([]int, 0)
-	tx := DB.Model(&User{}).
+	tx := DB.WithContext(ctx).Model(&User{}).
 		Where("inviter_id = ? AND role = ?", employeeUserId, common.RoleCommonUser).
 		Where("id NOT IN (?)", DB.Model(&EmployeeProfile{}).Select("user_id").Where("status = ?", CustomerStatusEnabled))
 	if customerUserId > 0 {
@@ -881,7 +876,7 @@ func applyEmployeeCustomerLogUserScope(tx *gorm.DB, filter EmployeeCustomerLogFi
 	if LOG_DB == DB {
 		return applyEmployeeCustomerLogScope(tx, filter.EmployeeUserId, filter.CustomerUserId), false, nil
 	}
-	userIds, err := getEmployeeCustomerLogUserIds(filter.EmployeeUserId, filter.CustomerUserId)
+	userIds, err := getEmployeeCustomerLogUserIds(tx.Statement.Context, filter.EmployeeUserId, filter.CustomerUserId)
 	if err != nil {
 		return nil, false, err
 	}
@@ -997,7 +992,16 @@ func formatEmployeeLogs(logs []*Log) {
 }
 
 func GetEmployeeCustomerLogs(filter EmployeeCustomerLogFilter) (logs []*Log, total int64, err error) {
-	tx, empty, err := applyEmployeeCustomerLogUserScope(LOG_DB.Model(&Log{}), filter)
+	return GetEmployeeCustomerLogsWithContext(context.Background(), filter)
+}
+
+func GetEmployeeCustomerLogsWithContext(ctx context.Context, filter EmployeeCustomerLogFilter) (logs []*Log, total int64, err error) {
+	ctx, cancel := logQueryContext(ctx)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	tx, empty, err := applyEmployeeCustomerLogUserScope(LOG_DB.WithContext(ctx).Model(&Log{}), filter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1033,7 +1037,8 @@ func GetUserLogsWithContext(ctx context.Context, userId int, filter LogFilter, s
 	if err != nil {
 		return nil, 0, err
 	}
-	err = tx.Model(&Log{}).Limit(logSearchCountLimit).Count(&total).Error
+	countQuery := tx.Session(&gorm.Session{}).Model(&Log{}).Select("1").Limit(logSearchCountLimit)
+	err = LOG_DB.WithContext(ctx).Table("(?) AS bounded_logs", countQuery).Count(&total).Error
 	if err != nil {
 		common.SysError(common.LogText("failed to count user logs: %s", err.Error()))
 		return nil, 0, common.NewMessage("Failed to query logs")
@@ -1091,60 +1096,43 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 }
 
 func SumUsedQuotaWithContext(ctx context.Context, logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
+	return SumUsedQuotaWithFilter(ctx, LogFilter{
+		Type: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp,
+		ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel, Group: group,
+	})
+}
+
+// SumUsedQuotaWithFilter preserves the list's exact search filters while keeping
+// consumption-only quota and the live, last-60-seconds RPM/TPM semantics.
+func SumUsedQuotaWithFilter(ctx context.Context, filter LogFilter) (stat Stat, err error) {
 	ctx, cancel := logQueryContext(ctx)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return stat, err
 	}
-	tx := LOG_DB.WithContext(ctx).Table("logs").Select("COALESCE(sum(quota), 0) quota")
-
-	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.WithContext(ctx).Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
-
-	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
+	filter.Type = LogTypeConsume
+	tx, err := filter.apply(LOG_DB.WithContext(ctx).Table("logs").Select("COALESCE(sum(quota), 0) quota"))
+	if err != nil {
 		return stat, err
 	}
-	if rpmTpmQuery, err = applyExplicitLogTextFilter(rpmTpmQuery, "username", username); err != nil {
-		return stat, err
-	}
-	if tokenName != "" {
-		tx = tx.Where("token_name = ?", tokenName)
-		rpmTpmQuery = rpmTpmQuery.Where("token_name = ?", tokenName)
-	}
-	if startTimestamp != 0 {
-		tx = tx.Where("created_at >= ?", startTimestamp)
-	}
-	if endTimestamp != 0 {
-		tx = tx.Where("created_at <= ?", endTimestamp)
-	}
-	if tx, err = applyExplicitLogTextFilter(tx, "model_name", modelName); err != nil {
-		return stat, err
-	}
-	if rpmTpmQuery, err = applyExplicitLogTextFilter(rpmTpmQuery, "model_name", modelName); err != nil {
-		return stat, err
-	}
-	if channel != 0 {
-		tx = tx.Where("channel_id = ?", channel)
-		rpmTpmQuery = rpmTpmQuery.Where("channel_id = ?", channel)
-	}
-	if group != "" {
-		tx = tx.Where(logGroupCol+" = ?", group)
-		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
-	}
 
-	tx = tx.Where("type = ?", LogTypeConsume)
-	rpmTpmQuery = rpmTpmQuery.Where("type = ?", LogTypeConsume)
-
-	// 只统计最近60秒的rpm和tpm
-	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
+	// RPM/TPM use the same identity filters, but keep their live time window.
+	rateFilter := filter
+	rateFilter.StartTimestamp = time.Now().Add(-60 * time.Second).Unix()
+	rateFilter.EndTimestamp = 0
+	rpmTpmQuery, err := rateFilter.apply(LOG_DB.WithContext(ctx).Table("logs").
+		Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm"))
+	if err != nil {
+		return stat, err
+	}
 
 	// 额度是整个区间的聚合，无筛选时走小时缓存分解：命中后只需扫两端各 ≤1 小时。
 	// rpm/tpm 只看最近 60 秒，本来就便宜，维持实时查询。
-	// 注意这里不看 logType：本函数历来恒按 LogTypeConsume 统计（见下方 where），
+	// 注意这里不看传入的 Type：本函数历来恒按 LogTypeConsume 统计，
 	// 而缓存里的 Quota 也只累加消费类日志，两者口径一致。
-	hasNonTypeFilter := username != "" || tokenName != "" || modelName != "" ||
-		channel != 0 || group != ""
-	cachedQuota, quotaFromCache := sumConsumeQuotaWithHourCache(ctx, startTimestamp, endTimestamp, hasNonTypeFilter)
+	hasNonTypeFilter := filter.UserID > 0 || filter.Username != "" || filter.TokenName != "" || filter.ModelName != "" ||
+		filter.Channel != 0 || filter.Group != "" || filter.LogId > 0 || filter.RequestId != "" || filter.UpstreamRequestId != ""
+	cachedQuota, quotaFromCache := sumConsumeQuotaWithHourCache(ctx, filter.StartTimestamp, filter.EndTimestamp, hasNonTypeFilter)
 
 	// 执行查询。GORM v1.25.12 起 Scan 会清零目标结构体中未匹配的字段，
 	// 因此 rpm/tpm 必须扫进独立结构体再合并，否则会把已取到的 quota 覆盖为 0。
@@ -1174,14 +1162,23 @@ func SumUsedQuotaWithContext(ctx context.Context, logType int, startTimestamp in
 }
 
 func SumEmployeeCustomerUsedQuota(filter EmployeeCustomerLogFilter) (stat Stat, err error) {
-	tx, empty, err := applyEmployeeCustomerLogUserScope(LOG_DB.Table("logs").Select("sum(logs.quota) quota"), filter)
+	return SumEmployeeCustomerUsedQuotaWithContext(context.Background(), filter)
+}
+
+func SumEmployeeCustomerUsedQuotaWithContext(ctx context.Context, filter EmployeeCustomerLogFilter) (stat Stat, err error) {
+	ctx, cancel := logQueryContext(ctx)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return stat, err
+	}
+	tx, empty, err := applyEmployeeCustomerLogUserScope(LOG_DB.WithContext(ctx).Table("logs").Select("sum(logs.quota) quota"), filter)
 	if err != nil {
 		return stat, err
 	}
 	if empty {
 		return stat, nil
 	}
-	rpmTpmQuery, empty, err := applyEmployeeCustomerLogUserScope(LOG_DB.Table("logs").Select("count(*) rpm, sum(logs.prompt_tokens) + sum(logs.completion_tokens) tpm"), filter)
+	rpmTpmQuery, empty, err := applyEmployeeCustomerLogUserScope(LOG_DB.WithContext(ctx).Table("logs").Select("count(*) rpm, sum(logs.prompt_tokens) + sum(logs.completion_tokens) tpm"), filter)
 	if err != nil {
 		return stat, err
 	}

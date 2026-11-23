@@ -78,7 +78,7 @@ export function ExportFilterSelect(props: Props) {
     },
     enabled:
       !props.disabled &&
-      (['customer', 'username'].includes(props.field) ||
+      (['customer', 'username', 'channel'].includes(props.field) ||
         Boolean(props.start && props.end && props.end >= props.start)),
     getNextPageParam: (page) => page.next_cursor || undefined,
     staleTime: 30_000,
@@ -90,7 +90,9 @@ export function ExportFilterSelect(props: Props) {
         .map((item) => [item.value, item]) ?? []
     ).values(),
   ].map((item) =>
-    props.showId ? { ...item, label: `${item.label} · #${item.value}` } : item
+    props.showId && item.label !== item.value
+      ? { ...item, label: `${item.label} · #${item.value}` }
+      : item
   )
   const selectedQuery = useQuery({
     queryKey: [
@@ -123,7 +125,10 @@ export function ExportFilterSelect(props: Props) {
   if (resolved && !options.some((item) => item.value === props.value)) {
     options.unshift({
       ...resolved,
-      label: `${resolved.label} · #${resolved.value}`,
+      label:
+        resolved.label !== resolved.value
+          ? `${resolved.label} · #${resolved.value}`
+          : resolved.label,
     })
   }
   if (
@@ -143,6 +148,7 @@ export function ExportFilterSelect(props: Props) {
             id={id}
             disabled={props.disabled}
             options={options}
+            filterOptions={props.field !== 'channel'}
             value={props.value}
             placeholder={props.label}
             onSearchValueChange={setSearch}

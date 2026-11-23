@@ -220,12 +220,22 @@ export async function confirmPaymentCompliance() {
   return res.data
 }
 
-export async function startLogCleanupTask(targetTimestamp: number) {
+export async function startLogCleanupTask(
+  targetTimestamp: number,
+  scope: 'usage' | 'audit' = 'usage'
+) {
   const res = await api.post<SystemTaskResponse<LogCleanupTask>>(
     '/api/system-task/log-cleanup',
     null,
     {
-      params: { target_timestamp: targetTimestamp },
+      params:
+        scope === 'audit'
+          ? {
+              scope,
+              target_timestamp: 0,
+              audit_target_timestamp: targetTimestamp,
+            }
+          : { target_timestamp: targetTimestamp },
     }
   )
   return res.data

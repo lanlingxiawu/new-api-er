@@ -821,6 +821,11 @@ func UpdateOption(c *gin.Context) {
 			respondRelayErrorDisplayInvalid(c, err)
 			return
 		}
+		if errors.Is(err, operation_setting.ErrErrorLogCleanupSetting) {
+			logger.LogWarn(c, "invalid error log cleanup setting")
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
 		if option.Key == "GroupRetryTimes" || strings.HasPrefix(option.Key, "group_retry_guard_setting.") {
 			logger.LogError(c, "failed to update group retry protection: "+err.Error())
 			if errors.Is(err, operation_setting.ErrGroupRetryGuardInvalid) {

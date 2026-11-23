@@ -60,7 +60,7 @@ func parseAuditExportRequest(c *gin.Context, self bool) (*model.AuditExportFilte
 		return nil, opts, invalid
 	}
 	for key, value := range fields {
-		if string(value) == "null" || !slices.Contains([]string{"start_timestamp", "end_timestamp", "category", "success", "username", "request_id", "token_ref", "exclude_token_ref", "ip", "actor_type", "auth_method", "route", "route_missing", "ip_risk"}, key) || self && (key == "username" || key == "ip_risk") {
+		if string(value) == "null" || !slices.Contains([]string{"start_timestamp", "end_timestamp", "category", "success", "username", "request_id", "token_ref", "exclude_token_ref", "ip", "actor_type", "auth_method", "route", "route_missing", "ip_risk"}, key) || self && slices.Contains([]string{"username", "ip_risk", "actor_type", "route", "route_missing"}, key) {
 			return nil, opts, invalid
 		}
 	}
@@ -69,11 +69,14 @@ func parseAuditExportRequest(c *gin.Context, self bool) (*model.AuditExportFilte
 		return nil, opts, err
 	}
 	f.IP = strings.TrimSpace(f.IP)
-	if !validAuditFilterFields(f.AuditLogFilter) || !slices.Contains([]string{"", "abnormal", "attention", "high"}, f.IPRisk) {
+	if !validAuditFilterFields(f.AuditLogFilter) || !model.CanFilterAuditActor(f.ActorType, logExportRequestAccess(c).Role) || !slices.Contains([]string{"", "abnormal", "attention", "high"}, f.IPRisk) {
 		return nil, opts, invalid
 	}
 	if self {
 		f.UserId, f.SelfView = c.GetInt("id"), true
+		if !validAuditActivityFilter(f.AuditLogFilter) {
+			return nil, opts, invalid
+		}
 	}
 	if raw, ok := body["options"]; ok {
 		var options map[string]json.RawMessage
@@ -132,6 +135,9 @@ func CreateAuditLogExportJob(c *gin.Context) {
 	}
 	job := &model.LogExportJob{DataSource: model.LogExportDataAudit, SelfExport: self, JobID: model.NewLogExportJobID(), UserID: access.UserID, Username: c.GetString("username"), CreatorRole: access.Role, AuditFilters: f, Options: opts, Lang: i18n.GetLangFromContext(c), Format: model.LogExportFormatCSVGz, Mode: model.LogExportModeDetail,
 		Filters: model.LogExportFilter{UserId: f.UserId, StartTimestamp: f.StartTimestamp, EndTimestamp: f.EndTimestamp}}
+	if self {
+		job.AuditProjectionVersion = model.AuditActivityProjectionVersion
+	}
 	if view, _ := access.Permissions(job); !view {
 		respondLogExportManagementError(c, model.ErrEmployeeExportAccess)
 		return

@@ -2,11 +2,14 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strconv"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -19,6 +22,24 @@ func GetLogExportFilterOptions(c *gin.Context) {
 	field, keyword := c.Query("field"), c.Query("keyword")
 	if len(keyword) > 128 {
 		employeeExportError(c, model.ErrEmployeeExportInvalid)
+		return
+	}
+	if field == "channel" {
+		if employee {
+			employeeExportError(c, model.ErrEmployeeExportAccess)
+			return
+		}
+		items, next, err := model.LogExportChannelOptions(ctx, keyword, c.Query("cursor"))
+		if err != nil {
+			if errors.Is(err, model.ErrEmployeeExportInvalid) {
+				employeeExportError(c, err)
+			} else {
+				logger.LogError(c, "failed to list export channel options: "+err.Error())
+				common.ApiErrorI18n(c, i18n.MsgDatabaseError)
+			}
+			return
+		}
+		common.ApiSuccess(c, gin.H{"items": items, "next_cursor": next})
 		return
 	}
 	if field == "customer" || field == "username" {

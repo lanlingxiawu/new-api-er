@@ -5,7 +5,12 @@ import { useTranslation } from 'react-i18next'
 
 import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
-import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from '@/components/ui/field'
 import { handleServerError } from '@/lib/handle-server-error'
 
 import { CompactDateTimeRangePicker } from '../../components/compact-date-time-range-picker'
@@ -39,20 +44,22 @@ export function SelfExportSheet(props: {
       end: search.endTime ? new Date(search.endTime) : defaults.end,
     }
   })
-  const start = range.start?.getTime()
-  const end = range.end?.getTime()
+  const start = range.start && Math.floor(range.start.getTime() / 1000)
+  const end = range.end && Math.floor(range.end.getTime() / 1000)
   const maxRange = props.maxRangeSec ?? 30 * 86400
+  const tooLong =
+    start !== undefined && end !== undefined && end - start > maxRange
   const valid =
     start !== undefined &&
     end !== undefined &&
     start > 0 &&
     end >= start &&
-    end - start <= maxRange * 1000
+    !tooLong
   const create = useMutation({
     mutationFn: createSelfExportJob,
     onSuccess: () => {
       void queryClient.invalidateQueries({
-        queryKey: ['log-export-jobs', 'self'],
+        queryKey: ['log-export-jobs', 'usage', 'usage_self'],
       })
       props.onOpenChange(false)
     },
@@ -64,10 +71,8 @@ export function SelfExportSheet(props: {
       open={props.open}
       onOpenChange={props.onOpenChange}
       title={t('New Export')}
-      description={t(
-        'Export runs in the background. Download the compressed CSV when it is ready.'
-      )}
-      contentClassName='sm:max-w-md'
+      contentClassName='overflow-hidden sm:max-w-lg'
+      bodyClassName='space-y-4'
       footer={
         <>
           <Button variant='outline' onClick={() => props.onOpenChange(false)}>
@@ -80,8 +85,8 @@ export function SelfExportSheet(props: {
               if (!valid || start === undefined || end === undefined) return
               create.mutate({
                 filters: {
-                  start_timestamp: Math.floor(start / 1000),
-                  end_timestamp: Math.floor(end / 1000),
+                  start_timestamp: start,
+                  end_timestamp: end,
                   type: filters.type,
                   model_name: filters.model_name.trim() || undefined,
                   token_name: filters.token_name.trim() || undefined,
@@ -101,14 +106,31 @@ export function SelfExportSheet(props: {
       }
     >
       <FieldGroup>
-        <Field>
+        <Field data-invalid={!valid || undefined}>
           <FieldLabel>{t('Date Range')}</FieldLabel>
           <CompactDateTimeRangePicker
             start={range.start}
             end={range.end}
             onChange={setRange}
             disabled={create.isPending}
+            maxRangeSec={maxRange}
           />
+          {valid && (
+            <FieldDescription>
+              {t('The time range cannot exceed {{days}} days', {
+                days: maxRange / 86400,
+              })}
+            </FieldDescription>
+          )}
+          {!valid && (
+            <p role='alert' className='text-destructive text-sm'>
+              {tooLong
+                ? t('The time range cannot exceed {{days}} days', {
+                    days: maxRange / 86400,
+                  })
+                : t('Please select a valid time range')}
+            </p>
+          )}
         </Field>
         <Field>
           <FieldLabel htmlFor={`${id}-type`}>{t('Type')}</FieldLabel>
@@ -151,17 +173,6 @@ export function SelfExportSheet(props: {
       >
         {t('Clear filters')}
       </Button>
-      <p className='text-muted-foreground text-sm'>
-        {t(
-          'Choose up to {{days}} days. Only the filters shown here apply. Leave a field empty to include all values.',
-          { days: maxRange / 86400 }
-        )}
-      </p>
-      {!valid && (
-        <p role='alert' className='text-destructive text-sm'>
-          {t('Please select a valid time range')}
-        </p>
-      )}
     </Dialog>
   )
 }

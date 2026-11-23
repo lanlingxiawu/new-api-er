@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, RefreshCw, X } from 'lucide-react'
 import { useId, useState } from 'react'
@@ -13,7 +31,6 @@ import { Label } from '@/components/ui/label'
 import {
   Sheet,
   SheetContent,
-  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -23,6 +40,7 @@ import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/com
 import { LogTypeSelect } from '@/features/usage-logs/components/log-type-select'
 import { LOG_TYPE_ALL_VALUE } from '@/features/usage-logs/constants'
 import { useDebounce } from '@/hooks'
+import { handleServerError } from '@/lib/handle-server-error'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -106,11 +124,6 @@ export function EmployeeCustomerExport(props: {
         >
           <SheetHeader className='px-5 pb-4 sm:px-6'>
             <SheetTitle>{t('Export customer data')}</SheetTitle>
-            <SheetDescription>
-              {t(
-                'Exports run in the background and are throttled to protect live traffic.'
-              )}
-            </SheetDescription>
           </SheetHeader>
           <Tabs
             value={tab}
@@ -178,6 +191,13 @@ function EmployeeExportForm(props: {
   const template = props.capabilities.templates.find(
     (item) => item.key === templateId
   )
+  // Capabilities can refresh after a rejection while this form stays open.
+  // Hidden conditions must not remain in the request or block validation.
+  const activeTroubleshooting: TroubleshootingFilters = Object.fromEntries(
+    Object.entries(troubleshooting).filter(
+      ([key, value]) => template?.allowed_filters.includes(key) && value != null
+    )
+  )
   const start = Math.floor((range.start?.getTime() ?? 0) / 1000)
   const end = Math.floor((range.end?.getTime() ?? 0) / 1000)
   const validRange =
@@ -192,35 +212,34 @@ function EmployeeExportForm(props: {
     start_timestamp: start,
     end_timestamp: end,
     filters: {
-      ...filters,
       ...Object.fromEntries(
-        Object.entries(troubleshooting).filter(
-          ([key, value]) =>
-            template?.allowed_filters.includes(key) && value != null
+        Object.entries(filters).filter(([key]) =>
+          template?.allowed_filters.includes(key)
         )
       ),
+      ...activeTroubleshooting,
     },
   }
   const serialized = JSON.stringify(payload)
   const estimatePayload = useDebounce(serialized, 400)
   const validNumbers = [
-    troubleshooting.quota_min,
-    troubleshooting.completion_tokens_min,
-    troubleshooting.completion_tokens_max,
-    troubleshooting.use_time_min,
-    troubleshooting.min_retry_count,
+    activeTroubleshooting.quota_min,
+    activeTroubleshooting.completion_tokens_min,
+    activeTroubleshooting.completion_tokens_max,
+    activeTroubleshooting.use_time_min,
+    activeTroubleshooting.min_retry_count,
   ].every(
     (value) => value == null || (Number.isSafeInteger(value) && value >= 0)
   )
   const validBounds =
-    troubleshooting.completion_tokens_min == null ||
-    troubleshooting.completion_tokens_max == null ||
-    troubleshooting.completion_tokens_min <=
-      troubleshooting.completion_tokens_max
+    activeTroubleshooting.completion_tokens_min == null ||
+    activeTroubleshooting.completion_tokens_max == null ||
+    activeTroubleshooting.completion_tokens_min <=
+      activeTroubleshooting.completion_tokens_max
   const hasRowFilter = Boolean(
-    troubleshooting.anomaly_only ||
-    troubleshooting.anomaly_kinds?.length ||
-    troubleshooting.min_retry_count != null
+    activeTroubleshooting.anomaly_only ||
+    activeTroubleshooting.anomaly_kinds?.length ||
+    activeTroubleshooting.min_retry_count != null
   )
   const ready = Boolean(
     template &&
@@ -252,8 +271,8 @@ function EmployeeExportForm(props: {
       void client.invalidateQueries({ queryKey: ['employee-export-jobs'] })
       props.onCreated()
     },
-    // The HTTP client has already shown the error; refresh access in case it changed.
-    onError: () => {
+    onError: (error) => {
+      handleServerError(error)
       void client.invalidateQueries({
         queryKey: ['employee-export-capabilities', userId],
       })
@@ -424,7 +443,7 @@ function EmployeeExportForm(props: {
             {template && (
               <EmployeeTroubleshootingFilters
                 allowed={template.allowed_filters}
-                value={troubleshooting}
+                value={activeTroubleshooting}
                 onChange={setTroubleshooting}
                 anomalyKinds={props.capabilities.anomaly_kinds ?? []}
                 quotaPerUnit={props.capabilities.quota_per_unit}

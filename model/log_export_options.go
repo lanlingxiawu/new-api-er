@@ -14,6 +14,65 @@ type LogExportFilterOption struct {
 	Label string `json:"label"`
 }
 
+// LogExportChannelOptions searches channel metadata rather than sampled logs.
+// A numeric keyword also remains usable for historical logs after channel deletion.
+func LogExportChannelOptions(ctx context.Context, keyword, cursor string) ([]LogExportFilterOption, string, error) {
+	after := 0
+	if cursor != "" {
+		var err error
+		after, err = strconv.Atoi(cursor)
+		if err != nil || after < 0 {
+			return nil, "", ErrEmployeeExportInvalid
+		}
+	}
+	keyword = strings.TrimSpace(keyword)
+	query := DB.WithContext(ctx).Model(&Channel{}).Select("id, name").Where("id > ?", after).Order("id")
+	items := make([]LogExportFilterOption, 0, 50)
+	if keyword != "" {
+		pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(strings.ToLower(keyword)) + "%"
+		query = query.Where("LOWER(name) LIKE ? ESCAPE '!'", pattern)
+	}
+	id, idErr := strconv.Atoi(strings.TrimPrefix(keyword, "#"))
+	if idErr == nil && id > 0 {
+		query = query.Where("id <> ?", id)
+	}
+	if idErr == nil && id > 0 && after == 0 {
+		// Resolve the exact ID first so name matches cannot push it off page one.
+		var channel Channel
+		if err := DB.WithContext(ctx).Select("id, name").Where("id = ?", id).Find(&channel).Error; err != nil {
+			return nil, "", err
+		}
+		value := strconv.Itoa(id)
+		label := channel.Name
+		if label == "" {
+			label = value
+		}
+		items = append(items, LogExportFilterOption{Value: value, Label: label})
+	}
+	limit := 50 - len(items)
+	var channels []struct {
+		Id   int
+		Name string
+	}
+	if err := query.Limit(limit + 1).Find(&channels).Error; err != nil {
+		return nil, "", err
+	}
+	next := ""
+	if len(channels) > limit {
+		channels = channels[:limit]
+		next = strconv.Itoa(channels[limit-1].Id)
+	}
+	for _, channel := range channels {
+		value := strconv.Itoa(channel.Id)
+		label := channel.Name
+		if label == "" {
+			label = value
+		}
+		items = append(items, LogExportFilterOption{Value: value, Label: label})
+	}
+	return items, next, nil
+}
+
 // LogExportFilterOptions samples a bounded keyset page, never a full-table DISTINCT.
 func LogExportFilterOptions(ctx context.Context, filter LogExportFilter, field, keyword, cursor string, customerIDs []int) ([]LogExportFilterOption, string, error) {
 	fields := map[string]string{"model_name": "model_name", "token_name": "token_name", "group": logGroupCol, "channel": "channel_id"}
@@ -42,9 +101,8 @@ func LogExportFilterOptions(ctx context.Context, filter LogExportFilter, field, 
 		}
 		tx = tx.Where("logs.user_id IN ?", customerIDs)
 	}
-	if keyword != "" && field != "channel" {
-		tx = tx.Where("logs."+column+" LIKE ?", "%"+keyword+"%")
-	}
+	// Search within the candidate page below. Applying LIKE before LIMIT makes
+	// a missing keyword read the entire history window without a next cursor.
 	order := "logs.created_at, logs.id"
 	selected := "logs.id, logs.created_at, logs." + column
 	if usingClickHouseLogDB() {

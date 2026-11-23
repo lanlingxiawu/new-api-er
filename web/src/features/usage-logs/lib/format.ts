@@ -26,6 +26,7 @@ import {
 } from '@/features/pricing/lib/billing-expr'
 import { translateServerText } from '@/lib/server-error-message'
 
+import { auditActionLabel } from '../audit/lib/audit-action-labels'
 import type { UsageLog } from '../data/schema'
 import type { LogOtherData } from '../types'
 import { buildQuotaAuditOperation } from './quota-audit-operation'
@@ -782,7 +783,7 @@ export function renderAuditContent(
   const template = target
     ? AUDIT_TEMPLATES[op.action]
     : (AUDIT_TEMPLATES_NO_TARGET[op.action] ?? AUDIT_TEMPLATES[op.action])
-  if (!template) return null
+  if (!template) return auditActionLabel(op.action, t) ?? null
   const quotaOperation = buildQuotaAuditOperation(
     op.action,
     op.params ?? {},
@@ -791,6 +792,11 @@ export function renderAuditContent(
   )
   if (quotaOperation) {
     return `${quotaOperation.summary} · ${quotaOperation.description}`
+  }
+  // Older audit rows can omit template fields. Preserve retained values and
+  // identify missing evidence without exposing interpolation placeholders.
+  for (const match of template.matchAll(/\{\{(\w+)\}\}/g)) {
+    if (params[match[1]] == null) params[match[1]] = t('Not recorded')
   }
   return t(template, params)
 }

@@ -30,6 +30,16 @@ export type CleanupRun = {
   scanned: number
   status: 'preview' | 'pending' | 'running' | 'succeeded' | 'failed'
   error_key: string
+  can_resume?: boolean
+  progress?: {
+    phase: string
+    checkpoint_at: number
+    heartbeat_at: number
+    lease_valid: boolean
+    scan_mode?: string
+    cursor_id: number
+    snapshot_max_id: number
+  }
 }
 type CleanupResponse = { success: boolean; message: string; data: CleanupRun }
 
@@ -40,9 +50,17 @@ export async function previewDataCleanup(kind: CleanupKind, before: number) {
   )
   return requireServerSuccess(response.data).data
 }
-export async function startDataCleanup(previewId: string) {
+export async function startDataCleanup(previewId: string, resume = false) {
   const response = await api.post<CleanupResponse>('/api/data-cleanup', {
     preview_id: previewId,
+    resume,
+  })
+  return requireServerSuccess(response.data).data
+}
+export async function startErrorLogCleanup(before: number) {
+  const response = await api.post<CleanupResponse>('/api/data-cleanup', {
+    kind: 'error_logs',
+    before,
   })
   return requireServerSuccess(response.data).data
 }

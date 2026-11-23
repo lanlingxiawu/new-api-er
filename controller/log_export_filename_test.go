@@ -61,6 +61,32 @@ func TestLogExportFileBase_AdminRangeAndFilters(t *testing.T) {
 	assert.Equal(t, "Usage Logs_2026-09-01 to 2026-09-30_model gpt-4o", logExportFileBase(job))
 }
 
+func TestLogExportFileBase_QuotaIncludesZeroAndRootFilters(t *testing.T) {
+	job := fileNameJob("zh-CN")
+	job.DataSource = model.LogExportDataQuota
+	zero := 0
+	token := 9
+	job.QuotaFilters = &model.QuotaExportFilter{
+		Username:  "alice",
+		UserID:    &zero,
+		ModelName: "gpt-4o",
+		UseGroup:  "vip",
+		ChannelID: &zero,
+		TokenID:   &token,
+		NodeName:  "node-a",
+	}
+	assert.Equal(t, "额度数据_2026-09-01至2026-09-30_用户alice_模型gpt-4o_分组vip_渠道0_含其他筛选", logExportFileBase(job))
+
+	job = fileNameJob("zh-CN")
+	job.DataSource = model.LogExportDataQuota
+	job.QuotaFilters = &model.QuotaExportFilter{UserID: &zero, ChannelID: &zero}
+	assert.Equal(t, "额度数据_2026-09-01至2026-09-30_用户ID0_渠道0", logExportFileBase(job))
+
+	job = fileNameJob("en")
+	job.DataSource = model.LogExportDataQuota
+	assert.Equal(t, "Quota data_2026-09-01 to 2026-09-30", logExportFileBase(job))
+}
+
 func TestLogExportFileDateRange(t *testing.T) {
 	shanghai := time.FixedZone("CST", 8*3600)
 	at := func(day, hour, minute, second int) int64 {

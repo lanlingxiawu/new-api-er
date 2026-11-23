@@ -19,11 +19,13 @@ func selfExportFixture(t *testing.T) {
 	t.Helper()
 	if LOG_DB == nil {
 		previous := LOG_DB
+		previousGroup := logGroupCol
 		db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "logs.db")), &gorm.Config{})
 		require.NoError(t, err)
 		require.NoError(t, db.AutoMigrate(&Log{}))
 		LOG_DB = db
-		t.Cleanup(func() { sqlDB, _ := db.DB(); _ = sqlDB.Close(); LOG_DB = previous })
+		logGroupCol = "`group`"
+		t.Cleanup(func() { sqlDB, _ := db.DB(); _ = sqlDB.Close(); LOG_DB = previous; logGroupCol = previousGroup })
 	}
 	previousRedis, previousEnabled := common.RDB, common.RedisEnabled
 	server := miniredis.RunT(t)
@@ -135,5 +137,32 @@ func TestSelfLogExportMasksErrorDetails(t *testing.T) {
 		} else {
 			require.Equal(t, "private upstream failure", rows[1][0])
 		}
+	}
+}
+
+func TestSelfLogExportGroupRulesWithoutGroupColumn(t *testing.T) {
+	selfExportFixture(t)
+	withLiveRelayErrorDisplay(t, operation_setting.RelayErrorDisplaySetting{Enabled: true, Rules: `[{"groups":["vip"],"source":"any","action":"replace","message":"VIP busy"},{"source":"any","action":"replace","message":"Global busy"}]`})
+	for _, tc := range []struct{ name, group, other, want string }{
+		{"legacy", "vip", `{}`, "VIP busy"},
+		{"snapshot", "auto", `{"admin_info":{"relay_error_group":"vip"}}`, "VIP busy"},
+		{"unknown", "auto", `{}`, "Global busy"},
+		{"explicit unknown", "vip", `{"admin_info":{"relay_error_group":""}}`, "Global busy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := mkExportLog(t, func(l *Log) {
+				l.Type = LogTypeError
+				l.Group = tc.group
+				l.Other = tc.other
+				l.Content = "upstream failed"
+			})
+			job := newExportJobFor("", row.CreatedAt-1, row.CreatedAt+1, []string{"content"})
+			job.UserID, job.Filters.UserId, job.SelfExport = row.UserId, row.UserId, true
+			require.NoError(t, runExportJob(t, job))
+			rows, _ := readCSVGz(t, job.Parts[0].Path)
+			require.Len(t, rows, 2)
+			require.Len(t, rows[1], 1)
+			require.Equal(t, common.MessageWithRequestId(tc.want, row.RequestId), rows[1][0])
+		})
 	}
 }

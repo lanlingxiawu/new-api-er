@@ -1,5 +1,70 @@
 # 普通用户导出界面优化
 
+## 2026-11-16 修复：日期配置一致性与下拉裁切
+
+### Existing Logic and Related-Path Findings
+
+- `maintenance/log-settings-section.tsx` 保存 `log_setting.max_range_days`，页面说明它同时控制日志查询和导出；`setting/operation_setting/log_setting.go` 的字段注释也是这个约定。`controller/log.go:limitLogTimeRange` 已使用该值。
+- 普通用户导出的 `controller/log_export.go:createLogExportJob` 和 `GetLogExportJobs` 却调用 `LogExportSetting.GetUserMaxRangeSec()`，读取独立的旧配置（默认 30 天）。所以日志维护设置为 62 天后，导出列表仍下发 30 天，创建接口也拒绝超过 30 天的区间。这是配置接线不一致，不是管理员设置错误。
+- `SelfExportSheet` 已使用列表返回的 `max_range_sec` 禁用超限提交，但只给出笼统错误，提示位于表单末尾；`CompactDateTimeRangePicker` 原本没有范围限制，能够确认超限草稿。
+- `ComboboxInput` 把菜单 portal 到最近的 dialog 并使用弹窗局部坐标，保留模态点击正确性。但菜单只向下展开，不考虑 dialog 自身的可见高度，导致弹窗滚动条被撑出、菜单裁切。
+- 管理员及员工导出使用独立的 `GetAdminMaxRangeSec()`；本次修复普通用户流程，不改变这两个入口的限制。
+
+### 修复范围、契约与生命周期
+
+恢复普通用户导出与日志维护页面已有的约定：`GetUserMaxRangeSec()` 读取 `GetLogSetting().MaxRangeSeconds()`，列表下发和创建校验沿用同一个 getter。旧 `user_max_range_sec` 序列化字段保留兼容，但不再影响有效限制；运行参数表单移除该重复输入，避免保存一个无效的限额。无新配置、接口、SQL 表、索引或迁移。
+
+按用户后续要求，旧输入位置增加“运维 → 日志维护 → 日志最长时间范围（天）”说明；有该页面查看权限的管理员可直接跳转。七种语言使用实际界面名称，不要求用户了解配置键。
+
+数据流仍为已保存设置 → 普通用户导出列表 `GET /api/log/self/export/jobs` 的 `max_range_sec` → 弹窗草稿与选择器校验 → `POST /api/log/self/export/jobs` 再次校验 → 既有后台任务。路由仍要求用户认证，服务端仍强制当前用户 ID、允许的筛选字段及用户可见列。设置修改影响后续创建和刷新后的界面；已运行的任务保持原范围。提交时配置刚被收紧，沿用现有服务端错误反馈并保留草稿。
+
+日期选择器增加可选 `maxRangeSec`，仅普通用户导出传入。输入框显示关联的最早/最晚时间，确认前拒绝不完整、倒置或超限草稿；超限快捷区间保留为草稿并提示修正，不能直接应用。提交与后端统一按 Unix 秒计算边界。未来日期规则不变，此次没有添加“不得晚于今天”的限制。复用现有七语言文案，把上限说明和错误放到日期字段旁。
+
+继续复用业务 `Dialog` 和 `ComboboxInput`。普通用户弹窗适度加宽、仅正文滚动、底部按钮保持可见；下拉按弹窗和视口可用空间翻转，并约束高度，长列表在菜单内滚动。搜索、历史值输入、令牌分页、失败重试与焦点行为保留。
+
+### Main Chain Impact / Shared Resource Audit
+
+没有 relay goroutine、新中间件、同步 DB/Redis 操作或新后台工作。配置读取沿用内存设置；候选数据沿用现有 API、分页与按用户隔离的 Query 缓存。修改时间跨度只改变后台扫描覆盖的时间段，原有任务并发、批次、限速、查询超时和文件分片限制保持不变。后台导出仍读取与 relay 日志写入共享的 logs / LOG_DB 池；本次不添加查询、不扩大单批规模或并发，不新增连接池或锁。前端 ResizeObserver 和 scroll/resize 监听仅下拉打开时存在，关闭时释放。
+
+### 验证范围
+
+首轮回归覆盖日志维护设为 62 天而旧导出配置仍为 30 天时的列表能力、创建校验（上限前一秒、正好上限、超一秒），以及随后收紧为 7 天；该用例不启动导出 worker。前端覆盖截图的 46 天区间、日期草稿边界与已有筛选行为；下拉覆盖正常位置、短弹窗翻转、限高、选择及滚动跟随。后续按用户要求补充真实 worker 与文件下载验证，见下节；不以历史部署结果代替本次验证。
+
+### 本次本地验证
+
+- `bun run test src/components/ui src/features/usage-logs src/features/system-settings/maintenance/__tests__/log-settings.test.tsx --maxWorkers=4`：54 个文件、655 项通过。默认并发与构建同时运行时曾有两项候选选择断言失败；该文件单独重跑 4 项通过，限制并发后完整相关测试集通过。没有修改这些断言；测试环境已有 `window.scrollTo` 未实现提示。
+- `bun x tsgo -b`、`bun run lint` 和 8 个修改文件的 `oxfmt --check` 通过。lint 仍有 7 条既有警告。仓库 `bun run typecheck` 脚本调用 `bun check -b`，当前 Bun 报 `Script not found "check"`，因此直接运行已安装的 TypeScript 原生检查器 `tsgo -b`。
+- `go test ./controller -run '^TestSelfLogExportUsesLogMaintenanceRange$' -count=1` 与 `go test ./setting/operation_setting -run '^TestLogExportSetting' -count=1` 通过。控制器测试显式清空 `SQL_DSN`/`LOG_SQL_DSN`，仅使用独立 miniredis 验证列表契约及入参校验，没有启动 worker 或接触业务数据库；无 SQL/迁移变更，未运行数据库矩阵。
+- 七种语言各新增一条位置说明，`bun run i18n:sync` 通过；与本次修改前的工作区快照比较，没有改动其他翻译键，UTF-8 无 BOM。
+- 最终 `bun run build` 通过（10.7 秒），日志保存在 `_local/export-ui-build.log`。
+- 本次仅修改本地代码，没有部署服务器或执行真实用户导出。
+
+### 2026-11-16 实际导出链路复核
+
+追踪了创建、任务保存、后台扫描、文件写入和下载的实际代码：
+
+- `controller/log_export.go:createLogExportJob` 在创建前使用已修复的 `GetUserMaxRangeSec()` 校验普通用户跨度，`buildLogExportFilter` 原样保存起止秒数，并强制当前用户 ID。`model/log_export_job.go:CreateLogExportJob` 把筛选条件存入 Redis，`StartLogExport` 启动现有 worker。
+- `model/log_export_scanner.go:runCustomer` 使用任务的 `Filters.StartTimestamp` / `EndTimestamp`，按闭区间窗口从早到晚完整推进，相邻窗口从上一窗口结束后的下一秒开始。窗口宽度上限 1 天只约束单次扫描，不是整个导出的最大跨度。扫描器没有另一个 30 天限制，也没有重新按日志查询的默认日期截断。
+- `model/log_export_scan.go:scanLogExportBatch` 按窗口上下界、当前用户及类型/模型/令牌/分组筛选，使用 `(created_at, id)` 游标翻页。`writeLogExport` 按现有分片规则写 CSV.GZ；下载读取已完成分片，不重新查询或收缩时间范围。管理员/员工仍走各自已有创建校验。
+
+新增 `controller/log_export_self_test.go:TestSelfLogExportConfiguredRangeThroughDownload`，直接调用项目控制器，使用真实数据库、Redis、异步 worker、压缩文件和下载处理器，最终解压并精确比对 CSV 行内容与顺序。旧用户上限刻意保留 30 天，管理员上限设为 1 天，验证普通用户只受日志维护的配置约束：
+
+- 配置 62 天：正好 62 天的任务成功，9 条匹配日志分为 3 个压缩分片并全部下载；包含早于 30 天的记录、起止边界及扫描窗口边界，没有重复或遗漏。
+- 同一进程将配置收紧为 7 天：新任务只导出该区间的 3 条日志、1 个分片。
+- 两个配置下，超过上限 1 秒的创建请求都在启动 worker 前被拒绝。
+- 区间前后各 1 秒、另一用户以及类型/模型/令牌/分组分别不匹配的日志均不在下载结果中。测试按行清理 fixture，文件使用独立临时目录。
+
+这是控制器到实际存储、后台执行及文件交付的集成测试；没有经过完整 HTTP 路由/登录中间件或浏览器，不据此宣称部署环境的页面端到端验收完成。生产代码无需再改扫描和写文件逻辑，修复点仍为统一普通用户的配置 getter。
+
+实际运行使用独立本地 Docker 容器：主库 MySQL 26.10.0；日志库分别为 PostgreSQL 18.7 和另一独立 MySQL 数据库；Redis 7.4.11。通过临时环境变量设置 `SQL_DSN`、`LOG_SQL_DSN`、`REDIS_CONN_STRING`，没有使用生产或共享开发库。命令均加 `-count=1 -v -timeout=180s`：
+
+| 命令 | PostgreSQL 日志库 | MySQL 日志库 |
+| --- | --- | --- |
+| `go test ./controller -run 'LogExport'` | 43 项通过，0 跳过，3.235 秒 | 43 项通过，0 跳过，3.237 秒 |
+| `go test ./model -run 'SelfLogExport\|WriteLogExport\|ExportBatchReleasesConnection\|ExportTotalTimeout'` | 25 项通过，0 跳过，8.153 秒 | 25 项通过，0 跳过，8.192 秒 |
+
+每种日志库共 68 个顶层用例通过，覆盖新增下载链路及既有创建限制、用户可见列、分批/窗口边界、文件分片、取消和超时。日志保存在 `_local/export-range-{postgres,mysql}-{controller,model}.log`；额外的单项首跑记录为 `_local/export-range-pg-focused.log`。没有改动数据库模型、SQL 或迁移，本轮没有执行迁移升级矩阵或大数据量压测。
+
 2026-10-27。用户已确认实施检查中提出的五项优化。
 
 ## 目标与范围

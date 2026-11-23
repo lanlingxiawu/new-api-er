@@ -16,12 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import * as z from 'zod'
+import { zodResolver } from '@hookform/resolvers/zod'
 import { useEffect, useMemo, useRef } from 'react'
 import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import * as z from 'zod'
+
+import { numericPresetFieldProps } from '@/components/numeric-preset-field'
+import { NumericPresetInput } from '@/components/numeric-preset-input'
 import {
   Form,
   FormControl,
@@ -31,10 +34,9 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
-import { numericPresetFieldProps } from '@/components/numeric-preset-field'
-import { NumericPresetInput } from '@/components/numeric-preset-input'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+
 import {
   SettingsForm,
   SettingsSwitchContent,
@@ -58,11 +60,11 @@ import {
 const schema = z.object({
   log_query_setting: z.object({
     stat_cache_enabled: z.boolean(),
-    stat_cache_ttl_hours: z.number().int().min(1),
-    current_hour_ttl_sec: z.number().int().min(0),
+    stat_cache_ttl_hours: z.number().int().min(1).max(8760),
+    current_hour_ttl_sec: z.number().int().min(0).max(300),
     warm_enabled: z.boolean(),
-    warm_hours: z.number().int().min(0),
-    query_timeout_ms: z.number().int().min(1000),
+    warm_hours: z.number().int().min(0).max(720),
+    query_timeout_ms: z.number().int().min(1000).max(60000),
   }),
 })
 
@@ -201,6 +203,7 @@ export function LogQuerySection({ defaultValues }: LogQuerySectionProps) {
                   <NumericPresetInput
                     presets={[{ value: 0, label: 'Always count in real time' }]}
                     min={1}
+                    max={300}
                     {...numericPresetFieldProps(field)}
                   />
                 </FormControl>
@@ -226,7 +229,8 @@ export function LogQuerySection({ defaultValues }: LogQuerySectionProps) {
                     type='number'
                     inputMode='numeric'
                     min={1}
-                    step={24}
+                    max={8760}
+                    step={1}
                     {...safeNumberFieldProps(field)}
                   />
                 </FormControl>
@@ -275,6 +279,7 @@ export function LogQuerySection({ defaultValues }: LogQuerySectionProps) {
                       { value: 0, label: 'Only hours finished from now on' },
                     ]}
                     min={1}
+                    max={720}
                     {...numericPresetFieldProps(field)}
                   />
                 </FormControl>
@@ -300,6 +305,7 @@ export function LogQuerySection({ defaultValues }: LogQuerySectionProps) {
                     type='number'
                     inputMode='numeric'
                     min={1000}
+                    max={60000}
                     step={1000}
                     {...safeNumberFieldProps(field)}
                   />

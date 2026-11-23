@@ -46,6 +46,7 @@ type ConfigGroupModule =
   | 'rate_limit_setting'
   | 'db_pool_setting'
   | 'user_session_setting'
+  | 'login_protection_setting'
   | 'relay_timeout_setting'
   | 'probe_routing_setting'
   | 'channel_daily_limit_setting'

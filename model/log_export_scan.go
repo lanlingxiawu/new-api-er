@@ -135,8 +135,8 @@ func applyLogExportFilter(tx *gorm.DB, filter LogExportFilter) (*gorm.DB, error)
 		tx = tx.Where("logs.user_id = ?", filter.UserId)
 	}
 
-	// 数值条件下推 SQL：它们是 logs 表真实列，加在已有的时间窗口 range scan 之上
-	// 只是多一个过滤谓词，不增加扫描量，还能减少返回的行数。
+	// 数值条件下推 SQL，可减少返回行数；高选择性条件仍可能为凑够 LIMIT
+	// 读取大量索引项和数据页。返回行数不能替代查询耗时或数据库实际扫描量。
 	// 刻意不为它们建索引——永远与时间窗口同时出现，而 logs 是关系链路的写入目标，
 	// 多一个索引就是多一份写入放大。
 	if filter.Charged != nil {
@@ -207,8 +207,8 @@ func logExportSelectClause(fields []string) string {
 
 // scanLogExportBatch 取一批日志。
 //
-// 走 (created_at, id) 正序 keyset，命中现有复合索引 idx_created_at_id；带 type
-// 过滤时命中 idx_created_at_type。游标条件用 `a > ? OR (a = ? AND b > ?)` 的 OR
+// 走 (created_at, id) 正序 keyset，可利用现有时间、类型及用户复合索引；
+// 实际访问路径由数据库优化器选择。游标条件用 `a > ? OR (a = ? AND b > ?)` 的 OR
 // 形式而非行值比较，SQLite/MySQL/PostgreSQL 三库通用。
 //
 // 调用方按时间窗口切分区间（见 runLogExport），把单次扫描的索引区间限死，
@@ -221,6 +221,22 @@ func scanLogExportBatch(
 	cursor *logExportCursor,
 	limit int,
 ) ([]*Log, error) {
+	tx, err := logExportBatchQuery(ctx, filter, fields, windowStart, windowEnd, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	var logs []*Log
+	err = tx.Find(&logs).Error
+	return logs, err
+}
+
+// logExportBatchQuery shares filtering and keyset boundaries across public and raw projections.
+func logExportBatchQuery(ctx context.Context, filter LogExportFilter, fields []string, windowStart, windowEnd int64, cursor *logExportCursor, limit int) (*gorm.DB, error) {
+	if cursor != nil {
+		// Keep the secondary cursor for unread rows in this second, while letting
+		// the time index skip the already consumed prefix of the window.
+		windowStart = max(windowStart, cursor.CreatedAt)
+	}
 	tx := LOG_DB.WithContext(ctx).Model(&Log{}).
 		Where("logs.created_at >= ? AND logs.created_at <= ?", windowStart, windowEnd)
 
@@ -249,12 +265,7 @@ func scanLogExportBatch(
 		order = "logs.created_at asc, logs.request_id asc"
 	}
 
-	var logs []*Log
-	err = tx.Select(logExportSelectClause(ensureCursorFields(fields))).Order(order).Limit(limit).Find(&logs).Error
-	if err != nil {
-		return nil, err
-	}
-	return logs, nil
+	return tx.Select(logExportSelectClause(ensureCursorFields(fields))).Order(order).Limit(limit), nil
 }
 
 // nextLogExportCursor 从一批结果的末行取出下一页游标。

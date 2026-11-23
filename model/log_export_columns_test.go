@@ -398,6 +398,24 @@ func TestResolveLogExportColumns_RootOnlyDroppedForAdmin(t *testing.T) {
 	assert.ErrorIs(t, err, ErrLogExportNoColumns)
 }
 
+func TestLogExportColumns_CompleteFieldsRequiresExplicitRootSelection(t *testing.T) {
+	ordinary, ok := LookupBuiltinLogExportTemplate(LogExportTemplateFull)
+	require.True(t, ok)
+	require.NotContains(t, ordinary.Columns, LogExportRawColumn)
+	complete, ok := LookupBuiltinLogExportTemplate(LogExportTemplateFullRaw)
+	require.True(t, ok)
+	require.Contains(t, complete.Columns, LogExportRawColumn)
+	for _, role := range []int{0, common.RoleCommonUser, common.RoleAdminUser} {
+		_, err := ResolveLogExportColumnsForRole([]string{"quota", " log_raw "}, role)
+		require.ErrorIs(t, err, ErrLogExportRawForbidden)
+	}
+	set, err := ResolveLogExportColumnsForRole([]string{LogExportRawColumn}, common.RoleRootUser)
+	require.NoError(t, err)
+	require.Contains(t, set.SelectFields(), "content")
+	require.Contains(t, set.SelectFields(), "other")
+	require.Contains(t, set.SelectFields(), "upstream_request_id")
+}
+
 // root_info 里的任务诊断只有 root 能导出，且必须真的从 root_info 取值。
 func TestLogExportExtract_RootInfoColumns(t *testing.T) {
 	other := NewLogOther()

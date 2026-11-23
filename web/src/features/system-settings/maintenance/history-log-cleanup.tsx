@@ -16,21 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useEffect, useEffectEvent, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { DateTimePicker } from '@/components/datetime-picker'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { formatTimestampToDate } from '@/lib/format'
@@ -77,126 +68,150 @@ function isActiveLogCleanupTask(task: LogCleanupTask | null) {
  * The history log module of the log maintenance page. It deletes the logs
  * created before a chosen time as a background task and shows its progress.
  */
-export function HistoryLogCleanup() {
+export function HistoryLogCleanup({
+  scope = 'usage',
+  onComplete,
+}: {
+  scope?: 'usage' | 'audit'
+  onComplete?: () => void
+}) {
   const { t } = useTranslation()
   const titleId = useId()
   const [purgeDate, setPurgeDate] = useState<Date | undefined>(() =>
     getDateDaysAgo(30)
   )
-  const [isStartingLogCleanup, setIsStartingLogCleanup] = useState(false)
-  const [logCleanupTask, setLogCleanupTask] = useState<LogCleanupTask | null>(
-    null
-  )
-  const [showConfirmDialog, setShowConfirmDialog] = useState(false)
+  const [isStarting, setIsStarting] = useState(false)
+  const [task, setTask] = useState<LogCleanupTask | null>(null)
+  const [showConfirm, setShowConfirm] = useState(false)
+  const [loadingCurrent, setLoadingCurrent] = useState(true)
+  const [progressError, setProgressError] = useState(false)
+  const [retry, setRetry] = useState(0)
+  const notifyComplete = useEffectEvent(() => onComplete?.())
+  const audit = scope === 'audit'
+  const actionLabel = audit ? t('Clean audit logs') : t('Clean logs')
 
   useEffect(() => {
     let cancelled = false
-
-    async function fetchCurrentLogCleanupTask() {
+    async function fetchCurrent() {
+      setLoadingCurrent(true)
       try {
         const res = await getCurrentLogCleanupTask()
-        if (!cancelled && res.success && res.data) {
-          setLogCleanupTask(res.data)
+        if (cancelled) return
+        if (!res.success) throw new Error('cleanup progress unavailable')
+        setProgressError(false)
+        if (res.data) {
+          setTask(res.data)
+          if ((res.data.payload?.scope ?? 'usage') === scope) {
+            const timestamp =
+              scope === 'audit'
+                ? res.data.payload?.audit_target_timestamp
+                : res.data.payload?.target_timestamp
+            if (timestamp) setPurgeDate(new Date(timestamp * 1000))
+          }
+        } else if (retry > 0) {
+          // A completed task may have been removed from history while polling
+          // failed. An explicit retry must release the stale busy state.
+          setTask((previous) =>
+            isActiveLogCleanupTask(previous) ? null : previous
+          )
         }
       } catch {
-        /* ignore */
+        if (!cancelled) setProgressError(true)
+      } finally {
+        if (!cancelled) setLoadingCurrent(false)
       }
     }
-
-    fetchCurrentLogCleanupTask()
-
+    void fetchCurrent()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [retry, scope])
 
-  const purgeTimestamp = useMemo(() => {
-    if (!purgeDate) return null
-    return Math.floor(purgeDate.getTime() / 1000)
-  }, [purgeDate])
-
-  const formattedPurgeDate = useMemo(() => {
-    if (!purgeDate) return ''
-    return formatTimestampToDate(purgeDate.getTime(), 'milliseconds')
-  }, [purgeDate])
-
-  const logCleanupActive = isActiveLogCleanupTask(logCleanupTask)
-  const logCleanupState = logCleanupTask?.state
-  const logCleanupProgress = Math.min(
-    100,
-    Math.max(0, logCleanupState?.progress ?? 0)
-  )
-  const logCleanupProcessed = logCleanupState?.processed ?? 0
-  const logCleanupTotal = logCleanupState?.total ?? 0
-  const logCleanupTaskId = logCleanupTask?.task_id
+  const active = isActiveLogCleanupTask(task)
+  const taskId = task?.task_id
+  const taskIsAudit = task?.payload?.scope === 'audit'
+  const taskMatchesScope = (task?.payload?.scope ?? 'usage') === scope
+  const taskTimestamp = taskIsAudit
+    ? task?.payload?.audit_target_timestamp
+    : task?.payload?.target_timestamp
+  const otherScopeActive = active && !taskMatchesScope
+  const progress = Math.min(100, Math.max(0, task?.state?.progress ?? 0))
+  const purgeTimestamp = purgeDate ? Math.floor(purgeDate.getTime() / 1000) : 0
+  const invalidDate =
+    !Number.isFinite(purgeTimestamp) ||
+    purgeTimestamp <= 0 ||
+    purgeTimestamp > Date.now() / 1000
+  const formattedDate = invalidDate ? '' : formatTimestampToDate(purgeTimestamp)
 
   useEffect(() => {
-    if (!logCleanupTaskId || !logCleanupActive) return
-
+    if (!taskId || !active) return
     let cancelled = false
+    let inFlight = false
     const interval = window.setInterval(async () => {
+      if (inFlight) return
+      inFlight = true
       try {
-        const res = await getSystemTask(logCleanupTaskId)
-        if (cancelled || !res.success || !res.data) return
-
-        setLogCleanupTask(res.data)
+        const res = await getSystemTask(taskId)
+        if (cancelled) return
+        if (!res.success || !res.data) {
+          throw new Error('cleanup progress unavailable')
+        }
+        setProgressError(false)
+        setTask(res.data)
         if (!isActiveLogCleanupTask(res.data)) {
+          window.clearInterval(interval)
+          notifyComplete()
+          if ((res.data.payload?.scope ?? 'usage') !== scope) return
           if (res.data.status === 'succeeded') {
             const count =
               res.data.result?.deleted_count ?? res.data.state?.processed ?? 0
-            toast.success(
-              count > 0
-                ? t('{{count}} log entries removed.', { count })
-                : t('No log entries matched the selected time.')
-            )
+            let message = t('No log entries matched the selected time.')
+            if (count > 0) {
+              message =
+                scope === 'audit'
+                  ? t('{{count}} audit log entries removed.', { count })
+                  : t('{{count}} log entries removed.', { count })
+            }
+            toast.success(message)
           } else if (res.data.status === 'failed') {
-            handleServerError(res.data, t('Failed to clean logs'))
+            toast.error(t('Failed to clean logs'))
           }
         }
       } catch {
-        /* keep polling */
+        if (!cancelled) setProgressError(true)
+      } finally {
+        inFlight = false
       }
     }, 1000)
-
     return () => {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [logCleanupActive, logCleanupTaskId, t])
-
-  const handleRequestCleanLogs = () => {
-    if (!purgeTimestamp) {
-      toast.error(t('Select a timestamp before clearing logs.'))
-      return
-    }
-
-    setShowConfirmDialog(true)
-  }
+  }, [active, taskId, scope, t])
 
   const handleCleanLogs = async () => {
-    if (!purgeTimestamp) {
-      toast.error(t('Select a timestamp before clearing logs.'))
+    if (isStarting || active) return
+    if (invalidDate) {
+      toast.error(t('Choose a valid time that is not in the future.'))
       return
     }
-
-    setIsStartingLogCleanup(true)
+    setIsStarting(true)
     try {
-      const res = await startLogCleanupTask(purgeTimestamp)
-      if (!res.success) {
+      const res = await startLogCleanupTask(purgeTimestamp, scope)
+      if (!res.success || !res.data) {
         throw createServerError(res, t('Failed to clean logs'))
       }
-      if (!res.data) {
-        throw new Error(t('Failed to clean logs'))
-      }
-      setLogCleanupTask(res.data)
-      setShowConfirmDialog(false)
-      toast.success(t('Log cleanup task started.'))
+      setTask(res.data)
+      setShowConfirm(false)
+      toast.success(
+        audit
+          ? t('Audit log cleanup task started.')
+          : t('Log cleanup task started.')
+      )
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : t('Failed to clean logs')
-      handleServerError(error, message)
+      handleServerError(error, t('Failed to clean logs'))
     } finally {
-      setIsStartingLogCleanup(false)
+      setIsStarting(false)
     }
   }
 
@@ -208,19 +223,29 @@ export function HistoryLogCleanup() {
     >
       <div>
         <h4 id={titleId} className='font-medium'>
-          {t('Clean history logs')}
+          {audit ? t('Clean audit logs') : t('Clean history logs')}
         </h4>
-        <p className='text-muted-foreground mt-1 text-xs'>
-          {t('Remove all log entries created before the selected timestamp.')}
-        </p>
       </div>
-      <DateTimePicker value={purgeDate} onChange={setPurgeDate} />
+      <fieldset disabled={active || isStarting}>
+        <DateTimePicker value={purgeDate} onChange={setPurgeDate} />
+      </fieldset>
+      {invalidDate && (
+        <p role='alert' className='text-destructive text-sm'>
+          {t('Choose a valid time that is not in the future.')}
+        </p>
+      )}
+      {loadingCurrent && (
+        <p role='status' className='text-muted-foreground text-sm'>
+          {t('Loading...')}
+        </p>
+      )}
       <div className='flex flex-wrap gap-3'>
         {quickSelectOptions.map((option) => (
           <Button
             key={option.label}
             type='button'
             variant='outline'
+            disabled={active || isStarting}
             onClick={() => setPurgeDate(option.getValue())}
           >
             {t(option.label)}
@@ -229,67 +254,99 @@ export function HistoryLogCleanup() {
         <Button
           type='button'
           variant='destructive'
-          onClick={handleRequestCleanLogs}
-          disabled={isStartingLogCleanup || logCleanupActive}
+          onClick={() => setShowConfirm(true)}
+          disabled={
+            loadingCurrent ||
+            progressError ||
+            isStarting ||
+            active ||
+            invalidDate
+          }
         >
-          {isStartingLogCleanup || logCleanupActive
+          {isStarting || (active && taskMatchesScope)
             ? t('Cleaning...')
-            : t('Clean logs')}
+            : actionLabel}
         </Button>
       </div>
-      {logCleanupTask && (
+      {otherScopeActive && (
+        <p role='status' className='text-muted-foreground text-sm'>
+          {t('Another log cleanup is running. Wait for it to finish.')}
+        </p>
+      )}
+      {progressError && (
+        <div
+          role='alert'
+          className='flex items-center justify-between gap-2 text-sm'
+        >
+          <span>{t('Failed to load cleanup progress. Please retry.')}</span>
+          <Button
+            variant='outline'
+            size='sm'
+            onClick={() => setRetry((value) => value + 1)}
+          >
+            {t('Retry')}
+          </Button>
+        </div>
+      )}
+      {task && taskMatchesScope && (
         <div className='rounded-md border p-3'>
           <div className='mb-2 flex items-center justify-between gap-3 text-sm'>
-            <span className='font-medium'>{t('Log cleanup progress')}</span>
+            <span className='font-medium'>
+              {taskIsAudit
+                ? t('Audit log cleanup progress')
+                : t('Log cleanup progress')}
+            </span>
             <span className='text-muted-foreground tabular-nums'>
-              {logCleanupProgress}%
+              {progress}%
             </span>
           </div>
-          <Progress value={logCleanupProgress} />
+          <Progress value={progress} />
+          {!!taskTimestamp && (
+            <p className='text-muted-foreground mt-2 text-xs'>
+              {t('Before {{date}}', {
+                date: formatTimestampToDate(taskTimestamp),
+              })}
+            </p>
+          )}
           <div className='text-muted-foreground mt-2 text-xs'>
             {t('{{processed}} of {{total}} log entries processed.', {
-              processed: logCleanupProcessed,
-              total: logCleanupTotal,
+              processed: task.state?.processed ?? 0,
+              total: task.state?.total ?? 0,
             })}
           </div>
-          {logCleanupTask.status === 'failed' && logCleanupTask.error && (
+          {task.status === 'failed' && (
             <div className='text-destructive mt-2 text-xs'>
-              {logCleanupTask.error}
+              {t('Failed to clean logs')}
             </div>
           )}
         </div>
       )}
-
-      <AlertDialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('Confirm log cleanup')}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {formattedPurgeDate
+      <ConfirmDialog
+        open={showConfirm}
+        onOpenChange={setShowConfirm}
+        title={audit ? t('Clean audit logs') : t('Confirm log cleanup')}
+        desc={
+          <div className='space-y-2'>
+            <p>
+              {audit
                 ? t(
-                    'This will permanently remove all log entries created before {{date}}.',
-                    { date: formattedPurgeDate }
+                    'This will permanently remove all audit logs before {{date}}, including records outside the current filters. Usage logs and security alerts are retained.',
+                    { date: formattedDate }
                   )
                 : t(
-                    'This will permanently remove log entries before the selected timestamp.'
-                  )}{' '}
-              {t('This action cannot be undone.')}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isStartingLogCleanup}>
-              {t('Cancel')}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              variant='destructive'
-              onClick={handleCleanLogs}
-              disabled={isStartingLogCleanup}
-            >
-              {isStartingLogCleanup ? t('Cleaning...') : t('Delete logs')}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+                    'This will permanently remove all log entries created before {{date}}.',
+                    { date: formattedDate }
+                  )}
+            </p>
+            <p>{t('This action cannot be undone.')}</p>
+          </div>
+        }
+        confirmText={isStarting ? t('Cleaning...') : t('Delete logs')}
+        handleConfirm={handleCleanLogs}
+        isLoading={isStarting}
+        disabled={invalidDate || active}
+        destructive
+      />
     </div>
   )
 }

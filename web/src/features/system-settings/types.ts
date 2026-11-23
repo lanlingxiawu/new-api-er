@@ -573,7 +573,9 @@ export type SystemTask<
 }
 
 export type LogCleanupTaskPayload = {
+  scope?: 'usage' | 'audit'
   target_timestamp: number
+  audit_target_timestamp?: number
   batch_size: number
 }
 
@@ -886,6 +888,9 @@ export type OperationsSettings = {
   RequestLogMaxCount: number
   'log_setting.user_export_enabled': boolean
   'log_setting.max_range_days': number
+  'data_cleanup_setting.error_log_batch_size'?: number
+  'data_cleanup_setting.error_log_batch_timeout_sec'?: number
+  'data_cleanup_setting.error_log_auto_continue'?: boolean
   'request_log_setting.clear_on_restart': boolean
   'performance_setting.body_governance_enabled': boolean
   'performance_setting.body_memory_budget_mb': number
@@ -1034,6 +1039,7 @@ export type SystemTuningSettings = {
   'log_export_setting.employee_max_customers_per_job': number
   'log_export_setting.offpeak_only': boolean
   'log_export_setting.user_cooldown_sec': number
+  'log_export_setting.admin_cooldown_sec': number
   'log_export_setting.max_concurrent_jobs': number
   'log_export_setting.max_active_jobs_per_user': number
   'log_export_setting.user_max_range_sec': number

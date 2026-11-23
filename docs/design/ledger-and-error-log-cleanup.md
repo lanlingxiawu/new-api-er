@@ -2,6 +2,8 @@
 
 状态：用户已确认开始实现，本文按实际代码更新。日期：2026-10-23。
 
+2026-11-12 错误日志清理优化见 [复用现有索引与断点续跑](error-log-cleanup-existing-indexes.md)。新错误日志任务不再要求固定名称的专用索引，可复用已有时间索引或主键；界面改为选择日期、确认后直接创建后台任务，无独立预览步骤。最大 ID 在确认请求中捕获，不做匹配计数；财务继续保留预览。本文后续历史部署记录仅描述当时版本。
+
 ## 目标和交互
 
 - 系统设置 → 运行参数 → 台账明细：Root 选择“台账明细”或“提成明细”，选择截止日期和时间，预览后确认清理；两类分别执行。
@@ -9,15 +11,15 @@
 
 日期表示“这个时间之前”，不包含截止时间本身。按浏览器本地时间显示，发送 Unix 秒，后端不重新截断到零点。例如选择 2026-06-01 00:00，只删除早于这一时刻的记录。
 
-财务明细至少保留最近 30 天，同时保护当前提成结算月份；默认选 90 天前。错误日志至少保留最近 24 小时，默认选 30 天前。预览最多扫描 1,001 行，超过上限显示“至少 N 条”，不为准确总数遍历历史大表。
+财务明细至少保留最近 3 天（连续 72 小时），台账和提成明细默认均选 3 天前；本月中早于该截止时间的明细也允许清理。错误日志至少保留最近 24 小时，默认选 30 天前。预览最多扫描 1,001 行，超过上限显示“至少 N 条”，不为准确总数遍历历史大表。
 
-再次确认后才创建任务。后台分批执行，关页不中断，重新打开显示最近任务和已删除数量。失败保留已完成删除，重新预览剩余数据后可发起新任务。不提供一键删除全部数据。
+确认后才创建任务。后台分批执行，关页不中断，重新打开显示最近任务和已删除数量。失败保留已完成删除；新格式错误日志任务可由原操作者确认后从已保存的游标继续，财务和旧格式任务需重新预览。错误日志索引策略失效时重新确认创建任务，选择可用策略。不提供一键删除全部数据。
 
 ## 范围和业务规则
 
 | 目标 | 删除内容 | 保留内容 |
 | --- | --- | --- |
-| ledger | consumption_costs 中有效正数 log_id 的过期明细 | 日汇总、钱包、配额、当前月份、无有效日志键的人工调整 |
+| ledger | consumption_costs 中有效正数 log_id 的过期明细 | 日汇总、钱包、配额、无有效日志键的人工调整 |
 | commission | employee_commission_logs 中有效正数 log_id 的过期明细 | 提成余额、累计提成、结算、日汇总、人工调整 |
 | error_logs | LOG_DB.logs 中严格 type=LogTypeError（5）的过期记录 | 消费、充值、系统及审计日志 |
 
@@ -36,7 +38,8 @@
 | 接口 | 请求 | 权限 |
 | --- | --- | --- |
 | POST /api/data-cleanup/preview | `{kind:"ledger或commission或error_logs",before:Unix秒}` | 财务 Root；错误日志 operations.logs Edit |
-| POST /api/data-cleanup | `{preview_id:"32位随机ID"}` | 同上，预览必须属于当前操作者 |
+| POST /api/data-cleanup | `{preview_id:"32位随机ID",resume?:boolean}`；resume 仅供新错误日志任务继续 | 同上，预览或任务必须属于当前操作者 |
+| POST /api/data-cleanup | `{kind:"error_logs",before:Unix秒}`；确认后直接创建，不与 preview_id/resume 混用 | operations.logs Edit |
 | GET /api/data-cleanup?kind=ledger&id=可选ID | 指定记录或最近提交任务 | 财务 Root；错误日志 operations.logs View |
 
 个人访问令牌额外要求 ops:write / ops:read，不能绕过角色和设置权限。普通系统任务 list/current/detail 不暴露新类型，普通任务历史删除也排除此类任务。
@@ -83,7 +86,7 @@
 
 扫描只选 id/created_at/log_id，不做 SELECT *、DELETE LIMIT、OFFSET 遍历或 TRUNCATE。凭据按 kind+批量 log_id 点查，每片最多 400 个键。
 
-新表及财务索引接入既有主库迁移。日志维持既有约定：新库建表带索引，**已有 logs 启动只报告缺失索引，不自动给热表建索引**。预览缺索引即拒绝。上线前先在目标 schema 副本演练，再安排在线迁移/维护窗口；财务大表也建议提前建索引，避免启动期长时间 DDL。
+新表及财务索引接入既有主库迁移。日志维持既有约定：新库建表带索引，**已有 logs 启动只报告缺失索引，不自动给热表建索引**。财务预览缺必需索引仍拒绝；新错误日志清理按实际索引列选择专用时间索引、旧时间索引或主键，不再强制补专用索引。任何另行安排的索引迁移须先在目标 schema 副本演练；财务大表也建议提前建索引，避免启动期长时间 DDL。
 
 日志库示例（仅在索引缺失时执行，使用实际 schema；本次开发未在现有业务表执行）：
 
@@ -144,52 +147,24 @@ relay goroutine 不增加 DB/Redis 查询、锁或 goroutine；不改 relay 路�
 
 ## 测试方案与验证
 
-先写测试，再实现，覆盖日期边界/非法输入、当前月份保护、截止时刻前后、快照后插入、游标推进、错误类型过滤、人工调整保护、事务回滚、重复清理、所有重试/回填入口不恢复明细且不重计汇总、预览所有权和过期、重复确认、任务冲突、老节点拒绝、同秒版本切换及提成分页数量。前端覆盖日期转秒、预览不删除、确认提交、任务恢复。
+先写测试，再实现，覆盖日期边界/非法输入、本月内及跨月的 3 天保留边界、截止时刻前后、快照后插入、游标推进、错误类型过滤、人工调整保护、事务回滚、重复清理、所有重试/回填入口不恢复明细且不重计汇总、预览所有权和过期、重复确认、任务冲突、老节点拒绝、同秒版本切换及提成分页数量。前端覆盖日期转秒、预览不删除、确认提交、任务恢复。
 
-开发验证使用私有 SQLite、随机前缀 MySQL 表和独立 PostgreSQL schema，清理只移除测试自身对象；没有删除现有业务数据。覆盖新建与模拟旧表缺索引升级、二次迁移无 DDL、日志库查询 EXPLAIN。开发阶段 EXPLAIN 仅用小型测试数据；目标服务器演练与查询计划见后续部署记录。
+### 3 天保留期调整（2026-11-21）
 
-2026-10-23 验证结果：
+用户最终确认台账和提成明细均只需保留最近 3 天，替代此前的 5 天要求。沿用现有手动预览、确认和后台清理流程，不新增自动清理任务、API、配置、表、索引或迁移。`service/data_cleanup.go:ValidateDataCleanupDate` 在预览与提交时统一校验 3 天底线，并移除财务明细的当前提成月份限制；前端默认日期及七种语言提示同步调整，后端三种语言错误提示同步。
 
-- SQLite 3.50.4、MySQL 8.4.4、PostgreSQL 18.3：`go test ./model -run 'TestDataCleanup|TestFinancialCleanup' -count=1`，三种方言通过。外部方言由 CLEANUP_TEST_DSN 选择；测试自动创建隔离表/schema。
-- `go test ./model -run '^TestDataCleanupMigrationAndPlan$' -count=1 -v`：三种方言的新库/模拟缺索引升级/第二次迁移无 DDL 通过。小样本 EXPLAIN：SQLite/PG 命中新清理索引；MySQL 空表优化器选择已有 idx_created_at_type 覆盖索引。生产索引选择仍需以真实分布验证。
-- 在临时 MySQL 库和 PostgreSQL schema 中运行 model、service、controller 包完整测试，通过；router、i18n、service/settingsaccess、setting/operation_setting 完整测试通过。新增路由的访问令牌规则及相关 middleware 测试通过。
-- `go build ./...` 通过；未修改 relaykit 模块。
-- `bun run typecheck`、`bun run build` 通过；清理和日志设置前端测试 2 个文件、7 个用例通过。lint 无错误，存在仓库原有警告。
-- 额外测试覆盖导出恰好单条命中、提前返回时仍拒绝与清理并发生成的文件。
+#### Existing Logic and Related-Path Findings
 
-上线顺序：先在副本演练并补大表索引，主节点完成新表迁移，再升级全部 writer 节点；兼容检查通过后使用清理入口。未执行真实业务清理。ClickHouse 及 30k/100k RPM 压测未完成，不作为已验证项。
+- `model/data_cleanup.go:DeleteDataCleanupBatch` 只删除所选明细表的有效日志记录，事务内保留永久去重凭据；不修改余额或统计汇总。现有隔离数据库测试逐列核对保护对象。
+- `model/commission_period_switch.go:SwitchCommissionPeriod` 通过重分配日汇总对齐当期统计，`controller/employee.go:GetMyEmployeeProfile` 从重置周期日汇总读取本期业绩；解除明细的月份限制不改变这些汇总。
+- 明细列表、明细筛选合计和导出只覆盖仍保留的记录，清理后的历史汇总继续保留。现有缓存版本和导出并发保护继续生效。
+- 共享资源仍为上文列出的明细表、去重凭据、任务记录及维护连接池。只放宽管理 API 接受的时间范围，沿用索引、批次上限、超时及队列压力退让；relay 同步执行、DB/Redis 调用和 goroutine 数均无新增。
 
-## 香港测试服务器部署（2026-10-23）
+## 验证与发布边界
 
-- 地址：`43.251.102.17`，访问入口 `http://43.251.102.17:3000`；Nginx 转发到应用的 3002 端口。部署版本 `hk-cleanup-20261023-af0f134e5`，Linux amd64 二进制 SHA-256：`e9fe671a93e18ba6a1b321a8d38550ab1962392b17d1116fceb446e0b5bc26be`。
-- 升级前备份旧程序、配置、主库完整数据及日志库完整数据。服务器备份目录 `/root/deploy-backups/cleanup-20261023-af0f134e5`，仅 root 可访问；`main-data.sql.gz` 为 60,260,372 字节，`log-data.dump` 为 88,745,277 字节。备份未做完整数据恢复演练。
-- 实际数据库为 MySQL 8.0.46 主库、PostgreSQL 14.24 日志库。把服务器实际 schema 导入独立临时库，执行 `python3 -u /root/cleanup-deploy-20261023.py rehearse`，连续启动新程序两次；健康检查通过，规范化后的两次 schema 一致，无实际重复 DDL。既有日志导出缺索引提示属于启动检查建议，不是执行 DDL。
-- 对现有财务表提前创建 `(created_at,id)` 索引，对 PostgreSQL 日志表并发创建 `(type,created_at,id)` 索引。历史测试范围 EXPLAIN：MySQL 为 created_at 索引范围扫描，PostgreSQL 为新清理索引的 Index Only Scan；未覆盖所有历史日期分布或高负载查询计划。
-- 旧进程正常退出后替换程序；健康检查、部署文件哈希验证通过。当前登记的单个 writer 节点具备 `financial_cleanup_receipts` 能力。
-- 执行 `python3 -u /root/cleanup-validation-20261023.py validate`：三类后台清理成功；未登录和普通用户被拒绝；近期日期被拒绝；截止时刻、快照后迟到记录、人工调整及其他日志类型保留；重复提交幂等、任务恢复、永久去重凭据、余额和历史汇总均通过。
-- 浏览器实际选择日期、预览命中 1 条、确认删除并刷新恢复结果；提成明细和错误使用日志入口及已完成任务展示正常，页面控制台无错误。测试截止时间为 Unix 120（北京时间 1970-01-01 08:02:00），事先确认该范围没有已有业务记录；只删除专用测试记录。
-- 操作入口：系统设置 → 运行参数 → 台账明细（可切换提成明细）；系统设置 → 运维 → 日志维护（清理错误使用日志）。
-- 最终 19 项验证通过，公网状态接口返回部署版本。执行 `python3 -u /root/cleanup-validation-20261023.py cleanup` 后，专用账号、登录会话、测试明细、测试任务、测试凭据及两个演练数据库均已移除；临时防火墙规则和演练监听端口已撤销。验证记录保存在备份目录的 `validation-state.json`。未调用真实上游模型，也未做并发负载测试。
+回归覆盖本月内、跨月与闰年的 3 天边界、截止时刻记录保护、人工调整、余额和汇总不变、永久去重、预览与确认。使用独立临时数据库或测试表/schema，不删除现有业务数据。
 
-## 删除边界复核（2026-10-23）
-
-本轮香港服务器只读核查，没有发起清理、写入测试数据或修改数据库。逐条比较部署前完整备份与当前数据库，以下 7 张表共 9,259 条原有记录全部存在，所有列值一致：
-
-| 表 | 备份记录数 | 当前记录数 | 缺失 / 变化 |
-| --- | ---: | ---: | ---: |
-| business_daily_stats_coverages | 50 | 50 | 0 / 0 |
-| employee_commission_daily_stats | 47 | 47 | 0 / 0 |
-| employee_commission_reset_period_daily_stats | 48 | 48 | 0 / 0 |
-| employee_customer_commission_daily_stats | 148 | 148 | 0 / 0 |
-| platform_channel_daily_stats | 275 | 275 | 0 / 0 |
-| quota_data | 8,668 | 8,668 | 0 / 0 |
-| user_extensions | 23 | 23 | 0 / 0 |
-
-实际 MySQL 财务明细表与 PostgreSQL logs 没有用户定义的删除触发器，也没有会修改其他表的删除级联外键。当前无待执行/运行中的清理任务；此前验证数据已移除。
-
-新增 `TestDataCleanupOnlyDeletesSelectedDetails`：三类明细使用相同 ID 和历史时间，逐类清理后检查其他类型仍保留、表仍存在；逐列核对 10 类保护对象（4 类日统计、coverage、批次去重凭据、用量统计、用户余额、提成汇总、员工档案）；任意表名或非法 kind 均拒绝。
-
-`go test ./model -run 'TestDataCleanup|TestFinancialCleanup' -count=1 -v` 在 SQLite 3.50.4 上 8 个顶层用例全部通过。本轮本地没有 SQL_DSN，Docker 数据库服务不可用，service 包测试被其 TestMain 阻止启动；未把它记录为通过，也未重新执行 MySQL/PostgreSQL 写入测试。之前部署阶段真实数据库功能验证保留为单独证据。本轮仅增加回归测试与核查记录，未改运行代码或重新部署。
+上线前先在目标副本演练并预建必要的大表索引，再由主节点完成迁移并升级全部 writer；兼容检查通过后开放清理入口。数据库功能回归不代替 ClickHouse 专项或 30k/100k RPM 压测。
 
 ### 明细统计调用链与待修问题
 

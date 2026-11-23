@@ -47,10 +47,47 @@ func logExportFileBase(job *model.LogExportJob) string {
 			title = tr(key)
 		}
 		parts = append(parts, title)
+	} else if job.EffectiveDataSource() == model.LogExportDataAudit {
+		parts = append(parts, tr(i18n.MsgAuditExportFileTitle))
+	} else if job.EffectiveDataSource() == model.LogExportDataQuota {
+		parts = append(parts, tr(i18n.MsgQuotaExportFileTitle))
 	} else {
 		parts = append(parts, tr(i18n.MsgLogExportFileUsageLogs))
 	}
 	parts = append(parts, logExportFileDateRange(job, tr))
+	if job.EffectiveDataSource() == model.LogExportDataQuota {
+		if f := job.QuotaFilters; f != nil {
+			if f.Username != "" {
+				parts = append(parts, value(i18n.MsgLogExportFileFilterUser, f.Username))
+			} else if f.UserID != nil {
+				parts = append(parts, value(i18n.MsgLogExportFileFilterUserId, strconv.Itoa(*f.UserID)))
+			}
+			if f.ModelName != "" {
+				parts = append(parts, value(i18n.MsgLogExportFileFilterModel, f.ModelName))
+			}
+			if f.UseGroup != "" {
+				parts = append(parts, value(i18n.MsgLogExportFileFilterGroup, f.UseGroup))
+			}
+			if f.ChannelID != nil {
+				parts = append(parts, value(i18n.MsgLogExportFileFilterChannel, strconv.Itoa(*f.ChannelID)))
+			}
+			if f.TokenID != nil || f.NodeName != "" {
+				parts = append(parts, tr(i18n.MsgLogExportFileMoreFilters))
+			}
+		}
+		return sanitizeLogExportFileName(strings.Join(parts, "_"))
+	}
+	if job.EffectiveDataSource() == model.LogExportDataAudit {
+		if f := job.AuditFilters; f != nil {
+			if f.Username != "" {
+				parts = append(parts, value(i18n.MsgLogExportFileFilterUser, f.Username))
+			}
+			if f.Category != "" || f.RequestId != "" || f.TokenRef != "" || f.ExcludeTokenRef != "" || f.IP != "" || f.ActorType != "" || f.AuthMethod != "" || f.Route != "" || f.RouteMissing || f.Success != nil || f.IPRisk != "" {
+				parts = append(parts, tr(i18n.MsgLogExportFileMoreFilters))
+			}
+		}
+		return sanitizeLogExportFileName(strings.Join(parts, "_"))
+	}
 
 	filter := job.Filters
 	if job.EmployeeScope == nil {

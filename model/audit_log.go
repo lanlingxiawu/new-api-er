@@ -416,9 +416,9 @@ func AuditLogCleanupTargetTimestamp() int64 {
 }
 
 // CountOldAuditLog 统计早于 targetTimestamp 的审计日志行数，走 created_at 索引。
-func CountOldAuditLog(ctx context.Context, targetTimestamp int64) (int64, error) {
+func CountOldAuditLog(ctx context.Context, db *gorm.DB, targetTimestamp int64) (int64, error) {
 	var total int64
-	if err := LOG_DB.WithContext(ctx).Model(&AuditLog{}).Where("created_at < ?", targetTimestamp).Count(&total).Error; err != nil {
+	if err := db.WithContext(ctx).Model(&AuditLog{}).Where("created_at < ?", targetTimestamp).Count(&total).Error; err != nil {
 		return 0, err
 	}
 	return total, nil
@@ -427,7 +427,7 @@ func CountOldAuditLog(ctx context.Context, targetTimestamp int64) (int64, error)
 // DeleteOldAuditLogBatch 分批删除早于 targetTimestamp 的审计日志。
 // 批量删除而非一条大 DELETE：这张表与消费日志异步管线共用 LOG_DB 连接池，
 // 长事务会把连接和行锁一起占住。
-func DeleteOldAuditLogBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+func DeleteOldAuditLogBatch(ctx context.Context, db *gorm.DB, targetTimestamp int64, limit int) (int64, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -435,17 +435,17 @@ func DeleteOldAuditLogBatch(ctx context.Context, targetTimestamp int64, limit in
 		return 0, err
 	}
 
-	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+	if db.Dialector.Name() == "clickhouse" {
 		// ClickHouse DELETE 是重写数据分区的 mutation，按批下发会病态地慢。
 		// 与 logs 清理一致：一次同步 mutation 删完，返回行数让调用方的进度循环一轮结束。
-		total, err := CountOldAuditLog(ctx, targetTimestamp)
+		total, err := CountOldAuditLog(ctx, db, targetTimestamp)
 		if err != nil {
 			return 0, err
 		}
 		if total == 0 {
 			return 0, nil
 		}
-		if err := LOG_DB.WithContext(ctx).Exec(
+		if err := db.WithContext(ctx).Exec(
 			"ALTER TABLE audit_logs DELETE WHERE created_at < ? SETTINGS mutations_sync = 1",
 			targetTimestamp,
 		).Error; err != nil {
@@ -458,9 +458,9 @@ func DeleteOldAuditLogBatch(ctx context.Context, targetTimestamp int64, limit in
 	// PostgreSQL 下 GORM 会静默丢掉 LIMIT，一条语句删空整段区间并长时间
 	// 持有事务与连接——那正是这里要避免的（Rule 0 / Rule 2）。
 	var ids []int
-	if err := LOG_DB.WithContext(ctx).Model(&AuditLog{}).
+	if err := db.WithContext(ctx).Model(&AuditLog{}).
 		Where("created_at < ?", targetTimestamp).
-		Order("created_at").
+		Order("created_at, event_id").
 		Limit(limit).
 		Pluck("id", &ids).Error; err != nil {
 		return 0, err
@@ -468,7 +468,7 @@ func DeleteOldAuditLogBatch(ctx context.Context, targetTimestamp int64, limit in
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	result := LOG_DB.WithContext(ctx).Where("id IN ?", ids).Delete(&AuditLog{})
+	result := db.WithContext(ctx).Where("id IN ?", ids).Delete(&AuditLog{})
 	if result.Error != nil {
 		return 0, result.Error
 	}

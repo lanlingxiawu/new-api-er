@@ -28,6 +28,7 @@ import type {
   ExportJobListFilters,
   ExportJobPage,
 } from './types'
+import type { QuotaExportRequest } from './quota-export'
 
 interface Envelope<T> {
   success: boolean
@@ -48,9 +49,10 @@ export async function getExportJobs(
   all = false,
   self = false,
   filters: ExportJobListFilters = {},
-  cursor = ''
+  cursor = '',
+  base = self ? '/api/log/self/export' : BASE
 ): Promise<ExportJobPage> {
-  const res = await api.get(`${self ? '/api/log/self/export' : BASE}/jobs`, {
+  const res = await api.get(`${base}/jobs`, {
     params: { ...filters, cursor: cursor || undefined, all: all || undefined },
   })
   const body = res.data as Envelope<{
@@ -59,6 +61,7 @@ export async function getExportJobs(
     max_range_sec?: number
     next_cursor?: string
     has_more?: boolean
+    risk_export_enabled?: boolean
   }>
   if (!body.success) throw new Error(body.message)
   return {
@@ -67,6 +70,7 @@ export async function getExportJobs(
     max_range_sec: body.data?.max_range_sec,
     next_cursor: body.data?.next_cursor,
     has_more: body.data?.has_more,
+    risk_export_enabled: body.data?.risk_export_enabled,
   }
 }
 
@@ -79,14 +83,22 @@ export async function createExportJob(
   return body.data.job_id
 }
 
+export async function createQuotaExportJob(
+  payload: QuotaExportRequest
+): Promise<string> {
+  const res = await api.post('/api/data/quota/export/jobs', payload)
+  const body = res.data as Envelope<{ job_id: string }>
+  if (!body.success) throw new Error(body.message)
+  return body.data.job_id
+}
+
 /** Cancels a running job, or deletes a finished one along with its part files. */
 export async function deleteExportJob(
   jobId: string,
-  self = false
+  self = false,
+  base = self ? '/api/log/self/export' : BASE
 ): Promise<void> {
-  const res = await api.delete(
-    `${self ? '/api/log/self/export' : BASE}/jobs/${jobId}`
-  )
+  const res = await api.delete(`${base}/jobs/${jobId}`)
   const body = res.data as Envelope<unknown>
   if (!body.success) throw new Error(body.message)
 }
@@ -102,12 +114,11 @@ export async function deleteExportJob(
 export async function downloadExportPart(
   jobId: string,
   part?: number,
-  self = false
+  self = false,
+  base = self ? '/api/log/self/export' : BASE
 ): Promise<void> {
   const query = part ? `?part=${part}` : '?part=all'
-  const res = await api.get(
-    `${self ? '/api/log/self/export' : BASE}/jobs/${jobId}/download-url${query}`
-  )
+  const res = await api.get(`${base}/jobs/${jobId}/download-url${query}`)
   const body = res.data as Envelope<{ url: string }>
   if (!body.success) throw new Error(body.message)
 

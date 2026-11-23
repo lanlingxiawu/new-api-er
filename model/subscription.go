@@ -1475,6 +1475,9 @@ func ResetDueSubscriptions(limit int) (int, error) {
 
 // CleanupSubscriptionPreConsumeRecords removes old idempotency records to keep table small.
 func CleanupSubscriptionPreConsumeRecords(olderThanSeconds int64) (int64, error) {
+	// Deployment risk DB-R09: this existing retention DELETE is not batched.
+	// Rehearse the production backlog before enabling startup cleanup alongside
+	// migrations; see docs/design/database-performance-review-20261115.md.
 	if olderThanSeconds <= 0 {
 		olderThanSeconds = 7 * 24 * 3600
 	}

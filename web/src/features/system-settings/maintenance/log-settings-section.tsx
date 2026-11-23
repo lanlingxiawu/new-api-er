@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useId, useMemo, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -36,6 +37,8 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { handleServerError } from '@/lib/handle-server-error'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   SettingsForm,
@@ -52,6 +55,9 @@ import { HistoryLogCleanup } from './history-log-cleanup'
 import { ServerLogFiles } from './server-log-files'
 
 const logSettingsSchema = z.object({
+  errorLogBatchSize: z.number().int().min(1).max(10000),
+  errorLogBatchTimeoutSec: z.number().int().min(1).max(10),
+  errorLogAutoContinue: z.boolean(),
   LogConsumeEnabled: z.boolean(),
   auditRetentionDays: z
     .number()
@@ -73,16 +79,33 @@ type LogSettingsSectionProps = {
     LogConsumeEnabled: boolean
     'log_setting.user_export_enabled': boolean
     'log_setting.max_range_days': number
+    'data_cleanup_setting.error_log_batch_size'?: number
+    'data_cleanup_setting.error_log_batch_timeout_sec'?: number
+    'data_cleanup_setting.error_log_auto_continue'?: boolean
   }
 }
 
 export function LogSettingsSection(props: LogSettingsSectionProps) {
   const { t } = useTranslation()
+  const isRoot = useAuthStore(
+    (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
+  )
+  const queryClient = useQueryClient()
   const updateOption = useUpdateOption(undefined, false)
   const recordingTitleId = useId()
   const searchTitleId = useId()
   const formDefaults = useMemo<LogSettingsFormValues>(
     () => ({
+      errorLogBatchSize:
+        props.defaultValues['data_cleanup_setting.error_log_batch_size'] ??
+        5000,
+      errorLogBatchTimeoutSec:
+        props.defaultValues[
+          'data_cleanup_setting.error_log_batch_timeout_sec'
+        ] ?? 5,
+      errorLogAutoContinue:
+        props.defaultValues['data_cleanup_setting.error_log_auto_continue'] ??
+        false,
       LogConsumeEnabled: props.defaultValues.LogConsumeEnabled,
       auditRetentionDays: props.defaultValues.auditRetentionDays,
       log_setting: {
@@ -107,6 +130,24 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
 
   const onSubmit = async (values: LogSettingsFormValues) => {
     const changes = [
+      [
+        'errorLogBatchSize',
+        'data_cleanup_setting.error_log_batch_size',
+        values.errorLogBatchSize,
+        baselineRef.current.errorLogBatchSize,
+      ],
+      [
+        'errorLogBatchTimeoutSec',
+        'data_cleanup_setting.error_log_batch_timeout_sec',
+        values.errorLogBatchTimeoutSec,
+        baselineRef.current.errorLogBatchTimeoutSec,
+      ],
+      [
+        'errorLogAutoContinue',
+        'data_cleanup_setting.error_log_auto_continue',
+        values.errorLogAutoContinue,
+        baselineRef.current.errorLogAutoContinue,
+      ],
       [
         'auditRetentionDays',
         'audit_log_setting.retention_days',
@@ -133,7 +174,9 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
       ],
     ] as const
     const pending = changes.filter(
-      ([, , value, previous]) => value !== previous
+      ([, key, value, previous]) =>
+        value !== previous &&
+        (isRoot || !key.startsWith('data_cleanup_setting.'))
     )
     if (pending.length === 0) {
       toast.info(t('No changes to save'))
@@ -143,7 +186,10 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
       for (const [field, key, value] of pending) {
         await updateOption.mutateAsync({ key, value })
         form.resetField(field, { defaultValue: value })
-        if (field === 'auditRetentionDays' || field === 'LogConsumeEnabled') {
+        if (
+          field !== 'log_setting.user_export_enabled' &&
+          field !== 'log_setting.max_range_days'
+        ) {
           baselineRef.current = { ...baselineRef.current, [field]: value }
         } else {
           const name =
@@ -293,6 +339,88 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
                 />
               </SettingsFormGrid>
             </div>
+            {isRoot && (
+              <>
+                <Separator />
+                <SettingsFormGrid>
+                  <FormField
+                    control={form.control}
+                    name='errorLogBatchSize'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Error log batch limit')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min={1}
+                            max={10000}
+                            step={1}
+                            {...safeNumberFieldProps(field)}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t(
+                            'Starts with up to 2000 records and adjusts to this limit. Slower batches are reduced automatically.'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name='errorLogBatchTimeoutSec'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          {t('Error log batch timeout (seconds)')}
+                        </FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min={1}
+                            max={10}
+                            step={1}
+                            {...safeNumberFieldProps(field)}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t(
+                            'The time limit for scanning, deleting and committing one batch.'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name='errorLogAutoContinue'
+                    render={({ field }) => (
+                      <SettingsSwitchItem>
+                        <SettingsSwitchContent>
+                          <FormLabel>
+                            {t('Automatically continue error log cleanup')}
+                          </FormLabel>
+                          <FormDescription>
+                            {t(
+                              'Continue the same cleanup range when its time slice ends. Stop on errors.'
+                            )}
+                          </FormDescription>
+                        </SettingsSwitchContent>
+                        <FormControl>
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </SettingsSwitchItem>
+                    )}
+                  />
+                </SettingsFormGrid>
+              </>
+            )}
           </fieldset>
         </SettingsForm>
       </Form>
@@ -300,6 +428,15 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
       <Separator />
 
       <HistoryLogCleanup />
+
+      <Separator />
+
+      <HistoryLogCleanup
+        scope='audit'
+        onComplete={() => {
+          void queryClient.invalidateQueries({ queryKey: ['audit'] })
+        }}
+      />
 
       <Separator />
       <DataCleanupControl kind='error_logs' />

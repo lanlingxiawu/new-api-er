@@ -207,6 +207,20 @@ func finishAdminAudit(c *gin.Context, writer *auditResponseWriter) {
 		opParams["method"] = method
 		opParams["route"] = route
 	}
+	if action == "log.cleanup_start" {
+		scope, timestamp := c.Query("scope"), c.Query("target_timestamp")
+		if scope == "audit" {
+			timestamp = c.Query("audit_target_timestamp")
+		} else if scope == "" {
+			scope = "usage"
+		}
+		if scope == "usage" || scope == "audit" {
+			opParams["scope"] = scope
+		}
+		if target, err := strconv.ParseInt(timestamp, 10, 64); err == nil && target > 0 {
+			opParams["target_timestamp"] = target
+		}
+	}
 	// 被操作用户只记 ID：兜底运行在鉴权链路上，不为此额外查一次用户名，
 	// 前端渲染时降级为只显示 ID。
 	if targetUserId := auditTargetUserID(c, method, route); targetUserId > 0 {

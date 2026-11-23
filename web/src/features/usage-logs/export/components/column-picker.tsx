@@ -149,7 +149,10 @@ export function ColumnPicker({
                           this file to the customer" impossible to miss.
                         */}
                         {col.audience === 'internal' && (
-                          <Badge variant='outline' className='px-1 py-0 text-[10px]'>
+                          <Badge
+                            variant='outline'
+                            className='px-1 py-0 text-[10px]'
+                          >
                             {t('Internal')}
                           </Badge>
                         )}

@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -9,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   estimate: vi.fn(),
   saveTemplate: vi.fn(),
+  getTemplates: vi.fn(),
   columns: ['quota'],
   maxColumns: 100,
   templates: [] as {
@@ -27,7 +46,7 @@ vi.mock('@/stores/auth-store', () => ({
 vi.mock('../api', () => ({
   createExportJob: mocks.create,
   getExportEstimate: mocks.estimate,
-  getExportTemplates: async () => mocks.templates,
+  getExportTemplates: mocks.getTemplates,
   createExportTemplate: mocks.saveTemplate,
   getExportColumns: async () => ({
     columns: [
@@ -41,6 +60,13 @@ vi.mock('../api', () => ({
       {
         key: 'other_raw',
         label: 'Raw Other JSON',
+        group: 'diagnostic',
+        admin_only: true,
+        audience: 'internal',
+      },
+      {
+        key: 'log_raw',
+        label: 'Raw Log JSON',
         group: 'diagnostic',
         admin_only: true,
         audience: 'internal',
@@ -77,6 +103,7 @@ beforeEach(() => {
   mocks.columns = ['quota']
   mocks.maxColumns = 100
   mocks.templates = []
+  mocks.getTemplates.mockReset().mockImplementation(async () => mocks.templates)
   mocks.saveTemplate
     .mockReset()
     .mockImplementation(async (input: { name: string; columns: string[] }) => {
@@ -88,6 +115,32 @@ beforeEach(() => {
   mocks.estimate.mockReset().mockResolvedValue({ rows: 2, capped: false })
 })
 afterEach(cleanup)
+
+it('keeps selected columns while the saved template is awaiting refetch', async () => {
+  mocks.getTemplates
+    .mockResolvedValueOnce([])
+    .mockImplementation(() => new Promise(() => {}))
+  mocks.saveTemplate.mockImplementation(async (input) => ({
+    id: 2,
+    ...input,
+    is_shared: false,
+  }))
+  const user = userEvent.setup()
+  showSheet()
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Start export' })).toBeEnabled()
+  )
+  await user.click(screen.getByRole('button', { name: 'Request ID' }))
+  await user.type(
+    screen.getByPlaceholderText('Template name'),
+    'Selected columns'
+  )
+  await user.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(mocks.saveTemplate).toHaveBeenCalledOnce())
+  await user.click(screen.getByRole('button', { name: 'Start export' }))
+  await waitFor(() => expect(mocks.create).toHaveBeenCalledOnce())
+  expect(mocks.create.mock.calls[0][0].columns).toEqual(['quota', 'request_id'])
+})
 
 function showSheet() {
   const client = new QueryClient({
@@ -190,9 +243,9 @@ it('allows summary without detail columns while detail and both still require th
   await waitFor(() => expect(submit).toBeEnabled())
   await user.click(screen.getByRole('switch', { name: 'Override group ratio' }))
   expect(submit).toBeDisabled()
-  await user.click(screen.getByRole('button', { name: 'Detail + summary' }))
+  await user.click(screen.getByRole('radio', { name: 'Detail + summary' }))
   expect(submit).toBeDisabled()
-  await user.click(screen.getByRole('button', { name: 'Aggregated summary' }))
+  await user.click(screen.getByRole('radio', { name: 'Aggregated summary' }))
   expect(submit).toBeEnabled()
   await user.click(submit)
   await waitFor(() => expect(mocks.create).toHaveBeenCalledOnce())
@@ -238,4 +291,50 @@ it('counts the hidden selection toward the template column limit', async () => {
   )
   await user.click(screen.getByRole('switch', { name: 'Override group ratio' }))
   expect(screen.getByRole('button', { name: 'Request ID' })).toBeDisabled()
+})
+
+it('exports stored raw fields and blocks summary or repricing without dropping the selection', async () => {
+  mocks.role = 100
+  mocks.columns = ['quota', 'log_raw']
+  const user = userEvent.setup()
+  showSheet()
+  const submit = screen.getByRole('button', { name: 'Start export' })
+  await waitFor(() => expect(submit).toBeEnabled())
+  expect(
+    screen.getByText(
+      'Includes stored log fields and diagnostics. Existing body omissions are preserved.'
+    )
+  ).toBeInTheDocument()
+  await user.click(screen.getByRole('radio', { name: 'Aggregated summary' }))
+  expect(submit).toBeDisabled()
+  expect(screen.getByRole('alert')).toHaveTextContent('include details')
+  await user.click(screen.getByRole('radio', { name: 'Detail + summary' }))
+  expect(submit).toBeEnabled()
+  const toggle = screen.getByRole('switch', { name: 'Override group ratio' })
+  await user.click(toggle)
+  expect(submit).toBeDisabled()
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'turn off the group ratio override'
+  )
+  await user.click(toggle)
+  await user.click(submit)
+  await waitFor(() => expect(mocks.create).toHaveBeenCalledOnce())
+  expect(mocks.create.mock.calls[0][0]).toMatchObject({
+    mode: 'both',
+    columns: ['quota', 'log_raw'],
+    summary_dims: ['date'],
+  })
+})
+
+it('blocks a raw selection cached before losing root access', async () => {
+  mocks.role = 10
+  mocks.columns = ['quota', 'log_raw']
+  showSheet()
+  await waitFor(() =>
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Complete raw fields require root access.'
+    )
+  )
+  expect(screen.getByRole('button', { name: 'Start export' })).toBeDisabled()
+  expect(mocks.create).not.toHaveBeenCalled()
 })

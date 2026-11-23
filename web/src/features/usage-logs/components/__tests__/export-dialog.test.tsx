@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
@@ -170,9 +176,12 @@ it.each([true, false])(
           'Export failed. Please try again or contact an administrator.'
         )
       ).toBeVisible()
+      expect(screen.queryByText('Quota Data')).not.toBeInTheDocument()
     } else {
-      expect(screen.getByText(/keep the service responsive/)).toBeVisible()
+      expect(screen.getByText(/scanned/)).toBeVisible()
       expect(screen.getByText(/server storage/)).toBeVisible()
+      expect(screen.getByText('Quota Data')).toBeVisible()
+      expect(screen.getByRole('button', { name: 'New Export' })).toBeVisible()
     }
     client.clear()
   }
@@ -400,7 +409,12 @@ it.each([1, 2])(
     await userEvent.click(screen.getByRole('button', { name: 'Download' }))
     if (partCount === 1) {
       await waitFor(() =>
-        expect(mocks.download).toHaveBeenCalledWith('ready-job', 1, true)
+        expect(mocks.download).toHaveBeenCalledWith(
+          'ready-job',
+          1,
+          true,
+          '/api/log/self/export'
+        )
       )
       expect(screen.queryByRole('menu')).not.toBeInTheDocument()
     } else {
@@ -410,7 +424,8 @@ it.each([1, 2])(
         expect(mocks.download).toHaveBeenCalledWith(
           'ready-job',
           undefined,
-          true
+          true,
+          '/api/log/self/export'
         )
       )
     }
@@ -425,7 +440,64 @@ it('blocks ranges above the server limit', () => {
     </QueryClientProvider>
   )
   expect(screen.getByRole('button', { name: 'Export' })).toBeDisabled()
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'The time range cannot exceed'
+  )
   expect(mocks.create).not.toHaveBeenCalled()
+})
+
+it('allows a 46-day export when the server specifies 62 days', async () => {
+  const client = new QueryClient()
+  const previous = { ...mocks.search }
+  mocks.search.startTime = new Date(2026, 9, 1).getTime()
+  mocks.search.endTime = new Date(2026, 10, 16, 23, 59, 59).getTime()
+  try {
+    render(
+      <QueryClientProvider client={client}>
+        <SelfExportSheet open onOpenChange={vi.fn()} maxRangeSec={62 * 86400} />
+      </QueryClientProvider>
+    )
+    expect(
+      screen.getByText('The time range cannot exceed 62 days')
+    ).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Export' })).toBeEnabled()
+    await userEvent.click(screen.getByRole('button', { name: 'Export' }))
+    await waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1))
+    expect(mocks.create.mock.calls[0][0].filters.end_timestamp).toBe(
+      Math.floor(mocks.search.endTime / 1000)
+    )
+  } finally {
+    Object.assign(mocks.search, previous)
+    client.clear()
+  }
+})
+
+it('validates the server range limit inside the date picker before applying it', async () => {
+  const client = new QueryClient()
+  const user = userEvent.setup()
+  render(
+    <QueryClientProvider client={client}>
+      <SelfExportSheet open onOpenChange={vi.fn()} maxRangeSec={86400} />
+    </QueryClientProvider>
+  )
+  await user.click(screen.getByRole('button', { name: /^2023/ }))
+  const start = screen.getByLabelText('Start Time')
+  const end = screen.getByLabelText('End Time')
+  fireEvent.change(start, { target: { value: '2026-11-01T00:00:00' } })
+  fireEvent.change(end, { target: { value: '2026-11-02T00:00:01' } })
+  expect(end).toHaveAttribute('max', '2026-11-02T00:00:00')
+  expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled()
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'The time range cannot exceed 1 days'
+  )
+  fireEvent.change(end, { target: { value: '2026-11-02T00:00:00' } })
+  expect(screen.getByRole('button', { name: 'Confirm' })).toBeEnabled()
+  await user.click(screen.getByRole('button', { name: 'Confirm' }))
+  await user.click(screen.getByRole('button', { name: 'Export' }))
+  await waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1))
+  const filters = mocks.create.mock.calls[0][0].filters
+  expect(filters.end_timestamp - filters.start_timestamp).toBe(86400)
+  client.clear()
 })
 
 it('loads self tasks and applies the server time limit in the export center', async () => {
@@ -438,7 +510,13 @@ it('loads self tasks and applies the server time limit in the export center', as
     </QueryClientProvider>
   )
   await waitFor(() =>
-    expect(mocks.jobs).toHaveBeenCalledWith(false, true, {}, '')
+    expect(mocks.jobs).toHaveBeenCalledWith(
+      false,
+      true,
+      {},
+      '',
+      '/api/log/self/export'
+    )
   )
   const button = screen.getByRole('button', { name: 'New Export' })
   await waitFor(() => expect(button).toBeEnabled())

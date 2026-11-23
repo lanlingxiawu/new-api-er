@@ -15,7 +15,7 @@ import (
 func InitializeRequestLogHistory() {
 	defer func() {
 		if r := recover(); r != nil {
-			requestLogRecoveryIncomplete = true
+			requestLogRecoveryIncomplete.Store(true)
 			common.SysError(fmt.Sprintf("request log startup: panic recovered: %v", r))
 		}
 	}()

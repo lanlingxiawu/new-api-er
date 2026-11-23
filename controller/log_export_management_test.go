@@ -212,3 +212,113 @@ func TestExportManagementAdminCanManageAllTasks(t *testing.T) {
 		}
 	}
 }
+
+func TestExportManagementCompleteFieldsRequiresCurrentRoot(t *testing.T) {
+	exportManagementFixture(t)
+	root := mkUser(t, func(u *model.User) { u.Role = common.RoleRootUser })
+	admin := mkUser(t, func(u *model.User) { u.Role = common.RoleAdminUser })
+	job := mkReadyExportJob(t, root.Id, "private-diagnostic-export")
+	job.CreatorRole = common.RoleRootUser
+	job.Columns = []string{"log_raw"}
+	model.UpdateLogExportJob(job)
+	for _, handler := range []gin.HandlerFunc{GetLogExportJob, GetLogExportDownloadURL, DeleteLogExportJob} {
+		c, rec := newCtx(t, http.MethodGet, "/api/log/export/jobs/"+job.JobID, nil)
+		c.Set("id", admin.Id)
+		c.Set("role", admin.Role)
+		c.Params = gin.Params{{Key: "job_id", Value: job.JobID}}
+		handler(c)
+		require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	}
+	for _, viewer := range []*model.User{admin, root} {
+		token, err := model.CreateManagedLogExportDownloadToken(job.JobID, viewer.Id, 1, "usage_admin")
+		require.NoError(t, err)
+		c, rec := newCtx(t, http.MethodGet, "/dl/log-export/"+token, nil)
+		c.Params = gin.Params{{Key: "token", Value: token}}
+		DownloadLogExport(c)
+		if viewer.Id == admin.Id {
+			require.Equal(t, http.StatusForbidden, rec.Code)
+			continue
+		}
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Equal(t, "private-diagnostic-export", rec.Body.String())
+		require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", root.Id).Update("role", common.RoleAdminUser).Error)
+		c, rec = newCtx(t, http.MethodGet, "/dl/log-export/"+token, nil)
+		c.Params = gin.Params{{Key: "token", Value: token}}
+		c.Request.Header.Set("Range", "bytes=0-2")
+		DownloadLogExport(c)
+		require.Equal(t, http.StatusForbidden, rec.Code)
+	}
+}
+
+func TestCompleteLogExportCatalogAndSharedTemplates(t *testing.T) {
+	exportManagementFixture(t)
+	root := mkUser(t, func(u *model.User) { u.Role = common.RoleRootUser })
+	if !model.DB.Migrator().HasTable(&model.LogExportTemplate{}) {
+		require.NoError(t, model.DB.AutoMigrate(&model.LogExportTemplate{}))
+	}
+	for _, role := range []int{common.RoleAdminUser, common.RoleRootUser} {
+		c, rec := newCtx(t, http.MethodGet, "/api/log/export/columns", nil)
+		c.Set("role", role)
+		GetLogExportColumns(c)
+		if role == common.RoleRootUser {
+			require.Contains(t, rec.Body.String(), "builtin:full_raw")
+		} else {
+			require.NotContains(t, rec.Body.String(), "log_raw")
+			require.NotContains(t, rec.Body.String(), "builtin:full_raw")
+		}
+	}
+	c, rec := newCtx(t, http.MethodPost, "/api/log/export/templates", map[string]any{
+		"name": root.Username, "columns": []string{"log_raw"}, "is_shared": true,
+	})
+	c.Set("id", root.Id)
+	c.Set("role", root.Role)
+	CreateLogExportTemplate(c)
+	response := decodeResp(t, rec)
+	require.True(t, response.Success, rec.Body.String())
+	var tpl model.LogExportTemplate
+	require.NoError(t, common.Unmarshal(response.Data, &tpl))
+	t.Cleanup(func() { require.NoError(t, model.DeleteLogExportTemplate(tpl.Id)) })
+	require.Equal(t, []string{"log_raw"}, tpl.ColumnKeys)
+	for _, role := range []int{common.RoleAdminUser, common.RoleRootUser} {
+		c, rec = newCtx(t, http.MethodGet, "/api/log/export/templates", nil)
+		c.Set("id", root.Id)
+		c.Set("role", role)
+		GetLogExportTemplates(c)
+		if role == common.RoleRootUser {
+			require.Contains(t, rec.Body.String(), root.Username)
+		} else {
+			require.NotContains(t, rec.Body.String(), root.Username)
+		}
+	}
+	for _, handler := range []gin.HandlerFunc{CreateLogExportTemplate, UpdateLogExportTemplate, DeleteLogExportTemplate} {
+		c, rec = newCtx(t, http.MethodPost, "/api/log/export/templates", map[string]any{"name": root.Username, "columns": []string{"log_raw"}})
+		c.Set("id", root.Id)
+		c.Set("role", common.RoleAdminUser)
+		c.Params = gin.Params{{Key: "id", Value: strconv.Itoa(tpl.Id)}}
+		handler(c)
+		require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	}
+	for _, req := range []createLogExportJobRequest{
+		{Columns: []string{"quota", " log_raw "}},
+		{TemplateId: model.LogExportTemplateFullRaw},
+		{TemplateId: strconv.Itoa(tpl.Id)},
+	} {
+		c, _ = newCtx(t, http.MethodPost, "/api/log/export/jobs", nil)
+		c.Set("id", root.Id)
+		c.Set("role", common.RoleAdminUser)
+		_, _, _, err := resolveLogExportRequestShape(c, req)
+		require.ErrorIs(t, err, model.ErrLogExportRawForbidden)
+		c.Set("role", common.RoleRootUser)
+		columns, _, _, err := resolveLogExportRequestShape(c, req)
+		require.NoError(t, err)
+		require.Contains(t, columns, "log_raw")
+		req.Mode = model.LogExportModeSummary
+		_, _, _, err = resolveLogExportRequestShape(c, req)
+		require.ErrorIs(t, err, model.ErrLogExportRawOptions)
+		req.Mode = model.LogExportModeBoth
+		ratio := "1"
+		req.GroupRatioOverride = &ratio
+		_, _, _, err = resolveLogExportRequestShape(c, req)
+		require.ErrorIs(t, err, model.ErrLogExportRawOptions)
+	}
+}

@@ -4,8 +4,41 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestLogExportAdminCooldown(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		admin, user, want int
+	}{
+		{"inherit_custom", -1, 120, 120},
+		{"inherit_default", -1, 0, 300},
+		{"invalid_negative", -2, 120, 120},
+		{"disabled", 0, 120, 0},
+		{"minimum", 1, 120, 1},
+		{"independent", 30, 120, 30},
+		{"maximum", 86400, 120, 86400},
+		{"clamped", 86401, 120, 86400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := LogExportSetting{AdminCooldownSec: tc.admin, UserCooldownSec: tc.user}
+			require.Equal(t, tc.want, s.GetAdminCooldownSec())
+		})
+	}
+
+	// Missing keys on upgrade must preserve an existing custom user cooldown.
+	s := *GetLogExportSetting()
+	require.Equal(t, -1, s.AdminCooldownSec)
+	manager := config.NewConfigManager()
+	manager.Register("log_export_setting", &s)
+	require.NoError(t, manager.LoadFromDB(map[string]string{"log_export_setting.user_cooldown_sec": "73"}))
+	require.Equal(t, 73, s.GetAdminCooldownSec())
+	require.NoError(t, manager.LoadFromDB(map[string]string{"log_export_setting.admin_cooldown_sec": "0"}))
+	require.Zero(t, s.GetAdminCooldownSec())
+}
 
 // 每个 getter 都必须对非法值（0/负数）兜底到默认值，否则一次误配置就会让导出
 // 死循环或彻底失速。

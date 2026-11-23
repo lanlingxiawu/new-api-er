@@ -99,10 +99,13 @@ func (job *LogExportJob) ExportSource() string {
 // LogExportAccess is request-local. Customers must be loaded from the current DB,
 // never supplied by the client or retained across requests.
 type LogExportAccess struct {
-	UserID    int
-	Role      int
-	Scope     string
-	Customers map[int]bool
+	AuditRead           bool
+	AuditExport         bool
+	AuditSecurityExport bool
+	UserID              int
+	Role                int
+	Scope               string
+	Customers           map[int]bool
 }
 
 func (a *LogExportAccess) LoadCustomers(ctx context.Context, jobs []*LogExportJob, query LogExportListQuery) error {
@@ -146,10 +149,42 @@ func (a LogExportAccess) Permissions(job *LogExportJob) (view, operate bool) {
 	if a.UserID <= 0 {
 		return false, false
 	}
+	if LogExportHasRawColumn(job.Columns) {
+		ok := job.EffectiveDataSource() == LogExportDataUsage && (a.Scope == "admin" || a.Scope == "usage_admin") &&
+			a.Role >= common.RoleRootUser && job.CreatorRole >= common.RoleRootUser && !job.SelfExport && job.EmployeeScope == nil
+		return ok, ok
+	}
+	if job.EffectiveDataSource() == LogExportDataAudit {
+		if job.AuditFilters == nil || job.EmployeeScope != nil {
+			return false, false
+		}
+		if a.Scope == "audit_self" {
+			ok := job.IsSelfExportFor(a.UserID) && job.AuditFilters.SelfView && job.AuditFilters.UserId == a.UserID && job.AuditFilters.IPRisk == ""
+			return ok, ok
+		}
+		ok := a.Scope == "audit_admin" && a.Role >= common.RoleAdminUser && a.AuditRead && a.AuditExport && !job.SelfExport && !job.AuditFilters.SelfView &&
+			(job.CreatorRole < common.RoleRootUser || a.Role >= common.RoleRootUser) && (job.AuditFilters.IPRisk == "" || a.AuditSecurityExport)
+		return ok, ok
+	}
+	if job.EffectiveDataSource() == LogExportDataQuota {
+		if job.QuotaFilters == nil || job.SelfExport || job.EmployeeScope != nil || job.NeedsSummary() || job.GroupRatioOverride != nil {
+			return false, false
+		}
+		if a.Scope != "quota_admin" || a.Role < common.RoleAdminUser {
+			return false, false
+		}
+		if quotaExportHasRootColumn(job.Columns) && (job.CreatorRole < common.RoleRootUser || a.Role < common.RoleRootUser) {
+			return false, false
+		}
+		return true, true
+	}
+	if job.EffectiveDataSource() != LogExportDataUsage {
+		return false, false
+	}
 	switch a.Scope {
-	case "admin":
+	case "admin", "usage_admin":
 		return a.Role >= common.RoleAdminUser, a.Role >= common.RoleAdminUser
-	case "self":
+	case "self", "usage_self":
 		return job.IsSelfExportFor(a.UserID), job.IsSelfExportFor(a.UserID)
 	case "employee":
 		if job.UserID == a.UserID && job.EmployeeScope != nil {
@@ -160,6 +195,14 @@ func (a LogExportAccess) Permissions(job *LogExportJob) (view, operate bool) {
 		}
 	}
 	return false, false
+}
+
+// CanReadData is stricter than task management: a demoted account may still
+// remove its own audit export, but cannot read data generated at its old role.
+func (a LogExportAccess) CanReadData(job *LogExportJob) bool {
+	_, operate := a.Permissions(job)
+	return operate && job.HasCurrentAuditProjection() &&
+		(job.EffectiveDataSource() != LogExportDataAudit || a.Role >= job.CreatorRole)
 }
 
 type ManagedLogExportJob struct {
@@ -186,13 +229,15 @@ func (a LogExportAccess) PublicJob(job *LogExportJob) *ManagedLogExportJob {
 		public.Options = LogExportOptions{}
 		public.Lang = ""
 		public.CreatorRole = 0
+		public.AuditFilters = nil
+		public.QuotaFilters = nil
 	}
 	// Old restart errors may contain implementation details. Only stable codes leave the server.
-	if public.Error != "" && !slices.Contains([]string{"disk_full", "too_many_parts", "timeout", "too_many_groups", "internal"}, public.Error) {
+	if public.Error != "" && !slices.Contains([]string{"disk_full", "too_many_parts", "timeout", "too_many_groups", "internal", "reprice_failed", "access_changed", "risk_changed"}, public.Error) {
 		public.Error = "internal"
 	}
 	return &ManagedLogExportJob{LogExportJob: public, Source: job.ExportSource(),
-		CanDownload: operate && job.Status == LogExportStatusReady && len(job.Parts) > 0,
+		CanDownload: a.CanReadData(job) && job.Status == LogExportStatusReady && len(job.Parts) > 0,
 		CanCancel:   operate && !job.IsTerminal(), CanDelete: operate && job.IsTerminal()}
 }
 
@@ -254,12 +299,13 @@ func ListManagedLogExportJobs(ctx context.Context, access LogExportAccess, query
 	if err := query.Validate(); err != nil {
 		return nil, err
 	}
-	if access.Scope == "self" && query.CreatorID > 0 && query.CreatorID != access.UserID {
+	self := slices.Contains([]string{"self", "usage_self", "audit_self"}, access.Scope)
+	if self && query.CreatorID > 0 && query.CreatorID != access.UserID {
 		return nil, ErrEmployeeExportAccess
 	}
 	page := &LogExportJobPage{Jobs: make([]*ManagedLogExportJob, 0)}
 	key := logExportAllJobsKey
-	if access.Scope == "self" || query.Scope == "mine" {
+	if self || query.Scope == "mine" {
 		key = logExportUserJobsKey(access.UserID)
 	} else if query.CreatorID > 0 {
 		key = logExportUserJobsKey(query.CreatorID)
@@ -431,15 +477,22 @@ func CurrentLogExportAccess(ctx context.Context, userID int, scope string) (LogE
 
 // Export download grants are stored server-side; the browser only receives a random token.
 type LogExportDownloadGrant struct {
-	Version int    `json:"version"`
-	JobID   string `json:"job_id"`
-	UserID  int    `json:"user_id"`
-	Part    int    `json:"part"`
-	Scope   string `json:"scope"`
+	DataSource string `json:"data_source,omitempty"`
+	Version    int    `json:"version"`
+	JobID      string `json:"job_id"`
+	UserID     int    `json:"user_id"`
+	Part       int    `json:"part"`
+	Scope      string `json:"scope"`
 }
 
 func CreateManagedLogExportDownloadToken(jobID string, userID, part int, scope string) (string, error) {
-	data, err := common.Marshal(LogExportDownloadGrant{Version: 2, JobID: jobID, UserID: userID, Part: part, Scope: scope})
+	grant := LogExportDownloadGrant{Version: 2, JobID: jobID, UserID: userID, Part: part, Scope: scope}
+	if scope == "quota_admin" {
+		grant.Version, grant.DataSource = 4, LogExportDataQuota
+	} else if strings.HasPrefix(scope, "audit_") {
+		grant.Version, grant.DataSource = 3, LogExportDataAudit
+	}
+	data, err := common.Marshal(grant)
 	if err != nil {
 		return "", err
 	}
@@ -462,7 +515,10 @@ func ConsumeManagedLogExportDownloadToken(token string) (*LogExportDownloadGrant
 		if err := common.UnmarshalJsonStr(raw, grant); err != nil {
 			return nil, err
 		}
-		if grant.Version != 2 || grant.UserID <= 0 || grant.Part < 0 || !slices.Contains([]string{"admin", "self", "employee"}, grant.Scope) {
+		valid := grant.Version == 2 && grant.DataSource == "" && slices.Contains([]string{"admin", "self", "employee", "usage_admin", "usage_self"}, grant.Scope)
+		valid = valid || grant.Version == 3 && grant.DataSource == LogExportDataAudit && slices.Contains([]string{"audit_admin", "audit_self"}, grant.Scope)
+		valid = valid || grant.Version == 4 && grant.DataSource == LogExportDataQuota && grant.Scope == "quota_admin"
+		if !valid || grant.UserID <= 0 || grant.Part < 0 {
 			return nil, ErrEmployeeExportAccess
 		}
 		return grant, nil
@@ -481,4 +537,15 @@ func ConsumeManagedLogExportDownloadToken(token string) (*LogExportDownloadGrant
 		return nil, ErrEmployeeExportAccess
 	}
 	return grant, nil
+}
+
+func (g *LogExportDownloadGrant) MatchesSource(job *LogExportJob) bool {
+	if g.Version < 3 {
+		return job.EffectiveDataSource() == LogExportDataUsage
+	}
+	if g.Version == 4 {
+		return g.DataSource == LogExportDataQuota && job.EffectiveDataSource() == LogExportDataQuota && g.Scope == "quota_admin" && !job.SelfExport
+	}
+	return g.Version == 3 && g.DataSource == LogExportDataAudit && job.EffectiveDataSource() == LogExportDataAudit &&
+		((g.Scope == "audit_self" && job.SelfExport) || (g.Scope == "audit_admin" && !job.SelfExport))
 }

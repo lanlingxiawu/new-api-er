@@ -33,9 +33,11 @@ import {
   getDataCleanup,
   previewDataCleanup,
   startDataCleanup,
+  startErrorLogCleanup,
   type CleanupKind,
   type CleanupRun,
 } from './data-cleanup-api'
+import { ErrorLogCleanupProgress } from './error-log-cleanup-progress'
 
 export function FinancialDetailCleanup() {
   const { t } = useTranslation()
@@ -72,9 +74,12 @@ export function DataCleanupControl(props: { kind: CleanupKind }) {
   const client = useQueryClient()
   const [date, setDate] = useState<Date | undefined>(
     () =>
-      new Date(Date.now() - (props.kind === 'error_logs' ? 30 : 90) * 86400000)
+      new Date(Date.now() - (props.kind === 'error_logs' ? 30 : 3) * 86400000)
   )
-  const [preview, setPreview] = useState<CleanupRun | null>(null)
+  const [confirmation, setConfirmation] = useState<{
+    before: number
+    run?: CleanupRun
+  } | null>(null)
   const [runId, setRunId] = useState<string>()
   const queryKey = ['data-cleanup', props.kind, runId]
   const task = useQuery({
@@ -87,20 +92,41 @@ export function DataCleanupControl(props: { kind: CleanupKind }) {
   })
   const previewMutation = useMutation({
     mutationFn: (before: number) => previewDataCleanup(props.kind, before),
-    onSuccess: setPreview,
+    onSuccess: (run) => setConfirmation({ before: run.before, run }),
   })
   const startMutation = useMutation({
-    mutationFn: startDataCleanup,
+    mutationFn: (request: { before: number; run?: CleanupRun }) =>
+      request.run
+        ? startDataCleanup(request.run.id, request.run.status === 'failed')
+        : startErrorLogCleanup(request.before),
+    onMutate: () =>
+      client.cancelQueries({ queryKey: ['data-cleanup', props.kind] }),
     onSuccess: (run) => {
       client.setQueryData(['data-cleanup', props.kind, run.id], run)
       setRunId(run.id)
-      setPreview(null)
+      setConfirmation(null)
       toast.success(t('Cleanup started. You can leave this page.'))
     },
   })
   const active =
     task.data?.status === 'pending' || task.data?.status === 'running'
   const dateValid = date !== undefined && Number.isFinite(date.getTime())
+  let actionLabel = t('Preview cleanup')
+  if (props.kind === 'error_logs') actionLabel = t('Clean error usage logs')
+  if (previewMutation.isPending) actionLabel = t('Loading...')
+  let stoppedMessage = t(
+    'Cleanup stopped. Completed deletions are kept. Preview again to clean the remaining records.'
+  )
+  if (props.kind === 'error_logs') {
+    stoppedMessage = t(
+      'Cleanup stopped. Completed deletions are kept. You can start a new cleanup.'
+    )
+  }
+  if (task.data?.can_resume) {
+    stoppedMessage = t(
+      'Cleanup stopped. Completed deletions are kept. You can continue from saved progress.'
+    )
+  }
   let title = t('Clean ledger details')
   if (props.kind === 'commission') title = t('Clean commission details')
   if (props.kind === 'error_logs') title = t('Clean error usage logs')
@@ -110,15 +136,26 @@ export function DataCleanupControl(props: { kind: CleanupKind }) {
           'Only error usage logs are deleted. Consumption and audit logs are kept. Keep at least the latest 24 hours.'
         )
       : t(
-          'Balances, totals and manual adjustments are kept. Deleted details cannot be restored or exported. Keep at least the latest 30 days.'
+          'Balances, totals and manual adjustments are kept. Deleted details cannot be restored or exported. Keep at least the latest 3 days.'
         )
   let countText = ''
+  const preview = confirmation?.run
   if (preview) {
-    countText = preview.count_exact
-      ? t('{{count}} records match this cleanup.', { count: preview.matched })
-      : t('At least {{count}} records match this cleanup.', {
-          count: preview.matched,
-        })
+    if (preview.status === 'failed') {
+      countText = t(
+        'Continue from saved progress. The original cutoff date and cleanup range are kept.'
+      )
+    } else if (!preview.count_exact && preview.matched === 0) {
+      countText = t(
+        'No matches found in this preview. The full cleanup may find more records.'
+      )
+    } else {
+      countText = preview.count_exact
+        ? t('{{count}} records match this cleanup.', { count: preview.matched })
+        : t('At least {{count}} records match this cleanup.', {
+            count: preview.matched,
+          })
+    }
   }
   return (
     <div
@@ -139,16 +176,22 @@ export function DataCleanupControl(props: { kind: CleanupKind }) {
             !dateValid ||
             active ||
             task.isPending ||
+            task.isError ||
             previewMutation.isPending ||
             startMutation.isPending
           }
           onClick={() => {
             if (dateValid) {
-              previewMutation.mutate(Math.floor(date.getTime() / 1000))
+              const before = Math.floor(date.getTime() / 1000)
+              if (props.kind === 'error_logs') {
+                setConfirmation({ before })
+              } else {
+                previewMutation.mutate(before)
+              }
             }
           }}
         >
-          {previewMutation.isPending ? t('Loading...') : t('Preview cleanup')}
+          {actionLabel}
         </Button>
         {task.isError && (
           <Button
@@ -159,25 +202,57 @@ export function DataCleanupControl(props: { kind: CleanupKind }) {
             {t('Retry')}
           </Button>
         )}
+        {task.data?.can_resume && !active && !task.isError && (
+          <Button
+            type='button'
+            variant='outline'
+            disabled={previewMutation.isPending || startMutation.isPending}
+            onClick={() => {
+              if (task.data) {
+                setConfirmation({ before: task.data.before, run: task.data })
+              }
+            }}
+          >
+            {t('Continue cleanup')}
+          </Button>
+        )}
       </div>
+      {task.isError && !task.data && (
+        <p role='status' className='text-muted-foreground text-sm'>
+          {t(
+            'Cleanup status could not be refreshed. Retry to see the latest progress.'
+          )}
+        </p>
+      )}
       {task.data && (
         <div role='status' className='rounded-md border p-3 text-sm'>
-          {active && <p>{t('Cleanup is running in the background.')}</p>}
-          {task.data.status === 'succeeded' && <p>{t('Cleanup completed.')}</p>}
+          {props.kind === 'error_logs' ? (
+            <ErrorLogCleanupProgress
+              run={task.data}
+              stale={task.isError}
+              lastReadAt={task.dataUpdatedAt}
+            />
+          ) : (
+            active && <p>{t('Cleanup is running in the background.')}</p>
+          )}
+          {!task.isError && task.data.status === 'succeeded' && (
+            <p>{t('Cleanup completed.')}</p>
+          )}
           {task.data.status === 'failed' && (
-            <p className='text-destructive'>
-              {t(
-                'Cleanup stopped. Completed deletions are kept. Preview again to clean the remaining records.'
-              )}
-            </p>
+            <p className='text-destructive'>{stoppedMessage}</p>
           )}
           <p className='text-muted-foreground'>
-            {props.kind === 'error_logs' && task.data.status === 'failed'
+            {props.kind === 'error_logs'
               ? t('At least {{count}} records deleted.', {
                   count: task.data.deleted,
                 })
               : t('{{count}} records deleted.', { count: task.data.deleted })}
           </p>
+          {props.kind === 'error_logs' && (
+            <p className='text-muted-foreground'>
+              {t('{{count}} records scanned.', { count: task.data.scanned })}
+            </p>
+          )}
           <p className='text-muted-foreground'>
             {t('Before {{date}}', {
               date: formatTimestampToDate(task.data.before, 'seconds'),
@@ -186,9 +261,9 @@ export function DataCleanupControl(props: { kind: CleanupKind }) {
         </div>
       )}
       <ConfirmDialog
-        open={preview !== null}
+        open={confirmation !== null}
         onOpenChange={(open) => {
-          if (!open && !startMutation.isPending) setPreview(null)
+          if (!open && !startMutation.isPending) setConfirmation(null)
         }}
         title={title}
         destructive
@@ -200,18 +275,18 @@ export function DataCleanupControl(props: { kind: CleanupKind }) {
               {t(
                 'Permanently delete records before {{date}} (your local time).',
                 {
-                  date: preview
-                    ? formatTimestampToDate(preview.before, 'seconds')
+                  date: confirmation
+                    ? formatTimestampToDate(confirmation.before, 'seconds')
                     : '',
                 }
               )}
             </p>
-            <p>{countText}</p>
+            {countText && <p>{countText}</p>}
             <p>{description}</p>
           </div>
         }
         handleConfirm={() => {
-          if (preview) startMutation.mutate(preview.id)
+          if (confirmation) startMutation.mutate(confirmation)
         }}
       />
     </div>

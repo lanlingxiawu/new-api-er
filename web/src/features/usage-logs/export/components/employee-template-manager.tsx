@@ -11,7 +11,6 @@ import { Combobox } from '@/components/ui/combobox'
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -29,10 +28,10 @@ import {
   SheetContent,
   SheetHeader,
   SheetTitle,
-  SheetDescription,
   SheetFooter,
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
+import { handleServerError } from '@/lib/handle-server-error'
 
 import {
   EMPLOYEE_TEMPLATE_BASE,
@@ -94,11 +93,12 @@ export function EmployeeTemplateManager() {
       setDeleting(undefined)
       void client.invalidateQueries({ queryKey: ['employee-export-templates'] })
     },
-    // The HTTP client has already shown the error; the list may be stale.
-    onError: () =>
+    onError: (error) => {
+      handleServerError(error)
       void client.invalidateQueries({
         queryKey: ['employee-export-templates'],
-      }),
+      })
+    },
   })
   return (
     <>
@@ -110,11 +110,6 @@ export function EmployeeTemplateManager() {
         <DialogContent className='max-h-[90vh] overflow-y-auto sm:max-w-3xl'>
           <DialogHeader>
             <DialogTitle>{t('Employee export templates')}</DialogTitle>
-            <DialogDescription>
-              {t(
-                'When employee customer exports are on, every employee can use the built-in templates and all enabled custom templates.'
-              )}
-            </DialogDescription>
           </DialogHeader>
           <div className='flex gap-2'>
             <Input
@@ -317,11 +312,12 @@ function EmployeeTemplateEditor(props: {
       toast.success(t('Template saved'))
       props.onClose()
     },
-    // The HTTP client has already shown the error (a version conflict asks to reopen the latest version).
-    onError: () =>
+    onError: (error) => {
+      handleServerError(error)
       void client.invalidateQueries({
         queryKey: ['employee-export-templates'],
-      }),
+      })
+    },
   })
   return (
     <Sheet
@@ -338,11 +334,6 @@ function EmployeeTemplateEditor(props: {
           <SheetTitle>
             {draft.id ? t('Edit export template') : t('New export template')}
           </SheetTitle>
-          <SheetDescription>
-            {t(
-              'Choose the fields and output employees can use when exporting their customers.'
-            )}
-          </SheetDescription>
         </SheetHeader>
         <div className='min-h-0 flex-1 overflow-y-auto px-4 py-2'>
           <fieldset disabled={save.isPending} className='space-y-4'>

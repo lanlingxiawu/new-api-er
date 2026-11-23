@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -363,6 +364,84 @@ func TestRecordTopupLog(t *testing.T) {
 	assert.Equal(t, "card", admin["callback_payment_method"])
 }
 
+func TestRelayLogsAlwaysRecordClientIP(t *testing.T) {
+	resetRelayLogPipelineForTest()
+	previousAccepting := relayLogAccepting.Load()
+	previousConsume, previousExport := common.LogConsumeEnabled, common.DataExportEnabled
+	cfg := operation_setting.GetRelayLogPipelineSetting()
+	previousConfig := *cfg
+	common.LogConsumeEnabled, common.DataExportEnabled = true, false
+	cfg.Enabled = true
+	relayLogAccepting.Store(true)
+	t.Cleanup(func() {
+		resetRelayLogPipelineForTest()
+		relayLogAccepting.Store(previousAccepting)
+		common.LogConsumeEnabled, common.DataExportEnabled = previousConsume, previousExport
+		*cfg = previousConfig
+	})
+
+	for _, tc := range []struct {
+		name           string
+		setting        *dto.UserSetting
+		remoteAddr     string
+		forwardedFor   string
+		trustedProxies []string
+		withoutRequest bool
+		wantIP         string
+	}{
+		{name: "missing settings", remoteAddr: "203.0.113.7:5555", wantIP: "203.0.113.7"},
+		{name: "default settings", setting: &dto.UserSetting{}, remoteAddr: "203.0.113.7:5555", wantIP: "203.0.113.7"},
+		{name: "disabled", setting: &dto.UserSetting{RecordIpLog: false}, remoteAddr: "203.0.113.7:5555", wantIP: "203.0.113.7"},
+		{name: "enabled", setting: &dto.UserSetting{RecordIpLog: true}, remoteAddr: "203.0.113.7:5555", wantIP: "203.0.113.7"},
+		{name: "IPv6 disabled", setting: &dto.UserSetting{RecordIpLog: false}, remoteAddr: "[2001:db8::7]:5555", wantIP: "2001:db8::7"},
+		{name: "trusted proxy disabled", setting: &dto.UserSetting{RecordIpLog: false}, remoteAddr: "127.0.0.1:5555", forwardedFor: "203.0.113.8", trustedProxies: []string{"127.0.0.1"}, wantIP: "203.0.113.8"},
+		{name: "untrusted proxy disabled", setting: &dto.UserSetting{RecordIpLog: false}, remoteAddr: "198.51.100.2:5555", forwardedFor: "203.0.113.8", wantIP: "198.51.100.2"},
+		{name: "without request", setting: &dto.UserSetting{RecordIpLog: true}, withoutRequest: true},
+		{name: "invalid remote address", remoteAddr: "invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, engine := gin.CreateTestContext(httptest.NewRecorder())
+			require.NoError(t, engine.SetTrustedProxies(tc.trustedProxies))
+			if !tc.withoutRequest {
+				c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+				c.Request.RemoteAddr = tc.remoteAddr
+				c.Request.Header.Set("X-Forwarded-For", tc.forwardedFor)
+			}
+			if tc.setting != nil {
+				common.SetContextKey(c, constant.ContextKeyUserSetting, *tc.setting)
+			}
+			c.Set("username", "ip-log-test")
+			c.Set(common.RequestIdKey, "ip-log-request")
+			c.Set(common.UpstreamRequestIdKey, "ip-log-upstream")
+
+			require.True(t, EnqueueConsumeLog(c, 42, RecordConsumeLogParams{
+				ChannelId: 7, ModelName: "test-model", Quota: 123, PromptTokens: 11, CompletionTokens: 22, IsStream: true,
+			}, nil))
+			RecordErrorLog(c, 42, 7, "test-model", "test-token", "upstream failed", 0, 0, true, "default", nil)
+			// The queued records retain the IP after the request context is released.
+			c.Request = nil
+			consumeEvents := takeRelayLogBatch(relayLogKindConsume)
+			errorEvents := takeRelayLogBatch(relayLogKindError)
+			require.Len(t, consumeEvents, 1)
+			require.Len(t, errorEvents, 1)
+			for _, event := range []*relayLogEvent{consumeEvents[0], errorEvents[0]} {
+				require.Equal(t, tc.wantIP, event.Log.Ip)
+				require.Equal(t, "ip-log-request", event.Log.RequestId)
+				require.Equal(t, "ip-log-upstream", event.Log.UpstreamRequestId)
+				require.Equal(t, 42, event.Log.UserId)
+				require.Equal(t, 7, event.Log.ChannelId)
+			}
+			require.Equal(t, LogTypeConsume, consumeEvents[0].Log.Type)
+			require.Equal(t, 123, consumeEvents[0].Log.Quota)
+			require.Equal(t, 11, consumeEvents[0].Log.PromptTokens)
+			require.Equal(t, 22, consumeEvents[0].Log.CompletionTokens)
+			require.True(t, consumeEvents[0].Log.IsStream)
+			require.Equal(t, LogTypeError, errorEvents[0].Log.Type)
+			require.Equal(t, "upstream failed", errorEvents[0].Log.Content)
+		})
+	}
+}
+
 func TestRecordErrorLog(t *testing.T) {
 	requireLogDB(t)
 	resetRelayLogPipelineForTest()
@@ -379,7 +458,8 @@ func TestRecordErrorLog(t *testing.T) {
 	c.Request = httptest.NewRequest("POST", "/v1/chat", nil)
 	c.Set("username", u.Username)
 
-	// default user setting -> RecordIpLog false -> ip stays empty
+	// Missing user settings must not suppress the request IP.
+	c.Request.RemoteAddr = "203.0.113.7:5555"
 	other := NewLogOther()
 	other.SetPublic("detail", "x")
 	RecordErrorLog(c, u.Id, 42, "gpt-4o", "tok-1", "boom", 7, 3, true, "grpA", other)
@@ -392,7 +472,7 @@ func TestRecordErrorLog(t *testing.T) {
 	assert.Equal(t, "gpt-4o", l.ModelName)
 	assert.Equal(t, "grpA", l.Group)
 	assert.True(t, l.IsStream)
-	assert.Equal(t, "", l.Ip)
+	assert.Equal(t, "203.0.113.7", l.Ip)
 }
 
 func TestRecordErrorLog_RecordsIpWhenEnabled(t *testing.T) {
@@ -418,7 +498,7 @@ func TestRecordErrorLog_RecordsIpWhenEnabled(t *testing.T) {
 	RecordErrorLog(c, u.Id, 1, "m", "tk", "err", 0, 0, false, "g", nil)
 	flushRelayErrorLogsForTest(t)
 	l := firstUserLog(t, u.Id)
-	assert.NotEmpty(t, l.Ip) // ClientIP recorded because record_ip_log=true
+	assert.Equal(t, "203.0.113.7", l.Ip)
 }
 
 func TestRecordConsumeLog(t *testing.T) {
@@ -429,7 +509,9 @@ func TestRecordConsumeLog(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("POST", "/v1/chat", nil)
+	c.Request.RemoteAddr = "203.0.113.9:5555"
 	c.Set("username", u.Username)
+	common.SetContextKey(c, constant.ContextKeyUserSetting, dto.UserSetting{RecordIpLog: false})
 
 	// disabled -> returns 0, writes nothing
 	prev := common.LogConsumeEnabled
@@ -449,6 +531,7 @@ func TestRecordConsumeLog(t *testing.T) {
 	assert.Equal(t, 1234, l.Quota)
 	assert.Equal(t, 11, l.PromptTokens)
 	assert.Equal(t, 22, l.CompletionTokens)
+	assert.Equal(t, "203.0.113.9", l.Ip)
 }
 
 func TestRecordConsumeLog_DataExportLogsQuota(t *testing.T) {

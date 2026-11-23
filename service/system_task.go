@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 )
@@ -88,9 +89,21 @@ func init() {
 }
 
 type LogCleanupPayload struct {
-	TargetTimestamp int64 `json:"target_timestamp"`
-	BatchSize       int   `json:"batch_size"`
+	Scope                string `json:"scope,omitempty"`
+	TargetTimestamp      int64  `json:"target_timestamp"`
+	AuditTargetTimestamp int64  `json:"audit_target_timestamp,omitempty"`
+	BatchSize            int    `json:"batch_size"`
 }
+
+const (
+	LogCleanupScopeUsage = "usage"
+	LogCleanupScopeAudit = "audit"
+)
+
+var (
+	ErrCleanupScope   = errors.New("cleanup.invalid_scope")
+	ErrCleanupLogDate = errors.New("cleanup.invalid_log_date")
+)
 
 type LogCleanupState struct {
 	Total     int64 `json:"total"`
@@ -167,9 +180,29 @@ func StartSystemTaskRunner() {
 	})
 }
 
-func StartLogCleanupTask(targetTimestamp int64) (*model.SystemTask, error) {
+func StartLogCleanupTask(targetTimestamp int64, scope string) (*model.SystemTask, error) {
+	if scope != "" && scope != LogCleanupScopeUsage && scope != LogCleanupScopeAudit {
+		return nil, ErrCleanupScope
+	}
+	if scope == LogCleanupScopeAudit {
+		if targetTimestamp <= 0 || targetTimestamp > common.GetTimestamp() {
+			return nil, ErrCleanupLogDate
+		}
+		if !operation_setting.GetDataCleanupSetting().Enabled {
+			return nil, ErrCleanupDisabled
+		}
+	}
 	if targetTimestamp <= 0 {
-		return nil, errors.New("target timestamp is required")
+		return nil, ErrCleanupDate
+	}
+
+	payload := LogCleanupPayload{Scope: scope, TargetTimestamp: targetTimestamp, BatchSize: logCleanupBatchSize}
+	if scope == LogCleanupScopeAudit {
+		// An older runner ignores scope. Keep its required timestamp invalid so
+		// a rolling upgrade can never interpret this as a usage-log deletion.
+		payload.TargetTimestamp = 0
+		payload.AuditTargetTimestamp = targetTimestamp
+		payload.BatchSize = operation_setting.GetDataCleanupSetting().BatchSize
 	}
 
 	activeTask, err := model.GetActiveSystemTask(model.SystemTaskTypeLogCleanup)
@@ -177,23 +210,41 @@ func StartLogCleanupTask(targetTimestamp int64) (*model.SystemTask, error) {
 		return nil, err
 	}
 	if activeTask != nil {
-		return activeTask, nil
+		return reuseLogCleanupTask(activeTask, payload)
 	}
 
-	payload := LogCleanupPayload{
-		TargetTimestamp: targetTimestamp,
-		BatchSize:       logCleanupBatchSize,
-	}
 	state := LogCleanupState{}
 	task, err := model.CreateSystemTask(model.SystemTaskTypeLogCleanup, payload, state)
 	if err != nil {
-		activeTask, activeErr := model.GetActiveSystemTask(model.SystemTaskTypeLogCleanup)
+		// Error-log and financial cleanup tasks reserve the same active key.
+		// Recheck the reservation after a failed INSERT to cover concurrent starts.
+		activeTask, activeErr := model.GetActiveSystemTaskByKey(model.SystemTaskTypeLogCleanup)
 		if activeErr == nil && activeTask != nil {
-			return activeTask, nil
+			if activeTask.Type != model.SystemTaskTypeLogCleanup {
+				return nil, fmt.Errorf("%w: %v", ErrCleanupBusy, err)
+			}
+			return reuseLogCleanupTask(activeTask, payload)
 		}
 		return nil, err
 	}
 	notifySystemTaskRunner()
+	return task, nil
+}
+
+func reuseLogCleanupTask(task *model.SystemTask, requested LogCleanupPayload) (*model.SystemTask, error) {
+	var active LogCleanupPayload
+	if err := task.DecodePayload(&active); err != nil {
+		return nil, ErrCleanupBusy
+	}
+	if active.Scope == "" {
+		active.Scope = LogCleanupScopeUsage
+	}
+	if requested.Scope == "" {
+		requested.Scope = LogCleanupScopeUsage
+	}
+	if active.Scope != requested.Scope || (active.Scope == LogCleanupScopeAudit && active.AuditTargetTimestamp != requested.AuditTargetTimestamp) {
+		return nil, ErrCleanupBusy
+	}
 	return task, nil
 }
 
@@ -343,12 +394,65 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 		failSystemTask(task, runnerID, err)
 		return
 	}
-	if payload.TargetTimestamp <= 0 {
-		failSystemTask(task, runnerID, errors.New("target timestamp is required"))
+	if payload.Scope != "" && payload.Scope != LogCleanupScopeUsage && payload.Scope != LogCleanupScopeAudit {
+		failSystemTask(task, runnerID, ErrCleanupScope)
+		return
+	}
+	isAudit := payload.Scope == LogCleanupScopeAudit
+	targetTimestamp := payload.TargetTimestamp
+	if isAudit {
+		targetTimestamp = payload.AuditTargetTimestamp
+	}
+	if targetTimestamp <= 0 || (isAudit && (payload.TargetTimestamp != 0 || targetTimestamp > common.GetTimestamp())) {
+		failSystemTask(task, runnerID, ErrCleanupDate)
 		return
 	}
 	if payload.BatchSize <= 0 {
 		payload.BatchSize = logCleanupBatchSize
+	}
+	countOld := model.CountOldLog
+	deleteOld := model.DeleteOldLogBatch
+	var batchSleep time.Duration
+	if isAudit {
+		cfg := operation_setting.GetDataCleanupSetting()
+		if !cfg.Enabled {
+			failSystemTask(task, runnerID, ErrCleanupDisabled)
+			return
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(cfg.TaskTimeoutSec)*time.Second)
+		defer cancel()
+		db, err := model.OpenAuditLogCleanupDB(ctx)
+		if err != nil {
+			failSystemTask(task, runnerID, err)
+			return
+		}
+		pool, err := db.DB()
+		if err != nil {
+			failSystemTask(task, runnerID, err)
+			return
+		}
+		defer pool.Close()
+		payload.BatchSize = min(payload.BatchSize, cfg.BatchSize)
+		batchSleep = time.Duration(cfg.BatchSleepMS) * time.Millisecond
+		queryTimeout := time.Duration(cfg.BatchTimeoutSec) * time.Second
+		if db.Dialector.Name() == "clickhouse" {
+			// A synchronous mutation can take longer than a relational batch.
+			queryTimeout = time.Duration(cfg.TaskTimeoutSec) * time.Second
+		}
+		countOld = func(ctx context.Context, target int64) (int64, error) {
+			ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+			defer cancel()
+			return model.CountOldAuditLog(ctx, db, target)
+		}
+		deleteOld = func(ctx context.Context, target int64, limit int) (int64, error) {
+			if !operation_setting.GetDataCleanupSetting().Enabled {
+				return 0, ErrCleanupDisabled
+			}
+			ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+			defer cancel()
+			return model.DeleteOldAuditLogBatch(ctx, db, target, limit)
+		}
 	}
 
 	state := LogCleanupState{}
@@ -358,7 +462,7 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 	}
 
 	for {
-		remaining, err := model.CountOldLog(ctx, payload.TargetTimestamp)
+		remaining, err := countOld(ctx, targetTimestamp)
 		if err != nil {
 			failSystemTask(task, runnerID, err)
 			return
@@ -378,7 +482,7 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 		// rows cannot be removed and we fail instead of busy-looping.
 		progressed := false
 		for state.Remaining > 0 {
-			rowsAffected, err := model.DeleteOldLogBatch(ctx, payload.TargetTimestamp, payload.BatchSize)
+			rowsAffected, err := deleteOld(ctx, targetTimestamp, payload.BatchSize)
 			if err != nil {
 				failSystemTask(task, runnerID, err)
 				return
@@ -403,6 +507,16 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 				logSystemTaskLockError(ctx, task, err)
 				return
 			}
+			if batchSleep > 0 {
+				timer := time.NewTimer(batchSleep)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					failSystemTask(task, runnerID, ctx.Err())
+					return
+				case <-timer.C:
+				}
+			}
 		}
 
 		if !progressed {
@@ -423,9 +537,17 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 
 	// 审计日志按自己的保留期清理，不受本任务的 target_timestamp 影响。
 	// 失败只记日志：消费日志已经删干净了，不该因为审计表把任务判失败。
-	auditDeleted, err := runAuditLogCleanup(ctx, payload.BatchSize)
-	if err != nil {
-		logger.LogWarn(ctx, fmt.Sprintf("audit log cleanup failed: deleted=%d err=%v", auditDeleted, err))
+	var auditDeleted int64
+	if !isAudit {
+		var err error
+		auditDeleted, err = runAuditLogCleanup(ctx, payload.BatchSize)
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("audit log cleanup failed: deleted=%d err=%v", auditDeleted, err))
+		}
+	}
+	if err := ctx.Err(); isAudit && err != nil {
+		failSystemTask(task, runnerID, err)
+		return
 	}
 
 	result := LogCleanupResult{DeletedCount: state.Processed, AuditDeletedCount: auditDeleted}
@@ -454,7 +576,7 @@ func runAuditLogCleanup(ctx context.Context, batchSize int) (int64, error) {
 		if err := ctx.Err(); err != nil {
 			return deleted, err
 		}
-		rows, err := model.DeleteOldAuditLogBatch(ctx, target, batchSize)
+		rows, err := model.DeleteOldAuditLogBatch(ctx, model.LOG_DB, target, batchSize)
 		if err != nil {
 			return deleted, err
 		}
@@ -551,7 +673,11 @@ func NewSystemTaskProgressReporter(task *model.SystemTask, runnerID string) func
 
 func failSystemTask(task *model.SystemTask, runnerID string, err error) {
 	logger.LogWarn(context.Background(), common.LogText("system task %s failed: %v", task.TaskID, err))
-	if finishErr := model.FinishSystemTask(task.TaskID, runnerID, model.SystemTaskStatusFailed, nil, err.Error()); finishErr != nil {
+	message := err.Error()
+	if task.Type == model.SystemTaskTypeLogCleanup {
+		message = "cleanup.failed"
+	}
+	if finishErr := model.FinishSystemTask(task.TaskID, runnerID, model.SystemTaskStatusFailed, nil, message); finishErr != nil {
 		logger.LogWarn(context.Background(), common.LogText("system task %s failed to save failure state: %v", task.TaskID, finishErr))
 	}
 }

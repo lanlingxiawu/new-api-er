@@ -29,10 +29,13 @@ import {
   Field,
   FieldDescription,
   FieldGroup,
+  FieldSet,
+  FieldLegend,
   FieldLabel,
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import {
   Select,
   SelectContent,
@@ -43,7 +46,6 @@ import {
 import {
   Sheet,
   SheetContent,
-  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -67,6 +69,7 @@ import type {
   AnomalyFilters,
   ExportMode,
   ExportOptions,
+  ExportTemplate,
   ExportTemplatePurpose,
   NumericFilters,
   SummaryDimension,
@@ -182,9 +185,10 @@ export function NewExportSheet({
 }: NewExportSheetProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const canOverrideRatio = useAuthStore(
-    (state) => (state.auth.user?.role ?? 0) >= ROLE.ADMIN
-  )
+  const viewerRole = useAuthStore((state) => state.auth.user?.role ?? 0)
+  const viewerId = useAuthStore((state) => state.auth.user?.id)
+  const canOverrideRatio = viewerRole >= ROLE.ADMIN
+  const canExportRaw = viewerRole >= ROLE.SUPER_ADMIN
   const [groupRatioOverride, setGroupRatioOverride] = useState<string>()
   const overrideEnabled = canOverrideRatio && groupRatioOverride !== undefined
   const ratioValid =
@@ -192,13 +196,13 @@ export function NewExportSheet({
     groupRatioOverrideSchema.safeParse(groupRatioOverride).success
 
   const { data: catalog } = useQuery({
-    queryKey: ['log-export-columns'],
+    queryKey: ['log-export-columns', viewerId, viewerRole],
     queryFn: getExportColumns,
     enabled: open,
     staleTime: 5 * 60 * 1000,
   })
   const { data: templates } = useQuery({
-    queryKey: ['log-export-templates'],
+    queryKey: ['log-export-templates', viewerId, viewerRole],
     queryFn: getExportTemplates,
     enabled: open,
   })
@@ -222,6 +226,10 @@ export function NewExportSheet({
   const [summaryDims, setSummaryDims] = useState<SummaryDimension[]>(['date'])
   const [templateId, setTemplateId] = useState<string>('')
   const [columns, setColumns] = useState<string[]>([])
+  const hasRawLog = columns.includes('log_raw')
+  const rawOptionsConflict =
+    hasRawLog && (mode === 'summary' || overrideEnabled)
+  const rawAccessDenied = hasRawLog && !canExportRaw
   const exportColumns = overrideEnabled
     ? columns.filter((key) => key !== 'other_raw')
     : columns
@@ -330,6 +338,7 @@ export function NewExportSheet({
   }
 
   const applyTemplate = (value: string) => {
+    if (!value) return
     setTemplateId(value)
     const builtin = catalog?.builtin_templates.find((tpl) => tpl.id === value)
     if (builtin) {
@@ -460,6 +469,16 @@ export function NewExportSheet({
           t('Enter a group ratio from 0 to 10000 with up to 6 decimal places.')
         )
       }
+      if (rawAccessDenied) {
+        throw new Error(t('Complete raw fields require root access.'))
+      }
+      if (rawOptionsConflict) {
+        throw new Error(
+          t(
+            'To export complete raw fields, include details and turn off the group ratio override.'
+          )
+        )
+      }
       return createExportJob({
         start_timestamp: Math.floor(range.start.getTime() / 1000),
         end_timestamp: Math.floor(range.end.getTime() / 1000),
@@ -484,7 +503,7 @@ export function NewExportSheet({
     },
     onSuccess: () => {
       toast.success(t('Export started'))
-      queryClient.invalidateQueries({ queryKey: ['log-export-jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['log-export-jobs', 'usage'] })
       onOpenChange(false)
     },
     onError: (error: Error) => toast.error(error.message || t('Export failed')),
@@ -501,6 +520,13 @@ export function NewExportSheet({
     onSuccess: (tpl) => {
       toast.success(t('Template saved'))
       setTemplateName('')
+      queryClient.setQueryData<ExportTemplate[]>(
+        ['log-export-templates', viewerId, viewerRole],
+        (current) => [
+          ...(current ?? []).filter((template) => template.id !== tpl.id),
+          tpl,
+        ]
+      )
       setTemplateId(String(tpl.id))
       queryClient.invalidateQueries({ queryKey: ['log-export-templates'] })
     },
@@ -513,6 +539,8 @@ export function NewExportSheet({
     !rangeTooLong &&
     (mode === 'summary' || exportColumns.length > 0) &&
     ratioValid &&
+    !rawOptionsConflict &&
+    !rawAccessDenied &&
     !createJob.isPending
 
   return (
@@ -523,11 +551,6 @@ export function NewExportSheet({
       >
         <SheetHeader>
           <SheetTitle>{t('New Export')}</SheetTitle>
-          <SheetDescription>
-            {t(
-              'Exports run in the background and are throttled to protect live traffic.'
-            )}
-          </SheetDescription>
         </SheetHeader>
 
         <div className='flex-1 space-y-6 overflow-y-auto px-4 py-2'>
@@ -645,6 +668,7 @@ export function NewExportSheet({
                 <ExportFilterSelect
                   field='channel'
                   label={t('Channel')}
+                  showId
                   value={channel}
                   onChange={setChannel}
                   start={
@@ -861,56 +885,52 @@ export function NewExportSheet({
                     }
                   />
                 </div>
-
-                {hasRowFilter && (
-                  <p className='text-muted-foreground text-xs'>
-                    {t(
-                      'Anomaly filters have no index to use, so the export still scans the whole time range — it takes as long as an unfiltered export, but the file is much smaller.'
-                    )}
-                  </p>
-                )}
               </div>
             </details>
 
             {/* 产出形态：明细一行一条日志，汇总按维度归并。放在筛选区末尾，
                 因为两者共用上面的全部筛选条件。 */}
-            <div className='space-y-1.5'>
-              <Label className='text-xs'>{t('Output')}</Label>
-              <div className='flex flex-wrap gap-1.5'>
-                <Button
-                  type='button'
-                  size='sm'
-                  variant={mode === 'detail' ? 'default' : 'outline'}
-                  onClick={() => setMode('detail')}
-                >
-                  {t('One row per log')}
-                </Button>
-                <Button
-                  type='button'
-                  size='sm'
-                  variant={mode === 'summary' ? 'default' : 'outline'}
-                  onClick={() => setMode('summary')}
-                >
-                  {t('Aggregated summary')}
-                </Button>
-                <Button
-                  type='button'
-                  size='sm'
-                  variant={mode === 'both' ? 'default' : 'outline'}
-                  onClick={() => setMode('both')}
-                >
-                  {t('Detail + summary')}
-                </Button>
-              </div>
-              {mode === 'both' && (
-                <p className='text-muted-foreground text-xs'>
-                  {t(
-                    'Both files come from a single scan and arrive in one archive, so it costs no more than exporting the detail alone.'
-                  )}
-                </p>
-              )}
-            </div>
+            <FieldSet>
+              <FieldLegend variant='label'>{t('Output')}</FieldLegend>
+              <RadioGroup
+                value={mode}
+                onValueChange={(value) => setMode(value as ExportMode)}
+                className='grid gap-2 sm:grid-cols-3'
+              >
+                {(
+                  [
+                    ['detail', 'One row per log'],
+                    ['summary', 'Aggregated summary'],
+                    ['both', 'Detail + summary'],
+                  ] as const
+                ).map(([value, label]) => (
+                  <Field
+                    key={value}
+                    orientation='horizontal'
+                    className='rounded-lg border p-3'
+                  >
+                    <RadioGroupItem value={value} id={`export-mode-${value}`} />
+                    <FieldLabel htmlFor={`export-mode-${value}`}>
+                      {t(label)}
+                    </FieldLabel>
+                  </Field>
+                ))}
+              </RadioGroup>
+            </FieldSet>
           </section>
+
+          {rawAccessDenied && (
+            <p className='text-destructive text-sm' role='alert'>
+              {t('Complete raw fields require root access.')}
+            </p>
+          )}
+          {rawOptionsConflict && (
+            <p className='text-destructive text-sm' role='alert'>
+              {t(
+                'To export complete raw fields, include details and turn off the group ratio override.'
+              )}
+            </p>
+          )}
 
           {canOverrideRatio && (
             <FieldGroup>
@@ -987,11 +1007,6 @@ export function NewExportSheet({
                   )
                 })}
               </div>
-              <p className='text-muted-foreground text-xs'>
-                {t(
-                  'Each extra dimension multiplies the number of result rows. Time granularity is by day.'
-                )}
-              </p>
             </section>
           )}
 
@@ -1040,9 +1055,18 @@ export function NewExportSheet({
                   )}
                 </p>
               )}
+              {hasRawLog && (
+                <p className='text-muted-foreground text-xs'>
+                  {t(
+                    'Includes stored log fields and diagnostics. Existing body omissions are preserved.'
+                  )}
+                </p>
+              )}
               <ColumnPicker
                 columns={(catalog?.columns ?? []).filter(
-                  (column) => !overrideEnabled || column.key !== 'other_raw'
+                  (column) =>
+                    (!overrideEnabled || column.key !== 'other_raw') &&
+                    (canExportRaw || column.key !== 'log_raw')
                 )}
                 selected={exportColumns}
                 maxColumns={
@@ -1080,6 +1104,7 @@ export function NewExportSheet({
                   disabled={
                     !templateName.trim() ||
                     columns.length === 0 ||
+                    rawAccessDenied ||
                     saveTemplate.isPending
                   }
                   onClick={() => saveTemplate.mutate()}

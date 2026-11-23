@@ -118,3 +118,47 @@ Relay 每请求增量为 DB 0、Redis 0、锁 0、goroutine 0。
 ## 合并到 zhuzhan
 
 2026-10-17 合并时，目标分支已将列表参数统一为 `LogFilter`。WithContext 入口及新增测试已适配该结构，保留目标分支的用户时间范围限制、管理员/root 日志脱敏和后台导出实现。合并后上述 model/controller 针对性测试及 `git diff --check` 再次通过；没有重新引入旧版导出或旧参数接口。
+
+## 2026-11-15 上线复测补正
+
+新版 PostgreSQL 的整包复测中，既有 `TestLogQueryContextCacheCancellationDoesNotFallback` 出现预期取消错误、实际返回 nil 的失败。核对 `queryLogHourStatRange`：回源后只检查 `Scan.Error`，未再次检查请求 context；数据库结果已经读取完成时，驱动未必把随后发生的取消报告为扫描错误。
+
+在返回聚合结果前补查 `ctx.Err()`，保证取消能够传回既有禁止回落的分支。SQL、时间范围、计数/额度/token 聚合口径、缓存键及容量保持不变；不涉及写入用量、钱包或计费结算。该函数仅用于日志列表和统计查询，relay 每请求新增 DB/Redis 调用、锁、goroutine 均为零。复测命令及结果记入[本轮修复记录](release-fixes-20261115.md)。
+
+## 2026-11-16 请求 ID 搜索的统计筛选修复
+
+### Existing Logic and Related-Path Findings
+
+- 用户确认触发场景为使用日志按请求 ID 筛选并扩大时间范围：列表有命中，仍提示数据库错误。尚未取得该次生产请求的 SQL 错误行，不能将具体服务器超时视为已现场复现。
+- `web/src/features/usage-logs/components/usage-logs-table.tsx` 与 `common-logs-stats.tsx` 分别查询列表和汇总；`lib/utils.ts:buildApiParams` 已向两者传递 `request_id` / `upstream_request_id`。统计失败通过 QueryCache 触发全局错误提示，因此列表成功不代表统计成功。
+- `controller/log.go:logFilterFromQuery` 和 `model/log.go:LogFilter.apply` 的列表路径支持 `request_id`、`upstream_request_id`、`log_id`。原 `GetLogsStat` / `GetLogsSelfStat` 手工读取其他条件，遗漏这三个字段，`SumUsedQuotaWithContext` 也无法接收它们；管理员查询还可能误走无筛选的小时缓存。
+- 员工路径 `GetEmployeeCustomerLogsStat` → `SumEmployeeCustomerUsedQuota` → `applyEmployeeCustomerLogFilters` 已应用这三个字段，无须修改。日志列表、导出、旧统计函数调用者和查询取消用例均已核对。
+- 先增加控制器回归测试，旧实现的 20 个筛选子用例失败：目标记录额度为 7，无关记录额度为 1000，按目标请求 ID 的统计实际返回 1007；不存在或互相冲突的 ID 同样返回全范围统计。这证明筛选遗漏，不依赖人为延时或模拟数据库错误。
+
+### 修复范围与数据流
+
+本次为既有筛选条件丢失的局部缺陷修复，不重设计大范围统计。HTTP 查询参数 → 复用 `logFilterFromQuery` → `SumUsedQuotaWithFilter` → 复用 `LogFilter.apply` 构造两条统计 SQL → 既有响应。旧 `SumUsedQuota` / `SumUsedQuotaWithContext` 保留签名并委托相同实现。
+
+- `/api/log/stat` 仍使用 AdminAuth，`/api/log/self/stat` 仍使用 UserAuth；自身统计的用户名仍来自鉴权上下文，忽略请求中的用户名，保留已有渠道条件和普通用户时间范围上限。
+- API 字段、HTTP 状态及错误处理不变，成功仍返回 `success/message/data`，`data` 包含 `quota/rpm/tpm`；失败继续记录底层原因并返回已有安全提示。
+- 三种精确 ID 同时约束额度与 RPM/TPM，多个条件按 AND 组合；无匹配返回真实零值。带任何精确 ID 时不使用无筛选小时缓存。
+- 额度仍只统计消费类日志并遵守查询时间区间；RPM/TPM 仍使用最近 60 秒实时窗口，不改成所选历史区间。类型筛选不改变既有“仅消费”统计口径。
+- 不改前端提示、不隐藏真实数据库错误；不调整列表、分页、导出、员工统计或查询超时配置。
+- 无新增配置、表、列、索引、迁移或后台任务；复用 `idx_logs_request_id`、`idx_logs_upstream_request_id` 和日志主键。生产索引是否齐备仍须以实际 schema 为准。
+
+### Main Chain Impact / Shared Resource Audit
+
+修改的统计入口只在管理 HTTP 请求中执行，同步完成有界查询，没有加入 relay goroutine 或异步日志 writer 的调用链。共享资源仍为 `LOG_DB` 连接池及 `logs` 表；不增加连接、锁、写入、goroutine 或缓存 namespace。精确筛选由原本整段扫描收窄到索引等值查询，不向转发链路添加协调锁。原 `logstat` 缓存仅在无精确筛选时沿用；搜索 `relay/`、`middleware/`、`service/` 没有这些统计入口或缓存 namespace 的热路径调用。
+
+在 30k/100k RPM relay 负载下，每个 AI 请求新增 DB/Redis 调用、锁及 goroutine 均为 0。每个精确筛选统计请求仍最多执行两条顺序聚合 SQL，共用原查询预算；不再为该查询逐小时读缓存或回源。数据库 CPU/I/O 仍共享，此结论不是生产容量压测结果。
+
+### 验证
+
+扩展后的回归覆盖管理员/自身、缓存适用与 62 天范围、三种精确 ID、无匹配、冲突条件、与 token 条件组合、消费口径、历史额度与实时速率分离、自身范围不能被查询用户名覆盖。保留既有取消、预算、缓存、列表和无筛选统计回归。
+
+- SQLite 回归：`go test ./controller -run '^TestLogStatsPreserveExactSearchFilters$' -count=1` 通过；SQLite 同时运行既有 model/controller 取消与统计定向测试通过。
+- 真实数据库：本地 MySQL `26.10.0`、PostgreSQL `18.7 (Debian 18.7-1.pgdg13+2)`。以独立临时数据库分别执行“主库 MySQL + 日志库 PostgreSQL”和“主库 MySQL + 独立日志库 MySQL”，测试完成只删除本次临时库，不修改既有库。
+- 最终定向命令：`go test ./model -count=1 -json -timeout=10m -run 'TestLogQuery|TestLogStatsPreserveExactSearchFilters|TestLogStat|TestLogHourStat|TestSumLogStatRange|TestSumUsedQuota|TestGetLogsStat|TestGetAllLogs_|TestGetUserLogs_'`，随后同参数运行 `./controller`。两个日志方言各通过 model 38 项、controller 40 项；各有 1 个既有 Redis 跨实例用例因无 Redis 跳过，新回归无跳过。
+- 在上述两种日志库各写入 10,000 条合成日志，对 62 天范围的请求 ID、上游请求 ID SUM 执行普通 EXPLAIN：分别使用 `idx_logs_request_id`、`idx_logs_upstream_request_id`，估算索引命中 1 行；无新索引。证据：`_local/log-stat-filter-20261116/explain-{postgres,mysql}.txt`。
+- 扩大回归：MySQL 主库 + PostgreSQL 日志库，分别执行 `go test ./model -count=1 -json -timeout=10m`、`go test ./controller -count=1 -json -timeout=10m`。model 通过 2291 项、跳过 147 项，controller 通过 3175 项、跳过 64 项，两包均零失败；跳过项属于既有 Redis、专用数据库等环境条件用例。最终 `git diff --check` 通过。
+- 原始测试记录及隔离运行脚本位于 `_local/log-stat-filter-20261116/`。未部署、未访问生产数据、未取得生产错误日志或实际 schema；合成数据 EXPLAIN 和功能回归不能作为生产规模延迟、容量或现场故障消失的证明。没有 schema/迁移改动，因此未进行新旧版本迁移与二次启动验收。

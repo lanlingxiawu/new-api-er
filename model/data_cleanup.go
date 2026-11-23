@@ -2,25 +2,71 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 // The maintenance pool has one connection and never borrows the relay writer's
 // connection pool. Infrastructure DSNs are the same ones used at startup.
-func OpenDataCleanupDB(logDB bool) (*gorm.DB, func(), error) {
+func OpenDataCleanupDB(ctx context.Context, logDB bool) (*gorm.DB, func(), error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	envName := "SQL_DSN"
 	if logDB && os.Getenv("LOG_SQL_DSN") != "" {
 		envName = "LOG_SQL_DSN"
 	}
-	db, _, err := chooseDB(envName, logDB)
+	dsn := os.Getenv(envName)
+	var dialect gorm.Dialector
+	var sqlitePool *sql.DB
+	switch {
+	case isClickHouseDSN(dsn):
+		return nil, nil, errors.New("cleanup requires a relational database")
+	case strings.HasPrefix(dsn, "postgres://"), strings.HasPrefix(dsn, "postgresql://"):
+		dialect = postgres.New(postgres.Config{DSN: dsn, PreferSimpleProtocol: true})
+	case dsn == "", strings.HasPrefix(dsn, "local"):
+		var err error
+		sqlitePool, err = sql.Open("sqlite", common.SQLitePath)
+		if err != nil {
+			return nil, nil, err
+		}
+		// SQLite's dialector probes its version with context.Background().
+		// Constrain only that initialization probe, then restore the real pool.
+		dialect = &sqlite.Dialector{Conn: cleanupInitPool{DB: sqlitePool, ctx: ctx}}
+	default:
+		if !strings.Contains(dsn, "parseTime") {
+			separator := "?"
+			if strings.Contains(dsn, "?") {
+				separator = "&"
+			}
+			dsn += separator + "parseTime=true"
+		}
+		dialect = mysql.New(mysql.Config{DSN: dsn, SkipInitializeWithVersion: true})
+	}
+	cfg := newGormConfig(false)
+	cfg.DisableAutomaticPing = true
+	db, err := gorm.Open(dialect, cfg)
 	if err != nil {
+		if sqlitePool != nil {
+			_ = sqlitePool.Close()
+		}
 		return nil, nil, err
+	}
+	if sqlitePool != nil {
+		db.ConnPool, db.Statement.ConnPool = sqlitePool, sqlitePool
 	}
 	pool, err := db.DB()
 	if err != nil {
@@ -28,14 +74,28 @@ func OpenDataCleanupDB(logDB bool) (*gorm.DB, func(), error) {
 	}
 	pool.SetMaxOpenConns(1)
 	pool.SetMaxIdleConns(1)
+	if err := pool.PingContext(ctx); err != nil {
+		_ = pool.Close()
+		return nil, nil, err
+	}
 	return db, func() { _ = pool.Close() }, nil
 }
 
+type cleanupInitPool struct {
+	*sql.DB
+	ctx context.Context
+}
+
+func (pool cleanupInitPool) QueryRowContext(_ context.Context, query string, args ...any) *sql.Row {
+	return pool.DB.QueryRowContext(pool.ctx, query, args...)
+}
+
 const (
-	CleanupLedger             = "ledger"
-	CleanupCommission         = "commission"
-	CleanupErrorLogs          = "error_logs"
-	SystemTaskTypeDataCleanup = "data_cleanup"
+	CleanupLedger                 = "ledger"
+	CleanupCommission             = "commission"
+	CleanupErrorLogs              = "error_logs"
+	SystemTaskTypeDataCleanup     = "data_cleanup"
+	SystemTaskTypeErrorLogCleanup = "error_log_cleanup"
 )
 
 // DataCleanupRun is also the server-side preview. Keeping the snapshot here
@@ -60,6 +120,74 @@ type DataCleanupRun struct {
 	CreatedAt    int64   `json:"created_at" gorm:"index"`
 	UpdatedAt    int64   `json:"updated_at"`
 	ExpiresAt    int64   `json:"expires_at"`
+
+	ErrorLogCleanupPlan `json:"-" gorm:"-"`
+	CanResume           bool `json:"can_resume" gorm:"-"`
+}
+
+// UpdateLeasedDataCleanupRun fences both status and progress writes against a
+// replaced task or expired runner. A log batch can commit before its receipt.
+func UpdateLeasedDataCleanupRun(ctx context.Context, runID, taskID, runnerID string, updates map[string]any) error {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	now := time.Now().Unix()
+	query := DB.WithContext(ctx).Model(&DataCleanupRun{}).
+		Where("id = ? AND task_id = ?", runID, taskID).
+		Where(`EXISTS (SELECT 1 FROM system_tasks JOIN system_task_locks ON system_task_locks.task_id=system_tasks.task_id
+WHERE system_tasks.task_id=data_cleanup_runs.task_id AND system_tasks.status=? AND system_tasks.locked_by=?
+AND system_task_locks.locked_by=? AND system_task_locks.locked_until>=?)`, SystemTaskStatusRunning, runnerID, runnerID, now)
+	result := query.Session(&gorm.Session{}).Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
+	// MySQL reports changed rows; an unchanged receipt can still hold its lease.
+	var held int64
+	if err := query.Count(&held).Error; err != nil {
+		return err
+	}
+	if held == 0 {
+		return ErrSystemTaskLockLost
+	}
+	return nil
+}
+
+// FinishDataCleanupRun commits the task, receipt and lock release together so
+// a stopped runner cannot publish a terminal receipt for a resumed task.
+func FinishDataCleanupRun(ctx context.Context, run *DataCleanupRun, runnerID string, status SystemTaskStatus, errorKey string) error {
+	if run.TaskID == nil {
+		return ErrSystemTaskLockLost
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	resultText, err := marshalSystemTaskJSON(map[string]any{"deleted": run.Deleted})
+	if err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&SystemTask{}).
+			Where("task_id = ? AND status = ? AND locked_by = ?", *run.TaskID, SystemTaskStatusRunning, runnerID).
+			Where("EXISTS (SELECT 1 FROM system_task_locks WHERE system_task_locks.task_id=system_tasks.task_id AND system_task_locks.locked_by=? AND system_task_locks.locked_until>=?)", runnerID, now).
+			Updates(map[string]any{"status": status, "active_key": nil, "result": resultText, "error": errorKey, "updated_at": now})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrSystemTaskLockLost
+		}
+		receipt := tx.Model(&DataCleanupRun{}).Where("id = ? AND task_id = ?", run.ID, *run.TaskID).
+			Updates(map[string]any{"status": status, "error_key": errorKey, "updated_at": now})
+		if receipt.Error != nil {
+			return receipt.Error
+		}
+		if receipt.RowsAffected != 1 {
+			return ErrSystemTaskLockLost
+		}
+		return tx.Where("task_id = ? AND locked_by = ?", *run.TaskID, runnerID).Delete(&SystemTaskLock{}).Error
+	})
 }
 
 // These compact receipts are permanent idempotency keys, not financial data.
@@ -74,6 +202,9 @@ type FinancialDetailTombstone struct {
 type DataCleanupBatch struct {
 	Scanned int
 	Deleted int64
+	// Done is explicit for planned error cleanup: an empty ID window may
+	// advance the checkpoint while later windows still contain eligible rows.
+	Done bool
 }
 
 // FinancialCleanupVersion makes historical query/export snapshots change when
@@ -189,10 +320,17 @@ func PrepareFinancialDetails(tx *gorm.DB, costs []*ConsumptionCost, commissions 
 	return newCosts, newCommissions, nil
 }
 
-// DeleteDataCleanupBatch bounds SCANNED rows, including protected/manual rows.
+// DeleteDataCleanupBatch bounds scanned financial rows, including manual rows.
+// Planned error cleanup has separate bounded scan and deletion budgets.
 // Cursor and receipts are committed with financial deletion. LOG_DB progress is
 // persisted separately by the worker because it may be a different database.
 func DeleteDataCleanupBatch(ctx context.Context, db *gorm.DB, run *DataCleanupRun, limit int) (DataCleanupBatch, error) {
+	if run.Kind == CleanupErrorLogs && run.ScanMode != "" {
+		if db.Dialector.Name() == "clickhouse" {
+			return DataCleanupBatch{}, errors.New("cleanup requires a relational log database")
+		}
+		return DeleteErrorLogCleanupBatch(ctx, db, run, DefaultErrorLogCleanupBatchOptions(limit))
+	}
 	table, err := DataCleanupTable(run.Kind)
 	if err != nil {
 		return DataCleanupBatch{}, err

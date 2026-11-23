@@ -36,7 +36,7 @@ func allowDataCleanup(c *gin.Context, kind string, edit bool) bool {
 
 func dataCleanupError(c *gin.Context, err error) {
 	logger.LogError(c, "data cleanup: "+err.Error())
-	for _, known := range []error{service.ErrCleanupDate, service.ErrCleanupDisabled, service.ErrCleanupPreview, service.ErrCleanupBusy, service.ErrCleanupUnsupported, service.ErrCleanupIndex, service.ErrCleanupNodes} {
+	for _, known := range []error{service.ErrCleanupDate, service.ErrCleanupLogDate, service.ErrCleanupScope, service.ErrCleanupDisabled, service.ErrCleanupPreview, service.ErrCleanupBusy, service.ErrCleanupUnsupported, service.ErrCleanupIndex, service.ErrCleanupNodes} {
 		if errors.Is(err, known) {
 			common.ApiErrorI18n(c, known.Error())
 			return
@@ -72,8 +72,31 @@ func PreviewDataCleanup(c *gin.Context) {
 func CreateDataCleanup(c *gin.Context) {
 	var req struct {
 		PreviewID string `json:"preview_id"`
+		Resume    bool   `json:"resume"`
+		Kind      string `json:"kind"`
+		Before    int64  `json:"before"`
 	}
-	if err := common.DecodeJson(c.Request.Body, &req); err != nil || len(req.PreviewID) != 32 {
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiErrorI18n(c, "cleanup.preview_expired")
+		return
+	}
+	if req.Kind != "" || req.Before != 0 {
+		if req.Kind != model.CleanupErrorLogs || req.PreviewID != "" || req.Resume {
+			common.ApiErrorI18n(c, "cleanup.invalid_date")
+			return
+		}
+		if !allowDataCleanup(c, req.Kind, true) {
+			return
+		}
+		run, err := service.StartErrorLogCleanup(c.Request.Context(), c.GetInt("id"), req.Before)
+		if err != nil {
+			dataCleanupError(c, err)
+			return
+		}
+		common.ApiSuccess(c, run)
+		return
+	}
+	if len(req.PreviewID) != 32 {
 		common.ApiErrorI18n(c, "cleanup.preview_expired")
 		return
 	}
@@ -87,7 +110,13 @@ func CreateDataCleanup(c *gin.Context) {
 	if !allowDataCleanup(c, preview.Kind, true) {
 		return
 	}
-	run, err := service.StartDataCleanup(ctx, c.GetInt("id"), req.PreviewID)
+	var run *model.DataCleanupRun
+	var err error
+	if req.Resume {
+		run, err = service.ResumeDataCleanup(ctx, c.GetInt("id"), req.PreviewID)
+	} else {
+		run, err = service.StartDataCleanup(ctx, c.GetInt("id"), req.PreviewID)
+	}
 	if err != nil {
 		dataCleanupError(c, err)
 		return
@@ -117,16 +146,30 @@ func GetDataCleanup(c *gin.Context) {
 		dataCleanupError(c, err)
 		return
 	}
-	if run.TaskID != nil && (run.Status == "pending" || run.Status == "running") {
-		var task model.SystemTask
-		if err := model.DB.WithContext(ctx).Select("status").Where("task_id = ?", *run.TaskID).First(&task).Error; err != nil {
+	var task model.SystemTask
+	if run.Kind == model.CleanupErrorLogs {
+		progress, taskType, err := readErrorLogCleanupProgress(ctx, &run)
+		if err != nil {
+			dataCleanupError(c, err)
+			return
+		}
+		run.CanResume = taskType == model.SystemTaskTypeErrorLogCleanup && run.Status == "failed" && run.UserID == c.GetInt("id") && run.ErrorKey != "cleanup.index_missing"
+		common.ApiSuccess(c, struct {
+			*model.DataCleanupRun
+			Progress *service.ErrorLogCleanupProgress `json:"progress,omitempty"`
+		}{&run, progress})
+		return
+	}
+	if run.TaskID != nil && (run.Status == "pending" || run.Status == "running" || run.Status == "failed") {
+		if err := model.DB.WithContext(ctx).Select("status", "type").Where("task_id = ?", *run.TaskID).First(&task).Error; err != nil {
 			dataCleanupError(c, err)
 			return
 		}
 		run.Status = string(task.Status)
-		if task.Status == model.SystemTaskStatusFailed {
+		if task.Status == model.SystemTaskStatusFailed && run.ErrorKey == "" {
 			run.ErrorKey = "cleanup.failed"
 		}
 	}
+	run.CanResume = run.Kind == model.CleanupErrorLogs && task.Type == model.SystemTaskTypeErrorLogCleanup && run.Status == "failed" && run.UserID == c.GetInt("id") && run.ErrorKey != "cleanup.index_missing"
 	common.ApiSuccess(c, run)
 }

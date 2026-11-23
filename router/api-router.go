@@ -480,6 +480,18 @@ func SetApiRouter(router *gin.Engine) {
 		selfSecurityAudit := apiRouter.Group("/audit/self/security", middleware.DisableCache(), middleware.UserAuth())
 		selfSecurityAudit.GET("/alerts", controller.GetSelfSecurityAlerts)
 		selfSecurityAudit.GET("/alerts/:id", controller.GetSelfSecurityAlert)
+		auditExport := apiRouter.Group("/audit/export/jobs", middleware.DisableCache(), middleware.AdminAuth(), middleware.RequirePermission(authz.AuditExport), controller.AuditExportScope(false))
+		handlePermissionRoute(auditExport, http.MethodPost, "", authz.AuditRead, controller.CreateAuditLogExportJob)
+		handlePermissionRoute(auditExport, http.MethodGet, "", authz.AuditRead, controller.GetLogExportJobs)
+		handlePermissionRoute(auditExport, http.MethodGet, "/:job_id", authz.AuditRead, controller.GetLogExportJob)
+		handlePermissionRoute(auditExport, http.MethodDelete, "/:job_id", authz.AuditRead, controller.DeleteLogExportJob)
+		handlePermissionRoute(auditExport, http.MethodGet, "/:job_id/download-url", authz.AuditRead, controller.GetLogExportDownloadURL)
+		selfAuditExport := apiRouter.Group("/audit/self/export/jobs", middleware.DisableCache(), middleware.UserAuth(), controller.AuditExportScope(true))
+		selfAuditExport.POST("", middleware.LogExportRateLimit(), controller.CreateAuditLogExportJob)
+		selfAuditExport.GET("", controller.GetLogExportJobs)
+		selfAuditExport.GET("/:job_id", controller.GetLogExportJob)
+		selfAuditExport.DELETE("/:job_id", controller.DeleteLogExportJob)
+		selfAuditExport.GET("/:job_id/download-url", controller.GetLogExportDownloadURL)
 		handlePermissionRoute(apiRouter.Group("", middleware.DisableCache(), middleware.AdminAuth()), http.MethodGet, "/audit/routes", authz.AuditRead, controller.GetAuditRoutes)
 		apiRouter.GET("/audit/self/routes", middleware.DisableCache(), middleware.UserAuth(), controller.GetAuditRoutes)
 		securityAudit := apiRouter.Group("/audit/security", middleware.DisableCache(), middleware.AdminAuth(), middleware.RequirePermission(authz.AuditRead), middleware.RequirePermission(authz.AuditSecurityRead))
@@ -523,7 +535,7 @@ func SetApiRouter(router *gin.Engine) {
 		// 后台导出（管理员专属）：任务化、分片、断点续传。
 		// 普通用户通过 /log/self/export/jobs 创建受限的后台任务。
 		logExportRoute := apiRouter.Group("/log/export")
-		logExportRoute.Use(middleware.AdminAuth())
+		logExportRoute.Use(middleware.AdminAuth(), controller.UsageExportScope(false))
 		{
 			logExportRoute.GET("/columns", controller.GetLogExportColumns)
 			logExportRoute.GET("/options", controller.GetLogExportFilterOptions)
@@ -540,7 +552,7 @@ func SetApiRouter(router *gin.Engine) {
 		}
 
 		selfExportRoute := apiRouter.Group("/log/self/export/jobs")
-		selfExportRoute.Use(middleware.UserAuth())
+		selfExportRoute.Use(middleware.UserAuth(), controller.UsageExportScope(true))
 		{
 			selfExportRoute.POST("", middleware.LogExportRateLimit(), controller.CreateSelfLogExportJob)
 			selfExportRoute.GET("", controller.GetLogExportJobs)
@@ -591,6 +603,13 @@ func SetApiRouter(router *gin.Engine) {
 		// 系统信息：菜单可见性由 admin_menu.system_info 控制，默认对普通管理员关闭；
 		// pprof 剖析数据仍始终只对 root 开放（见 registerSystemInfoRoutes）。
 		registerSystemInfoRoutes(apiRouter)
+
+		quotaExport := apiRouter.Group("/data/quota/export/jobs", middleware.DisableCache(), middleware.AdminAuth(), controller.QuotaExportScope())
+		quotaExport.POST("", controller.CreateQuotaExportJob)
+		quotaExport.GET("", controller.GetLogExportJobs)
+		quotaExport.GET("/:job_id", controller.GetLogExportJob)
+		quotaExport.DELETE("/:job_id", controller.DeleteLogExportJob)
+		quotaExport.GET("/:job_id/download-url", controller.GetLogExportDownloadURL)
 
 		dataRoute := apiRouter.Group("/data")
 		dataRoute.GET("/", middleware.AdminAuth(), controller.GetAllQuotaDates)

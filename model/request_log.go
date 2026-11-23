@@ -314,7 +314,7 @@ func DeleteOldRequestLog(targetTimestamp int64) (int64, error) {
 		}
 		kept = append(kept, entry)
 	}
-	if err := saveRequestLogCheckpointLocked(kept); err != nil {
+	if err := saveRequestLogDeletionCheckpointLocked(kept); err != nil {
 		reqLogMu.Unlock()
 		common.SysError("request log deletion checkpoint failed: " + err.Error())
 		return 0, errors.New("request log deletion could not be saved")
@@ -330,7 +330,7 @@ func DeleteOldRequestLog(targetTimestamp int64) (int64, error) {
 func ClearAllRequestLogs() (int64, error) {
 	reqLogMu.Lock()
 	cleared := int64(len(reqLogItems))
-	if err := saveRequestLogCheckpointLocked(nil); err != nil {
+	if err := saveRequestLogDeletionCheckpointLocked(nil); err != nil {
 		reqLogMu.Unlock()
 		common.SysError("request log clear checkpoint failed: " + err.Error())
 		return 0, errors.New("request log deletion could not be saved")

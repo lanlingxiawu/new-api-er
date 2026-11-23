@@ -3,9 +3,13 @@ package model
 import (
 	"context"
 	"os"
+	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -98,6 +102,200 @@ func TestWriteLogExport_EndToEnd(t *testing.T) {
 	// 分片覆盖的时间范围应与数据一致，便于用户判断下载哪一片。
 	assert.Equal(t, base+int64(total)-1, job.Parts[0].EndTime)
 	assert.Equal(t, base, job.Parts[0].StartTime)
+}
+
+func TestWriteLogExport_CompleteStoredFields(t *testing.T) {
+	requireLogDB(t)
+	enableRedis(t)
+	fastExportSettings(t, nil)
+	owner := mkUser(t, func(u *User) { u.Role = common.RoleRootUser })
+	username := uniq("rawexport")
+	base := time.Now().Unix() - 5000
+	samples := []string{
+		` {"stream_diagnostic_available":false,"unknown":9007199254740993,"stream_diagnostic":{"read_error":"http2: timeout awaiting response headers","body":"` + strings.Repeat("x", 40000) + `","omitted_bytes":564}} `,
+		`{"claude_diagnostic":{"read_error":"unexpected EOF","body_base64":"YWJj"},"claude_stream":{"status":"error"}}`,
+		`{"stream_diagnostic":invalid JSON`,
+		"",
+	}
+	var originals []*Log
+	for index, sample := range samples {
+		row := mkExportLog(t, func(l *Log) {
+			l.Username = username
+			l.CreatedAt = base + int64(index)
+			l.Other = sample
+			l.Quota = 0
+			l.IsStream = false
+			l.Content = "quoted, \"line\"\nnext line"
+		})
+		originals = append(originals, row)
+		require.NoError(t, LOG_DB.Table("logs").Where("id = ?", row.Id).Update("channel_name", "stored channel").Error)
+	}
+	require.NoError(t, LOG_DB.Table("logs").Where("id = ?", originals[3].Id).
+		Updates(map[string]any{"other": nil, "content": nil, "quota": nil}).Error)
+
+	job := newExportJobFor(username, base-1, base+10, []string{"request_id", "log_raw", "other_raw"})
+	job.UserID, job.CreatorRole = owner.Id, common.RoleRootUser
+	require.NoError(t, runExportJob(t, job))
+	rows, _ := readCSVGz(t, job.Parts[0].Path)
+	require.Len(t, rows, len(samples)+1)
+	require.Equal(t, "Raw Log JSON", rows[0][1])
+	for index, original := range originals {
+		expected := map[string]any{
+			"id": original.Id, "user_id": original.UserId, "created_at": original.CreatedAt,
+			"type": original.Type, "content": original.Content, "username": original.Username,
+			"token_name": original.TokenName, "model_name": original.ModelName, "quota": 0,
+			"prompt_tokens": original.PromptTokens, "completion_tokens": original.CompletionTokens,
+			"use_time": original.UseTime, "is_stream": false, "channel_id": original.ChannelId,
+			"channel_name": "stored channel", "token_id": original.TokenId, "group": original.Group,
+			"ip": original.Ip, "request_id": original.RequestId, "upstream_request_id": original.UpstreamRequestId,
+			"other": samples[index],
+		}
+		if index == 3 {
+			expected["other"], expected["content"], expected["quota"] = nil, nil, nil
+		}
+		data, err := common.Marshal(expected)
+		require.NoError(t, err)
+		require.JSONEq(t, string(data), rows[index+1][1])
+		require.NotContains(t, rows[index+1][2], "read_error", "ordinary columns must remain filtered")
+	}
+	var standard Log
+	require.NoError(t, LOG_DB.Where("id = ?", originals[0].Id).First(&standard).Error)
+	require.NotContains(t, standard.Other, "read_error", "full export must not bypass the normal read hook globally")
+}
+
+func TestWriteLogExport_CompleteFieldsRejectsInvalidAccessAndOptions(t *testing.T) {
+	requireLogDB(t)
+	enableRedis(t)
+	fastExportSettings(t, nil)
+	owner := mkUser(t, func(u *User) { u.Role = common.RoleRootUser })
+	ratio := "1"
+	for _, tc := range []struct {
+		name   string
+		mutate func(*LogExportJob)
+		want   error
+	}{
+		{"legacy role", func(j *LogExportJob) { j.CreatorRole = 0 }, ErrLogExportAccessChanged},
+		{"admin", func(j *LogExportJob) { j.CreatorRole = common.RoleAdminUser }, ErrLogExportAccessChanged},
+		{"self", func(j *LogExportJob) { j.SelfExport = true }, ErrLogExportAccessChanged},
+		{"audit", func(j *LogExportJob) { j.DataSource = LogExportDataAudit }, ErrLogExportAccessChanged},
+		{"summary", func(j *LogExportJob) { j.Mode = LogExportModeSummary }, ErrLogExportRawOptions},
+		{"repricing", func(j *LogExportJob) { j.GroupRatioOverride = &ratio }, ErrLogExportRawOptions},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := newExportJobFor(owner.Username, 1, 2, []string{LogExportRawColumn})
+			job.UserID, job.CreatorRole = owner.Id, common.RoleRootUser
+			tc.mutate(job)
+			require.ErrorIs(t, runExportJob(t, job), tc.want)
+			require.Empty(t, job.Parts)
+		})
+	}
+	for _, change := range []map[string]any{{"role": common.RoleAdminUser}, {"role": common.RoleRootUser, "status": common.UserStatusDisabled}} {
+		require.NoError(t, DB.Model(&User{}).Where("id = ?", owner.Id).Updates(change).Error)
+		job := newExportJobFor(owner.Username, 1, 2, []string{LogExportRawColumn})
+		job.UserID, job.CreatorRole = owner.Id, common.RoleRootUser
+		require.ErrorIs(t, runExportJob(t, job), ErrLogExportAccessChanged)
+	}
+}
+
+func TestWriteLogExport_CompleteFieldsUsesPublicFiltersAndSummary(t *testing.T) {
+	requireLogDB(t)
+	enableRedis(t)
+	fastExportSettings(t, nil)
+	owner := mkUser(t, func(u *User) { u.Role = common.RoleRootUser })
+	base := time.Now().Unix() - 5000
+	for _, status := range []string{"error", "success"} {
+		mkExportLog(t, func(l *Log) {
+			l.Username, l.CreatedAt = owner.Username, base
+			l.Other = `{"stream_status":{"status":"` + status + `"},"claude_stream":{"status":"` + status + `"},"claude_diagnostic":{"read_error":"private"}}`
+		})
+	}
+	job := newExportJobFor(owner.Username, base-1, base+1, []string{LogExportRawColumn, "stream_status_text"})
+	job.UserID, job.CreatorRole = owner.Id, common.RoleRootUser
+	job.Mode, job.SummaryDims = LogExportModeBoth, []string{"date"}
+	job.Filters.AnomalyKinds = []string{"stream_error"}
+	require.NoError(t, runExportJob(t, job))
+	require.EqualValues(t, 1, job.RowCount)
+	require.Len(t, job.Parts, 2)
+	rows, _ := readCSVGz(t, job.Parts[0].Path)
+	require.Len(t, rows, 2)
+	require.Contains(t, rows[1][0], "claude_diagnostic")
+	require.Contains(t, rows[1][0], "claude_stream")
+	require.Equal(t, "error", rows[1][1])
+	require.Equal(t, "summary", job.Parts[1].Kind)
+}
+
+func TestLogExportScanner_CompleteFieldsStopsAfterRevocation(t *testing.T) {
+	requireLogDB(t)
+	enableRedis(t)
+	fastExportSettings(t, func(s *operation_setting.LogExportSetting) { s.BatchSize = 1 })
+	owner := mkUser(t, func(u *User) { u.Role = common.RoleRootUser })
+	base := time.Now().Unix() - 5000
+	for range 2 {
+		mkExportLog(t, func(l *Log) { l.Username, l.CreatedAt = owner.Username, base })
+	}
+	job := newExportJobFor(owner.Username, base-1, base+1, []string{LogExportRawColumn})
+	job.UserID, job.CreatorRole = owner.Id, common.RoleRootUser
+	scanner := newLogExportScanner(job, logExportRawFields(), false, newTestRowCtx())
+	batches := 0
+	err := scanner.runUsageBatches(context.Background(), func(batch LogExportBatch) error {
+		batches++
+		require.Len(t, batch.Logs, 1)
+		require.NoError(t, DB.Model(&User{}).Where("id = ?", owner.Id).Update("role", common.RoleAdminUser).Error)
+		scanner.lastValidated = time.Time{}
+		return nil
+	})
+	require.ErrorIs(t, err, ErrLogExportAccessChanged)
+	require.Equal(t, 1, batches)
+}
+
+func TestWriteLogExport_CompleteFieldsAcrossBatchesAndParts(t *testing.T) {
+	requireLogDB(t)
+	enableRedis(t)
+	fastExportSettings(t, func(s *operation_setting.LogExportSetting) {
+		s.BatchSize = 3000
+		s.RowsPerFile = 50
+	})
+	owner := mkUser(t, func(u *User) { u.Role = common.RoleRootUser })
+	base := time.Now().Unix() - 5000
+	other := `{"stream_diagnostic":{"body":"` + strings.Repeat("x", 40000) + `"}}`
+	wantIDs := make([]string, 0, 105)
+	for range 105 {
+		row := mkExportLog(t, func(l *Log) {
+			l.Username, l.CreatedAt, l.Other = owner.Username, base, other
+		})
+		wantIDs = append(wantIDs, strconv.Itoa(row.Id))
+	}
+	job := newExportJobFor(owner.Username, base, base, []string{"id", LogExportRawColumn})
+	job.UserID, job.CreatorRole = owner.Id, common.RoleRootUser
+	scanner := newLogExportScanner(job, logExportRawFields(), false, newTestRowCtx())
+	var batches []int
+	require.NoError(t, scanner.runUsageBatches(context.Background(), func(batch LogExportBatch) error {
+		batches = append(batches, len(batch.rawLogs))
+		return nil
+	}))
+	require.Equal(t, []int{100, 5}, batches, "the raw batch cap must not mark the first batch as complete")
+	job.ScannedRows = 0
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	started := time.Now()
+	require.NoError(t, runExportJob(t, job))
+	runtime.ReadMemStats(&after)
+	t.Logf("105 rows with 40,000-byte bodies: elapsed=%s, total_alloc=%d bytes", time.Since(started), after.TotalAlloc-before.TotalAlloc)
+	require.EqualValues(t, 105, job.RowCount)
+	require.Len(t, job.Parts, 3)
+	var gotIDs []string
+	for _, part := range job.Parts {
+		rows, _ := readCSVGz(t, part.Path)
+		for _, row := range rows[1:] {
+			gotIDs = append(gotIDs, row[0])
+			var raw struct {
+				Other string `json:"other"`
+			}
+			require.NoError(t, common.UnmarshalJsonStr(row[1], &raw))
+			require.Equal(t, other, raw.Other)
+		}
+	}
+	require.Equal(t, wantIDs, gotIDs, "identical timestamps must preserve every row exactly once across batches and files")
 }
 
 func TestWriteLogExport_RotatesParts(t *testing.T) {
@@ -457,8 +655,29 @@ func TestNextLogExportWindowSec(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := nextLogExportWindowSec(tc.current, cfg, tc.rows, tc.batches, tc.batchSize)
+			got := nextLogExportWindowSec(tc.current, cfg, tc.rows, tc.batches, tc.batchSize, 50*time.Millisecond, 10*time.Second)
 			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestNextLogExportWindowSecUsesQueryCost(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		current       int64
+		cost, timeout time.Duration
+		want          int64
+	}{
+		{"fast sparse window grows", 3600, time.Second, 10 * time.Second, 7200},
+		{"few matches do not imply cheap reads", 3600, 2 * time.Second, 10 * time.Second, 3600},
+		{"slow window shrinks below configuration", 3600, 5 * time.Second, 10 * time.Second, 1800},
+		{"timeout-relative growth threshold", 3600, 300 * time.Millisecond, time.Second, 3600},
+		{"short timeout slow threshold", 3600, 500 * time.Millisecond, time.Second, 1800},
+		{"hard minimum is preserved", 60, 9 * time.Second, 10 * time.Second, 60},
+		{"long timeout still bounds growth cost", 3600, 2 * time.Second, 30 * time.Second, 3600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, nextLogExportWindowSec(tc.current, 3600, 0, 1, 3000, tc.cost, tc.timeout))
 		})
 	}
 }

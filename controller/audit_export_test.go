@@ -48,6 +48,40 @@ func TestAuditExportRequestContract(t *testing.T) {
 	}
 }
 
+func TestAuditExportDowngradeRejectsExistingDownload(t *testing.T) {
+	requireDB(t)
+	exportManagementFixture(t)
+	require.NoError(t, model.InitAuditExportPools(t.Context()))
+	t.Cleanup(model.CloseAuditExportPools)
+	user := mkUser(t, func(u *model.User) { u.Role = common.RoleRootUser })
+	job := mkReadyExportJob(t, user.Id, "higher-role-audit-data")
+	job.DataSource, job.SelfExport = model.LogExportDataAudit, true
+	job.CreatorRole, job.AuditProjectionVersion = common.RoleRootUser, model.AuditActivityProjectionVersion
+	job.Filters.UserId = user.Id
+	job.AuditFilters = &model.AuditExportFilter{AuditLogFilter: model.AuditLogFilter{UserId: user.Id, SelfView: true}}
+	model.UpdateLogExportJob(job)
+	tokens := []string{}
+	for range 2 {
+		token, err := model.CreateManagedLogExportDownloadToken(job.JobID, user.Id, 1, "audit_self")
+		require.NoError(t, err)
+		tokens = append(tokens, token)
+	}
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("role", common.RoleCommonUser).Error)
+	for i, token := range tokens {
+		c, rec := newCtx(t, "GET", "/dl/log-export/"+token, nil)
+		c.Params = gin.Params{{Key: "token", Value: token}}
+		if i == 1 {
+			c.Request.Header.Set("Range", "bytes=0-5")
+		}
+		DownloadLogExport(c)
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		var response struct{ Success bool }
+		require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &response))
+		require.False(t, response.Success)
+		require.NotContains(t, rec.Body.String(), "higher-role-audit-data")
+	}
+}
+
 func TestAuditExportConfiguredRangeAndDownload(t *testing.T) {
 	requireDB(t)
 	requireLogDB(t)

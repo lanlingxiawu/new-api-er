@@ -290,7 +290,7 @@ func TestCreateLogExportJob_CooldownAndSlotAreEnforced(t *testing.T) {
 	CreateLogExportJob(asAdmin(ctx, userB))
 	resp = decodeResp(t, rec)
 	assert.False(t, resp.Success)
-	assert.False(t, model.CheckAndSetLogExportCooldown(userB),
+	assert.False(t, model.CheckAndSetLogExportCooldown(userB, operation_setting.GetLogExportSetting().GetUserCooldownSec()),
 		"a rejected request must not burn the user's cooldown")
 }
 

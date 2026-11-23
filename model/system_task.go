@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 
 	"github.com/QuantumNous/new-api/common"
@@ -146,6 +147,21 @@ func GetActiveSystemTask(taskType string) (*SystemTask, error) {
 	return &task, nil
 }
 
+// GetActiveSystemTaskByKey resolves the holder of a shared reservation. Its
+// type may differ from the key, so callers must not expose it as their own task.
+func GetActiveSystemTaskByKey(activeKey string) (*SystemTask, error) {
+	var task SystemTask
+	err := DB.Select("id", "task_id", "type", "status", "active_key", "payload", "state", "result", "error", "locked_by", "created_at", "updated_at").
+		Where("active_key = ? AND status IN ?", activeKey, activeSystemTaskStatuses()).Take(&task).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
 func FindPendingSystemTasks(taskType string, limit int) ([]*SystemTask, error) {
 	var tasks []*SystemTask
 	if limit <= 0 {
@@ -186,7 +202,7 @@ type SystemTaskFilter struct {
 
 func (filter SystemTaskFilter) query() *gorm.DB {
 	// Data cleanup receipts have their own permission-aware API and retention.
-	query := DB.Model(&SystemTask{}).Where("type <> ?", SystemTaskTypeDataCleanup)
+	query := DB.Model(&SystemTask{}).Where("type NOT IN ?", []string{SystemTaskTypeDataCleanup, SystemTaskTypeErrorLogCleanup})
 	switch filter.Scope {
 	case "active":
 		query = query.Where("status IN ?", activeSystemTaskStatuses())
@@ -375,12 +391,18 @@ func acquireSystemTaskLock(taskType string, taskID string, lockedBy string, now 
 }
 
 func UpdateSystemTaskState(taskID string, lockedBy string, state any) error {
+	return UpdateSystemTaskStateContext(context.Background(), taskID, lockedBy, state)
+}
+
+// UpdateSystemTaskStateContext lets bounded workers include lease verification
+// and state persistence in their cancellation and timeout budgets.
+func UpdateSystemTaskStateContext(ctx context.Context, taskID string, lockedBy string, state any) error {
 	stateText, err := marshalSystemTaskJSON(state)
 	if err != nil {
 		return err
 	}
 	now := common.GetTimestamp()
-	result := DB.Model(&SystemTask{}).
+	result := DB.WithContext(ctx).Model(&SystemTask{}).
 		Where("task_id = ? AND status = ? AND locked_by = ?", taskID, SystemTaskStatusRunning, lockedBy).
 		Where("EXISTS (SELECT 1 FROM system_task_locks WHERE system_task_locks.task_id = system_tasks.task_id AND system_task_locks.locked_by = ? AND system_task_locks.locked_until >= ?)", lockedBy, now).
 		Updates(map[string]any{
@@ -399,7 +421,7 @@ func UpdateSystemTaskState(taskID string, lockedBy string, state any) error {
 	// Reuse `now` from the UPDATE so a clock tick cannot reintroduce false
 	// lock-loss; a lease that expires during the write is caught by the next heartbeat.
 	var held int64
-	err = DB.Model(&SystemTask{}).
+	err = DB.WithContext(ctx).Model(&SystemTask{}).
 		Where("task_id = ? AND status = ? AND locked_by = ?", taskID, SystemTaskStatusRunning, lockedBy).
 		Where("EXISTS (SELECT 1 FROM system_task_locks WHERE system_task_locks.task_id = system_tasks.task_id AND system_task_locks.locked_by = ? AND system_task_locks.locked_until >= ?)", lockedBy, now).
 		Count(&held).Error

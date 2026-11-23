@@ -12,18 +12,34 @@ import (
 )
 
 func CreateLogCleanupSystemTask(c *gin.Context) {
-	targetTimestamp, _ := strconv.ParseInt(c.Query("target_timestamp"), 10, 64)
-	if targetTimestamp == 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "target timestamp is required",
-		})
+	scope := c.Query("scope")
+	if scope != "" && scope != service.LogCleanupScopeUsage && scope != service.LogCleanupScopeAudit {
+		dataCleanupError(c, service.ErrCleanupScope)
+		return
+	}
+	timestamp := c.Query("target_timestamp")
+	if scope == service.LogCleanupScopeAudit {
+		// The audit client sends zero for the legacy timestamp so older servers
+		// reject the request instead of deleting usage logs.
+		if timestamp != "0" {
+			dataCleanupError(c, service.ErrCleanupLogDate)
+			return
+		}
+		timestamp = c.Query("audit_target_timestamp")
+	}
+	targetTimestamp, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil || targetTimestamp <= 0 {
+		if scope == service.LogCleanupScopeAudit {
+			dataCleanupError(c, service.ErrCleanupLogDate)
+			return
+		}
+		common.ApiErrorI18n(c, "cleanup.invalid_date")
 		return
 	}
 
-	task, err := service.StartLogCleanupTask(targetTimestamp)
+	task, err := service.StartLogCleanupTask(targetTimestamp, scope)
 	if err != nil {
-		common.ApiError(c, err)
+		dataCleanupError(c, err)
 		return
 	}
 
@@ -36,7 +52,7 @@ func CreateLogCleanupSystemTask(c *gin.Context) {
 
 func GetCurrentSystemTask(c *gin.Context) {
 	taskType := c.Query("type")
-	if taskType == model.SystemTaskTypeDataCleanup {
+	if taskType == model.SystemTaskTypeDataCleanup || taskType == model.SystemTaskTypeErrorLogCleanup {
 		c.AbortWithStatus(http.StatusForbidden)
 		return
 	}
@@ -139,7 +155,7 @@ func GetSystemTask(c *gin.Context) {
 		})
 		return
 	}
-	if task.Type == model.SystemTaskTypeDataCleanup {
+	if task.Type == model.SystemTaskTypeDataCleanup || task.Type == model.SystemTaskTypeErrorLogCleanup {
 		c.AbortWithStatus(http.StatusForbidden)
 		return
 	}

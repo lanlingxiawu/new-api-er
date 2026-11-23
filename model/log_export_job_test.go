@@ -1,6 +1,8 @@
 package model
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -210,12 +212,26 @@ func TestLogExportCooldown(t *testing.T) {
 	user := nextTestID()
 	t.Cleanup(func() { ClearLogExportCooldown(user) })
 
-	assert.False(t, CheckAndSetLogExportCooldown(user), "first request must not be on cooldown")
-	assert.True(t, CheckAndSetLogExportCooldown(user), "second request within the window is on cooldown")
+	assert.False(t, CheckAndSetLogExportCooldown(user, 73), "first request must not be on cooldown")
+	key := logExportCooldownKeyPfx + fmt.Sprint(user)
+	ttl, err := common.RDB.PTTL(context.Background(), key).Result()
+	require.NoError(t, err)
+	require.Greater(t, ttl, 65*time.Second)
+	require.LessOrEqual(t, ttl, 73*time.Second)
+	assert.True(t, CheckAndSetLogExportCooldown(user, 300), "a changed duration must not refresh an existing cooldown")
+	after, err := common.RDB.PTTL(context.Background(), key).Result()
+	require.NoError(t, err)
+	require.LessOrEqual(t, after, ttl)
+	assert.False(t, CheckAndSetLogExportCooldown(user, 0), "disabled cooldown ignores the existing key")
+	assert.True(t, CheckAndSetLogExportCooldown(user, 73), "reenabling retains the existing expiry")
 
 	// 创建失败时回收冷却，不白占用户的一次机会。
 	ClearLogExportCooldown(user)
-	assert.False(t, CheckAndSetLogExportCooldown(user))
+	assert.False(t, CheckAndSetLogExportCooldown(user, 0))
+	exists, err := common.RDB.Exists(context.Background(), key).Result()
+	require.NoError(t, err)
+	require.Zero(t, exists, "disabled cooldown must not create a permanent key")
+	assert.False(t, CheckAndSetLogExportCooldown(user, 73))
 }
 
 // removeCancelFlagForTest 清掉取消标志，供用例之间互不干扰。

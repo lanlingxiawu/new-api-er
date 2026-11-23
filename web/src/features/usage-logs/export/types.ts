@@ -180,6 +180,18 @@ export const EXPORT_SOURCE_LABELS: Record<string, string> = {
 }
 
 export interface ExportJob {
+  data_source?: 'usage' | 'audit' | 'quota'
+  audit_projection_version?: number
+  audit_filters?: Record<string, unknown>
+  quota_filters?: {
+    user_id?: number
+    username?: string
+    model_name?: string
+    use_group?: string
+    channel_id?: number
+    token_id?: number
+    node_name?: string
+  }
   group_ratio_override?: string
   source?: 'admin' | 'employee' | 'self'
   can_download?: boolean
@@ -236,6 +248,7 @@ export interface ExportJobListFilters {
 }
 
 export interface ExportJobPage {
+  risk_export_enabled?: boolean
   jobs: ExportJob[]
   enabled: boolean
   max_range_sec?: number

@@ -121,6 +121,12 @@ const OPERATIONS_SECTIONS = [
       <LogSettingsSection
         defaultValues={{
           LogConsumeEnabled: Boolean(settings.LogConsumeEnabled),
+          'data_cleanup_setting.error_log_batch_size':
+            settings['data_cleanup_setting.error_log_batch_size'] ?? 5000,
+          'data_cleanup_setting.error_log_batch_timeout_sec':
+            settings['data_cleanup_setting.error_log_batch_timeout_sec'] ?? 5,
+          'data_cleanup_setting.error_log_auto_continue':
+            settings['data_cleanup_setting.error_log_auto_continue'] ?? false,
           'log_setting.user_export_enabled':
             settings['log_setting.user_export_enabled'] ?? true,
           'log_setting.max_range_days':

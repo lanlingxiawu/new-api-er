@@ -5,10 +5,26 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 )
 
+func UsageExportScope(self bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		scope := "usage_admin"
+		if self {
+			scope = "usage_self"
+		}
+		c.Set("log_export_access", model.LogExportAccess{UserID: c.GetInt("id"), Role: c.GetInt("role"), Scope: scope})
+		c.Next()
+	}
+}
+
 func isSelfLogExportRoute(c *gin.Context) bool {
+	if access, ok := c.Get("log_export_access"); ok {
+		scope := access.(model.LogExportAccess).Scope
+		return scope == "audit_self" || scope == "usage_self" || scope == "self"
+	}
 	return strings.HasPrefix(c.Request.URL.Path, "/api/log/self/export/jobs")
 }
 

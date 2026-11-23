@@ -63,22 +63,22 @@ func TestAuditLogCleanup_CountAndDeleteByAge(t *testing.T) {
 
 	ctx := context.Background()
 
-	total, err := CountOldAuditLog(ctx, cutoff)
+	total, err := CountOldAuditLog(ctx, LOG_DB, cutoff)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, total)
 
 	// 分批删除：limit=1 时一次只删一行。PostgreSQL 会静默丢掉 DELETE 的 LIMIT，
 	// 所以实现走「先取主键再按主键删」；这条断言就是那条约束的回归保护。
-	deleted, err := DeleteOldAuditLogBatch(ctx, cutoff, 1)
+	deleted, err := DeleteOldAuditLogBatch(ctx, LOG_DB, cutoff, 1)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, deleted)
 
-	deleted, err = DeleteOldAuditLogBatch(ctx, cutoff, 100)
+	deleted, err = DeleteOldAuditLogBatch(ctx, LOG_DB, cutoff, 100)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, deleted)
 
 	// 删空后再调用返回 0，让调用方的进度循环能收敛。
-	deleted, err = DeleteOldAuditLogBatch(ctx, cutoff, 100)
+	deleted, err = DeleteOldAuditLogBatch(ctx, LOG_DB, cutoff, 100)
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, deleted)
 
@@ -177,11 +177,11 @@ func TestAuditRetentionMigrationClickHouse(t *testing.T) {
 			require.Equal(t, want, count)
 			require.Zero(t, AuditLogCleanupTargetTimestamp())
 			require.NoError(t, config.GlobalConfig.UpdateFromMap("audit_log_setting", map[string]string{"retention_days": "365"}))
-			old, err := CountOldAuditLog(context.Background(), AuditLogCleanupTargetTimestamp())
+			old, err := CountOldAuditLog(context.Background(), LOG_DB, AuditLogCleanupTargetTimestamp())
 			require.NoError(t, err)
 			require.Zero(t, old)
 			require.NoError(t, config.GlobalConfig.UpdateFromMap("audit_log_setting", map[string]string{"retention_days": "30"}))
-			removed, err := DeleteOldAuditLogBatch(context.Background(), AuditLogCleanupTargetTimestamp(), 100)
+			removed, err := DeleteOldAuditLogBatch(context.Background(), LOG_DB, AuditLogCleanupTargetTimestamp(), 100)
 			require.NoError(t, err)
 			require.Equal(t, want-1, removed)
 			require.NoError(t, db.Raw("SELECT count() FROM audit_logs WHERE event_id = 'recent'").Scan(&count).Error)

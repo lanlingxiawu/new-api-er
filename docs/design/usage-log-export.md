@@ -1,5 +1,9 @@
 # 使用日志导出（下载）功能重构设计
 
+> 2026-11-17 更新：已新增 Root 专用“完整原始字段”模板，见 [完整字段导出](usage-log-complete-fields-export.md)。新增 `log_raw` 保存数据库模型全部存储字段及未经过读取过滤的 `other`；旧“全部列”和普通导出范围不变。完整任务的模板、管理及实际下载均限制当前 Root，不能和纯汇总或倍率覆盖组合使用；采集时已有的省略不会恢复。
+
+> 2026-11-16 更新：管理员独立冷却已实现，见 [管理员使用日志导出冷却独立配置](log-export-admin-cooldown.md)。`admin_cooldown_sec=-1` 沿用用户与员工设置、0 为管理员无冷却、正值为独立秒数；`user_cooldown_sec=0` 仍表示默认 300 秒。
+
 > 2026-10-26 更新：管理员全量管理、员工客户导出管理开关、组合筛选及分页已实现，详见 [导出列表管理与筛选](export-list-management-visibility.md)。下文关于仅 Root 能查看/操作其他人任务的历史限制由新方案替代；默认 24 小时任务保留策略不变。
 
 > 2026-10-16 更新：导出统一方案已实现，详见 [使用日志导出统一方案](usage-log-export-unification.md)。新任务只生成 CSV.GZ；普通用户通过受限后台任务导出自己的日志，旧同步导出接口已移除。任务超时包含资源等待时间。下文关于管理员专属、XLSX 生成及仅计算工作时间的历史描述已由统一方案替代。
@@ -445,7 +449,8 @@ GET    /dl/log-export/:token              无中间件（token 即凭证），�
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | `true` | **功能开关**，关闭后任务接口不可用（同步降级导出仍可用） |
-| `user_cooldown_sec` | `300` | 单管理员两次创建任务的最短间隔 |
+| `user_cooldown_sec` | `300` | 普通用户与员工两次创建任务的最短间隔；0 回退默认 300 秒 |
+| `admin_cooldown_sec` | `-1` | 管理员及超级管理员：-1 沿用用户设置，0 无冷却，1..86400 为独立秒数；包含本人日志导出 |
 | `max_concurrent_jobs` | `1` | 全局同时运行的导出任务数 |
 | `max_active_jobs_per_user` | `3` | 单用户未过期任务数上限 |
 | `admin_max_range_sec` | `2678400`（31 天） | 最大导出时间跨度 |
@@ -501,7 +506,8 @@ GET    /dl/log-export/:token              无中间件（token 即凭证），�
 | `job_ttl_hours` | 下一次任务状态写入时生效 | 每批都会刷新 Redis TTL |
 | `max_concurrent_jobs` | 不中断运行中任务 | 只影响新任务能否拿到槽位。调小到低于当前运行数时，运行中的任务照常跑完 |
 | `enabled` | 不中断运行中任务 | 关闭后仅拒绝新任务；要停运行中的请用「取消」。**如需一键刹车，用 `cpu_hard_limit=0`** |
-| `admin_max_range_sec`、`max_templates_per_user`、`user_cooldown_sec`、`max_active_jobs_per_user` | — | 创建/校验时读取，天然热生效 |
+| `admin_max_range_sec`、`max_templates_per_user`、`max_active_jobs_per_user` | — | 创建/校验时读取，天然热生效 |
+| `user_cooldown_sec`、`admin_cooldown_sec` | 创建时读取 | 正值变更不改写已有 Redis 冷却的到期时间；管理员设为 0 后立即跳过等待，旧键自然过期，再启用时未过期的旧键仍生效 |
 | `download_token_ttl_sec`、`download_session_ttl_sec` | 仅对**新签发**的令牌生效 | 已签发令牌的 TTL 写在 Redis key 上，不会被追溯修改 |
 | `max_concurrent_downloads_per_user` | **下一次下载请求立即生效** | 已在传输中的下载不中断 |
 
@@ -889,6 +895,10 @@ func (g *gate) Observe(queryCost time.Duration) {
 |---|---|---|
 | 12 | **新建导出弹窗的行数估算复用了日志列表接口** | 列表接口在返回前会对命中集做完整 `COUNT`（[model/log.go](../../model/log.go) `GetAllLogs`），而估算的 queryKey 含全部筛选字段、输入框又是逐字 `onChange` —— 管理员敲一个模型名就可能对日志大表跑多次带过滤的 COUNT。且 `rangeTooLong` 只禁用了提交按钮，没拦住估算，超限范围（后端本就会拒绝导出）照样先扫一遍库。<br>修法三层：① 新增专用接口 `GET /api/log/export/estimate`，用 `SELECT count(*) FROM (SELECT 1 FROM logs WHERE ... LIMIT n) t` 做**有界计数**——代价被 `n` 钉死，与数据量无关，`n` 取 `xlsx_max_rows + 1`（判断「超没超 xlsx 上限」只需要这么多），并带查询超时；② 文本筛选 `useDebounce(500)`；③ `enabled` 加 `!rangeTooLong`，超限范围直接不查，接口侧也会拒绝。返回 `capped` 表示真实行数 ≥ rows，前端据此显示「超过 N 行」。 |
 | 13 | **调优项只有下限没有上限** | 这些旋钮已暴露在设置页，把 `batch_size`、`max_rows_per_sec`、`rows_per_file`、`xlsx_max_rows` 填成极大值就能绕过所有保护阀（单批查询/内存/写入压力陡增），而 getter 只做 `<=0` 回退。<br>修法：getter 层统一 `clampInt(value, min, max)`，为 15 个数值项设硬上限（如 `batch_size ≤ 5 万`、`max_rows_per_sec ≤ 50 万`、`xlsx_max_rows ≤ 100 万` —— 后者必须低于 Excel 单表硬上限 1048576，否则写到一半必然失败）；前端表单的 zod `.max()` 与 `<input max>` 与后端保持一致，避免「填了却被静默改掉」。 |
+
+2026-11-17 前端集成复核更正：上表第 13 项关于 `xlsx_max_rows` 已暴露在设置页的描述不符合当前代码。该字段已进入 API、前端 schema、默认值和字段清单，但 `log-export-section.tsx` 的渲染字段没有对应控件；真实发布包浏览器检查也未找到入口。后端上限仍然生效，前端接入缺口见 [本次验收记录](release-frontend-integration-20261117.md)。表内其他历史性能结论不由本次页面检查重新认证。
+
+同日经用户确认已修复：设置页增加 XLSX 行数上限及说明，范围 1–1000000，沿用原配置键及保存流程。真实浏览器拒绝 0、1000001 和非整数，250000 保存、API/刷新回查及恢复原值均通过；组件测试覆盖两个合法边界。证据见[确认修复记录](release-frontend-fixes-20261117.md)。
 
 ### 16.3.2 大表实测（EXPLAIN ANALYZE，50 万行）
 

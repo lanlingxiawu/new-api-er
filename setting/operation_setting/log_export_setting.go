@@ -21,8 +21,10 @@ type LogExportSetting struct {
 	// ── 开关与配额 ──────────────────────────────────────────
 	// Enabled 功能总开关，关闭后拒绝新建导出任务（不中断运行中的任务）。
 	Enabled bool `json:"enabled"`
-	// UserCooldownSec 单用户两次创建任务的最短间隔（秒）。
+	// UserCooldownSec 普通用户与员工两次创建任务的最短间隔（秒）。
 	UserCooldownSec int `json:"user_cooldown_sec"`
+	// AdminCooldownSec 管理员冷却：-1 沿用用户设置，0 无冷却，正值为秒数。
+	AdminCooldownSec int `json:"admin_cooldown_sec"`
 	// MaxConcurrentJobs 全局同时运行的导出任务数上限。
 	MaxConcurrentJobs int `json:"max_concurrent_jobs"`
 	// MaxActiveJobsPerUser 单用户未过期任务数上限。
@@ -187,6 +189,7 @@ var logExportSetting = LogExportSetting{
 	EmployeeMaxCustomersPerJob: 100,
 	Enabled:                    true,
 	UserCooldownSec:            DefaultLogExportUserCooldownSec,
+	AdminCooldownSec:           -1,
 	MaxConcurrentJobs:          DefaultLogExportMaxConcurrentJobs,
 	MaxActiveJobsPerUser:       DefaultLogExportMaxActiveJobsPerUser,
 	AdminMaxRangeSec:           DefaultLogExportAdminMaxRangeSec,
@@ -222,6 +225,13 @@ func (s *LogExportSetting) GetUserCooldownSec() int {
 		return DefaultLogExportUserCooldownSec
 	}
 	return clampInt(s.UserCooldownSec, 0, MaxLogExportUserCooldownSec)
+}
+
+func (s *LogExportSetting) GetAdminCooldownSec() int {
+	if s.AdminCooldownSec < 0 {
+		return s.GetUserCooldownSec()
+	}
+	return clampInt(s.AdminCooldownSec, 0, MaxLogExportUserCooldownSec)
 }
 
 // GetMaxConcurrentJobs 允许为 0：运营可用它停止接受新任务（不中断运行中的任务）。
@@ -475,8 +485,7 @@ func (s *LogExportSetting) GetSummaryMaxGroups() int {
 }
 
 func (s *LogExportSetting) GetUserMaxRangeSec() int64 {
-	if s.UserMaxRangeSec <= 0 {
-		return 30 * 86400
-	}
-	return int64(clampInt(s.UserMaxRangeSec, 1, 366*86400))
+	// Log maintenance owns the user-visible search/export range. Keep the
+	// legacy UserMaxRangeSec field for stored-setting compatibility only.
+	return GetLogSetting().MaxRangeSeconds()
 }

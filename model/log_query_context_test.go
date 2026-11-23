@@ -57,6 +57,9 @@ func TestLogQueryContextCancellationAfterCountStopsPage(t *testing.T) {
 	queries := 0
 	name := "test:cancel_after_log_count"
 	require.NoError(t, LOG_DB.Callback().Query().After("gorm:query").Register(name, func(tx *gorm.DB) {
+		if tx.DryRun { // GORM also builds the bounded count's subquery through callbacks.
+			return
+		}
 		queries++
 		require.NoError(t, tx.Error)
 		_, hasDeadline := tx.Statement.Context.Deadline()
@@ -139,6 +142,9 @@ func TestLogQueryContextListSharesDeadline(t *testing.T) {
 	var deadlines []time.Time
 	name := "test:log_query_shared_deadline"
 	require.NoError(t, LOG_DB.Callback().Query().Before("gorm:query").Register(name, func(tx *gorm.DB) {
+		if tx.DryRun {
+			return
+		}
 		deadline, ok := tx.Statement.Context.Deadline()
 		require.True(t, ok)
 		deadlines = append(deadlines, deadline)

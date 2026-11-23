@@ -57,7 +57,13 @@ func limitLogTimeRange(startTimestamp int64, endTimestamp int64) (int64, error) 
 
 func GetAllLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
-	logs, total, err := model.GetAllLogsWithContext(c.Request.Context(), logFilterFromQuery(c, true), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	filter := logFilterFromQuery(c, true)
+	var ok bool
+	filter.StartTimestamp, filter.EndTimestamp, ok = parseLogQueryTimeRange(c)
+	if !ok {
+		return
+	}
+	logs, total, err := model.GetAllLogsWithContext(c.Request.Context(), filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		logger.LogError(c, "log query failed: "+err.Error())
 		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
@@ -77,6 +83,11 @@ func GetAllLogs(c *gin.Context) {
 func GetUserLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	filter := logFilterFromQuery(c, false)
+	var ok bool
+	filter.StartTimestamp, filter.EndTimestamp, ok = parseLogQueryTimeRange(c)
+	if !ok {
+		return
+	}
 	if c.GetInt("role") < common.RoleAdminUser {
 		startTimestamp, err := limitLogTimeRange(filter.StartTimestamp, filter.EndTimestamp)
 		if err != nil {
@@ -131,9 +142,15 @@ func GetEmployeeCustomerLogs(c *gin.Context) {
 		return
 	}
 	filter := getEmployeeCustomerLogFilter(c)
-	logs, total, err := model.GetEmployeeCustomerLogs(filter)
+	var ok bool
+	filter.StartTimestamp, filter.EndTimestamp, ok = parseLogQueryTimeRange(c)
+	if !ok {
+		return
+	}
+	logs, total, err := model.GetEmployeeCustomerLogsWithContext(c.Request.Context(), filter)
 	if err != nil {
-		common.ApiError(c, err)
+		logger.LogError(c, "employee log query failed: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
 	}
 	pageInfo.SetTotal(int(total))
@@ -171,21 +188,22 @@ func GetLogByKey(c *gin.Context) {
 }
 
 func GetLogsStat(c *gin.Context) {
-	logType, _ := strconv.Atoi(c.Query("type"))
-	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
-	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
-	tokenName := c.Query("token_name")
-	username := c.Query("username")
-	modelName := c.Query("model_name")
-	channel, _ := strconv.Atoi(c.Query("channel"))
-	group := c.Query("group")
-	stat, err := model.SumUsedQuotaWithContext(c.Request.Context(), logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	if c.GetBool("use_access_token") {
+		adminTokenReadRequest(c)
+		return
+	}
+	filter := logFilterFromQuery(c, true)
+	var ok bool
+	filter.StartTimestamp, filter.EndTimestamp, ok = parseLogQueryTimeRange(c)
+	if !ok {
+		return
+	}
+	stat, err := model.SumUsedQuotaWithFilter(c.Request.Context(), filter)
 	if err != nil {
 		logger.LogError(c, "log query failed: "+err.Error())
 		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
 	}
-	//tokenNum := model.SumUsedToken(logType, startTimestamp, endTimestamp, modelName, username, "")
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -199,28 +217,28 @@ func GetLogsStat(c *gin.Context) {
 }
 
 func GetLogsSelfStat(c *gin.Context) {
-	username := c.GetString("username")
-	logType, _ := strconv.Atoi(c.Query("type"))
-	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
-	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	filter := logFilterFromQuery(c, false)
+	var ok bool
+	filter.StartTimestamp, filter.EndTimestamp, ok = parseLogQueryTimeRange(c)
+	if !ok {
+		return
+	}
+	filter.Username = c.GetString("username")
+	// Preserve the existing self-stat channel filter; identity comes from auth.
+	filter.Channel, _ = strconv.Atoi(c.Query("channel"))
 	if c.GetInt("role") < common.RoleAdminUser {
 		var err error
-		if startTimestamp, err = limitLogTimeRange(startTimestamp, endTimestamp); err != nil {
+		if filter.StartTimestamp, err = limitLogTimeRange(filter.StartTimestamp, filter.EndTimestamp); err != nil {
 			common.ApiError(c, err)
 			return
 		}
 	}
-	tokenName := c.Query("token_name")
-	modelName := c.Query("model_name")
-	channel, _ := strconv.Atoi(c.Query("channel"))
-	group := c.Query("group")
-	quotaNum, err := model.SumUsedQuotaWithContext(c.Request.Context(), logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	quotaNum, err := model.SumUsedQuotaWithFilter(c.Request.Context(), filter)
 	if err != nil {
 		logger.LogError(c, "log query failed: "+err.Error())
 		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
 	}
-	//tokenNum := model.SumUsedToken(logType, startTimestamp, endTimestamp, modelName, username, tokenName)
 	c.JSON(200, gin.H{
 		"success": true,
 		"message": "",
@@ -240,9 +258,15 @@ func GetEmployeeCustomerLogsStat(c *gin.Context) {
 		return
 	}
 	filter := getEmployeeCustomerLogFilter(c)
-	stat, err := model.SumEmployeeCustomerUsedQuota(filter)
+	var ok bool
+	filter.StartTimestamp, filter.EndTimestamp, ok = parseLogQueryTimeRange(c)
+	if !ok {
+		return
+	}
+	stat, err := model.SumEmployeeCustomerUsedQuotaWithContext(c.Request.Context(), filter)
 	if err != nil {
-		common.ApiError(c, err)
+		logger.LogError(c, "employee log statistics failed: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
 	}
 	c.JSON(200, gin.H{

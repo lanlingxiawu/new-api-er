@@ -291,6 +291,9 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if err := operation_setting.ValidateErrorLogCleanupOption(key, value); err != nil {
+		return err
+	}
 	if field, ok := strings.CutPrefix(key, operation_setting.LoginProtectionModule+"."); ok {
 		_, err := operation_setting.ParseLoginProtectionUpdate(map[string]string{field: value})
 		return err

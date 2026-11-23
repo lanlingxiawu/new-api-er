@@ -75,10 +75,14 @@ type LogExportOptions struct {
 
 // LogExportJob 一次导出任务的完整状态，序列化后存 Redis。
 type LogExportJob struct {
-	SelfExport bool   `json:"self_export,omitempty"`
-	JobID      string `json:"job_id"`
-	UserID     int    `json:"user_id"`
-	Username   string `json:"username"`
+	DataSource             string             `json:"data_source,omitempty"`
+	AuditFilters           *AuditExportFilter `json:"audit_filters,omitempty"`
+	AuditProjectionVersion int                `json:"audit_projection_version,omitempty"`
+	QuotaFilters           *QuotaExportFilter `json:"quota_filters,omitempty"`
+	SelfExport             bool               `json:"self_export,omitempty"`
+	JobID                  string             `json:"job_id"`
+	UserID                 int                `json:"user_id"`
+	Username               string             `json:"username"`
 	// CreatorRole 创建任务时的操作者角色，决定 root 专属列是否参与导出。
 	// 升级前创建的任务该字段为 0，按「非 root」处理——宁可少一列，
 	// 也不能让普通管理员从导出文件里拿到 root 专属诊断。
@@ -141,6 +145,13 @@ func (j *LogExportJob) PublicView() *LogExportJob {
 	view := *j
 	if j.SelfExport {
 		view.NodeName = ""
+		if j.EffectiveDataSource() == LogExportDataAudit && j.AuditFilters != nil {
+			f := j.AuditFilters
+			view.AuditFilters = &AuditExportFilter{AuditLogFilter: AuditLogFilter{
+				StartTimestamp: f.StartTimestamp, EndTimestamp: f.EndTimestamp,
+				IP: f.IP, RequestId: f.RequestId, Category: f.Category, Success: f.Success, AuthMethod: f.AuthMethod,
+			}}
+		}
 	}
 	view.Parts = make([]LogExportPart, len(j.Parts))
 	copy(view.Parts, j.Parts)
@@ -148,6 +159,12 @@ func (j *LogExportJob) PublicView() *LogExportJob {
 		view.Parts[i].Path = ""
 	}
 	return &view
+}
+
+// Older self exports contain the management projection, even if their owner
+// still has permission to manage the job. Validate again at every download.
+func (j *LogExportJob) HasCurrentAuditProjection() bool {
+	return j.EffectiveDataSource() != LogExportDataAudit || !j.SelfExport || j.AuditProjectionVersion == AuditActivityProjectionVersion
 }
 
 // IsTerminal 报告任务是否已进入终态。
@@ -232,6 +249,9 @@ func GetLogExportJob(jobID string) (*LogExportJob, error) {
 	var job LogExportJob
 	if err := common.UnmarshalJsonStr(raw, &job); err != nil {
 		return nil, err
+	}
+	if !slices.Contains([]string{LogExportDataUsage, LogExportDataAudit, LogExportDataQuota}, job.EffectiveDataSource()) {
+		return nil, ErrLogExportDataSource
 	}
 	return &job, nil
 }
@@ -345,10 +365,13 @@ func ReleaseLogExportSlot(jobID string) {
 }
 
 // CheckAndSetLogExportCooldown 返回 true 表示用户仍在冷却中。
-func CheckAndSetLogExportCooldown(userID int) bool {
+func CheckAndSetLogExportCooldown(userID, cooldownSec int) bool {
+	if cooldownSec <= 0 {
+		return false
+	}
 	ctx, cancel := logExportRedisCtx()
 	defer cancel()
-	ttl := time.Duration(operation_setting.GetLogExportSetting().GetUserCooldownSec()) * time.Second
+	ttl := time.Duration(cooldownSec) * time.Second
 	ok, err := common.RDB.SetNX(ctx, logExportCooldownKeyPfx+strconv.Itoa(userID), "1", ttl).Result()
 	if err != nil {
 		common.SysError("log export: cooldown check failed: " + err.Error())
@@ -615,6 +638,12 @@ func runLogExport(job *LogExportJob) {
 // 原始错误只进系统日志，不下发给客户端。
 func logExportErrorCode(err error) string {
 	switch {
+	case errors.Is(err, ErrLogExportAccessChanged):
+		common.SysError("log export: access changed")
+		return "access_changed"
+	case errors.Is(err, ErrLogExportRiskChanged):
+		common.SysError("log export: audit risk revision changed")
+		return "risk_changed"
 	case errors.Is(err, ErrLogExportDiskFull):
 		return "disk_full"
 	case errors.Is(err, ErrLogExportTooManyParts):
@@ -658,6 +687,18 @@ func (j *LogExportJob) NeedsSummary() bool {
 // writeLogExport 执行一次完整导出：按时间窗口由早到晚扫描，逐批写入分片文件。
 func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	job.Format = LogExportFormatCSVGz
+	if err := job.validateRawLogExport(ctx); err != nil {
+		return err
+	}
+	switch job.EffectiveDataSource() {
+	case LogExportDataAudit:
+		return writeAuditLogExport(ctx, job)
+	case LogExportDataQuota:
+		return writeQuotaDataExport(ctx, job)
+	case LogExportDataUsage:
+	default:
+		return ErrLogExportDataSource
+	}
 	repricer, err := newLogExportRepricer(job)
 	if err != nil {
 		return err
@@ -665,8 +706,6 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	if job.SelfExport && (!job.IsSelfExportFor(job.UserID) || job.NeedsSummary() || job.IsSummary()) {
 		return ErrEmployeeExportAccess
 	}
-	setting := operation_setting.GetLogExportSetting()
-
 	// 聚合导出复用同一套扫描循环（限速、CPU 闸门、超时、取消全部原样生效），
 	// 只把「逐行写文件」换成「逐行累加，扫完一次性写出」。
 	if job.IsSummary() {
@@ -707,15 +746,11 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 			header = append(header, i18n.Translate(lang, key))
 		}
 	}
-	writerOpts := LogExportWriterOptions{
-		CSVBOM: job.Options.CSVBOM,
-		Header: header,
-	}
 
 	fields := repricer.selectFields(columnSet.SelectFields())
 	if job.SelfExport {
 		// 脱敏规则依赖日志类型和原始错误信息，不能由展示列决定是否读取。
-		for _, field := range []string{"type", "other", "request_id"} {
+		for _, field := range []string{"type", "other", "request_id", logGroupCol} {
 			if !slices.Contains(fields, field) {
 				fields = append(fields, field)
 			}
@@ -736,47 +771,12 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 		fields = append(fields, "other")
 		sort.Strings(fields)
 	}
-	exportStart := job.Filters.StartTimestamp
-
-	// 第一个分片。
-	writerOpts.GzipLevel = setting.GetGzipLevel()
-	partPath := LogExportPartFilePath(job.JobID, 1, job.Format)
-	writer, err := newLogExportPartWriter(partPath, job.Format, writerOpts)
+	output, err := newLogExportOutput(job, header)
 	if err != nil {
 		return err
 	}
-	// 正序扫描：分片内第一行时间最小（StartTime），最后一行时间最大（EndTime）。
-	// 一行都没写到时退化成所选区间的起点，下载列表不至于显示 1970。
-	currentPart := LogExportPart{Index: 1, Path: partPath, StartTime: exportStart, EndTime: exportStart}
-	var partRows int64
-	defer func() {
-		if writer == nil {
-			return
-		}
-		_, _ = writer.Close()
-		writer = nil
-		if retErr != nil {
-			// 未收尾的分片没进 job.Parts，调用方的 RemoveLogExportJobFiles 清不到它，
-			// 只能在这里删掉，否则半成品会一直占着磁盘直到任务过期。
-			_ = os.Remove(partPath)
-		}
-	}()
+	defer output.Abort()
 
-	// closePart 收尾当前分片并登记到任务。
-	closePart := func() error {
-		bytes, err := writer.Close()
-		writer = nil
-		if err != nil {
-			return err
-		}
-		currentPart.Rows = partRows
-		currentPart.Bytes = bytes
-		job.BytesOut += bytes
-		job.Parts = append(job.Parts, currentPart)
-		return nil
-	}
-
-	// acc 非 nil 表示本次还要顺带产出汇总分片（mode=both）。
 	var acc *logSummaryAccumulator
 	if job.NeedsSummary() {
 		var accErr error
@@ -791,8 +791,11 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	rowBuf := make([]string, len(columnSet.Columns))
 
 	scanner := newLogExportScanner(job, fields, columnSet.NeedChannelName, rctx)
-	err = scanner.run(ctx, func(logs []*Log) error {
-		for index, l := range logs {
+	err = scanner.runUsageBatches(ctx, func(batch LogExportBatch) error {
+		if err := CheckLogExportDiskSpace(); err != nil {
+			return err
+		}
+		for index, l := range batch.Logs {
 			if index%128 == 0 {
 				if err := ctx.Err(); err != nil {
 					return err
@@ -812,44 +815,17 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 					return err
 				}
 			}
-			rowsPerFile := int64(operation_setting.GetLogExportSetting().GetRowsPerFile())
-			if partRows >= rowsPerFile {
-				if err := closePart(); err != nil {
+			if batch.rawLogs != nil {
+				var err error
+				rctx.rawLogJSON, err = batch.rawLogs[index].json()
+				if err != nil {
 					return err
 				}
-				if len(job.Parts) >= operation_setting.GetLogExportSetting().GetMaxParts() {
-					return ErrLogExportTooManyParts
-				}
-				// 每个分片写完复检磁盘，避免把磁盘写满拖垮整个服务。
-				if err := CheckLogExportDiskSpace(); err != nil {
-					return err
-				}
-				nextIndex := len(job.Parts) + 1
-				partPath = LogExportPartFilePath(job.JobID, nextIndex, job.Format)
-				// 压缩等级在此刻现取：改动只对新分片生效，不影响已打开的文件。
-				writerOpts.GzipLevel = operation_setting.GetLogExportSetting().GetGzipLevel()
-				var writerErr error
-				writer, writerErr = newLogExportPartWriter(partPath, job.Format, writerOpts)
-				if writerErr != nil {
-					return writerErr
-				}
-				currentPart = LogExportPart{Index: nextIndex, Path: partPath}
-				partRows = 0
 			}
-			if partRows == 0 {
-				currentPart.StartTime = l.CreatedAt
-			}
-			currentPart.EndTime = l.CreatedAt
-
 			rowBuf = columnSet.Render(l, rctx, rowBuf)
-			if err := writer.WriteRow(rowBuf); err != nil {
+			if err := output.Write(rowBuf, l.CreatedAt); err != nil {
 				return err
 			}
-			partRows++
-			job.RowCount++
-			// 「明细 + 汇总」：同一行既写进明细，也累加进汇总。
-			// 这样两份产出只扫一遍库——分两次导出会把同一段日志扫两遍，
-			// 而扫描正是整条链路上最贵的一步。
 			if acc != nil {
 				if err := acc.AddQuota(l, rctx.exportQuota(l)); err != nil {
 					return err
@@ -862,7 +838,10 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 		return err
 	}
 
-	if err := closePart(); err != nil {
+	if err := job.validateRawLogExport(ctx); err != nil {
+		return err
+	}
+	if err := output.Finish(); err != nil {
 		return err
 	}
 	if acc != nil {
@@ -871,23 +850,20 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	return nil
 }
 
-// nextLogExportWindowSec 根据刚扫完的窗口的产出，决定下一个窗口的宽度。
-//
-//   - 整个窗口连一批都没读满 → 窗口太窄，翻倍。稀疏时间段里这能把「31 天 744 次
-//     空转往返」迅速收敛到几十次。
-//   - 窗口用掉了很多批 → 数据密集，减半收回，重新把单次索引区间限死。
-//
-// 下限是配置的 window_sec（配置调大时立刻跟上），上限沿用配置层的硬上限，
-// 不另设一套阈值。
-func nextLogExportWindowSec(current, cfgWindowSec int64, windowRows, windowBatches, batchSize int) int64 {
+// A selective filter can return very few rows while reading millions of index
+// entries. Grow sparse windows only when reads are also cheap; slow reads may
+// shrink below the configured starting window, down to the existing hard floor.
+func nextLogExportWindowSec(current, cfgWindowSec int64, windowRows, windowBatches, batchSize int, maxQueryCost, queryTimeout time.Duration) int64 {
 	if batchSize <= 0 {
 		return current
 	}
 	switch {
-	case windowRows < batchSize:
+	case maxQueryCost >= queryTimeout/2:
+		return max(current/2, operation_setting.MinLogExportWindowSec)
+	case windowRows < batchSize && maxQueryCost <= min(time.Second, queryTimeout/4):
 		return min(current*2, operation_setting.MaxLogExportWindowSec)
 	case windowBatches >= logExportWindowShrinkBatches:
-		return max(current/2, cfgWindowSec)
+		return max(current/2, min(current, cfgWindowSec))
 	default:
 		return current
 	}

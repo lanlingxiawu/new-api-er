@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service/auditexport"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
@@ -54,9 +55,15 @@ func GetLogExportColumns(c *gin.Context) {
 		})
 	}
 	setting := operation_setting.GetLogExportSetting()
+	templates := model.BuiltinLogExportTemplates()
+	if !isRoot {
+		templates = slices.DeleteFunc(templates, func(t model.BuiltinLogExportTemplate) bool {
+			return model.LogExportHasRawColumn(t.Columns)
+		})
+	}
 	common.ApiSuccess(c, gin.H{
 		"columns":           out,
-		"builtin_templates": model.BuiltinLogExportTemplates(),
+		"builtin_templates": templates,
 		"default_template":  model.LogExportTemplateAsDisplayed,
 		"max_columns":       model.LogExportMaxColumns,
 		// 异常种类由后端下发而不是前端硬编码：判定规则住在后端，
@@ -92,6 +99,11 @@ func GetLogExportTemplates(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
 	}
+	if !isRootRequest(c) {
+		templates = slices.DeleteFunc(templates, func(t *model.LogExportTemplate) bool {
+			return model.LogExportHasRawColumn(t.ColumnKeys)
+		})
+	}
 	common.ApiSuccess(c, templates)
 }
 
@@ -99,6 +111,10 @@ func CreateLogExportTemplate(c *gin.Context) {
 	var req logExportTemplateRequest
 	if err := common.UnmarshalBodyReusable(c, &req); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if model.LogExportHasRawColumn(req.Columns) && !isRootRequest(c) {
+		respondLogExportTemplateError(c, model.ErrLogExportRawForbidden)
 		return
 	}
 	tpl := &model.LogExportTemplate{
@@ -132,13 +148,17 @@ func UpdateLogExportTemplate(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgLogExportTemplateNotFound)
 		return
 	}
-	if !model.CanWriteLogExportTemplate(tpl, c.GetInt("id"), isRootRequest(c)) {
+	if !model.CanWriteLogExportTemplate(tpl, c.GetInt("id"), isRootRequest(c)) || (model.LogExportHasRawColumn(tpl.ColumnKeys) && !isRootRequest(c)) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgForbidden)})
 		return
 	}
 	var req logExportTemplateRequest
 	if err := common.UnmarshalBodyReusable(c, &req); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if model.LogExportHasRawColumn(req.Columns) && !isRootRequest(c) {
+		respondLogExportTemplateError(c, model.ErrLogExportRawForbidden)
 		return
 	}
 	tpl.Name = req.Name
@@ -169,7 +189,7 @@ func DeleteLogExportTemplate(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgLogExportTemplateNotFound)
 		return
 	}
-	if !model.CanWriteLogExportTemplate(tpl, c.GetInt("id"), isRootRequest(c)) {
+	if !model.CanWriteLogExportTemplate(tpl, c.GetInt("id"), isRootRequest(c)) || (model.LogExportHasRawColumn(tpl.ColumnKeys) && !isRootRequest(c)) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgForbidden)})
 		return
 	}
@@ -184,6 +204,10 @@ func DeleteLogExportTemplate(c *gin.Context) {
 func respondLogExportTemplateError(c *gin.Context, err error) {
 	var unknownCol *model.UnknownLogExportColumnError
 	switch {
+	case errors.Is(err, model.ErrLogExportRawForbidden):
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgForbidden)})
+	case errors.Is(err, model.ErrLogExportRawOptions):
+		common.ApiErrorI18n(c, i18n.MsgLogExportRawOptions)
 	case errors.As(err, &unknownCol):
 		common.ApiErrorI18n(c, i18n.MsgLogExportInvalidColumn, map[string]any{"Key": unknownCol.Key})
 	case errors.Is(err, model.ErrLogExportTooManyColumns):
@@ -444,6 +468,15 @@ func createLogExportJob(c *gin.Context, self bool) {
 		req, parseErr = parseSelfLogExportRequest(c)
 	} else {
 		parseErr = common.UnmarshalBodyReusable(c, &req)
+		var fields map[string]any
+		if parseErr == nil {
+			parseErr = common.UnmarshalBodyReusable(c, &fields)
+		}
+		for _, key := range []string{"data_source", "audit_filters", "quota_filters"} {
+			if _, exists := fields[key]; exists {
+				parseErr = model.ErrLogExportDataSource
+			}
+		}
 	}
 	if parseErr != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
@@ -529,35 +562,10 @@ func createLogExportJob(c *gin.Context, self bool) {
 		columns = set.Keys
 	}
 	userId := c.GetInt("id")
-	if model.CountActiveLogExportJobs(userId) >= setting.GetMaxActiveJobsPerUser() {
-		common.ApiErrorI18n(c, i18n.MsgLogExportTooManyJobs,
-			map[string]any{"Max": setting.GetMaxActiveJobsPerUser()})
-		return
-	}
-	if err := model.CheckLogExportDiskSpace(); err != nil {
-		common.ApiErrorI18n(c, i18n.MsgLogExportDiskFull)
-		return
-	}
-
 	jobID := model.NewLogExportJobID()
-	// 先抢槽位再计冷却：系统正忙时不该白白消耗掉用户的一次导出机会。
-	slotTTL := time.Duration(setting.GetTimeoutSec()) * time.Second
-	if !model.AcquireLogExportSlot(jobID, setting.GetMaxConcurrentJobs(), slotTTL) {
-		common.ApiErrorI18n(c, i18n.MsgLogExportBusy)
-		return
-	}
-	if model.CheckAndSetLogExportCooldown(userId) {
-		model.ReleaseLogExportSlot(jobID)
-		common.ApiErrorI18n(c, i18n.MsgLogExportCooldown,
-			map[string]any{"Minutes": (setting.GetUserCooldownSec() + 59) / 60})
-		return
-	}
-
-	// 被动清理孤儿文件，放 goroutine 里避免慢 IO 拖住这次请求。
-	go model.CleanupOrphanLogExportFiles()
-
 	job := &model.LogExportJob{
 		SelfExport:         self,
+		DataSource:         model.LogExportDataUsage,
 		JobID:              jobID,
 		UserID:             userId,
 		Username:           c.GetString("username"),
@@ -576,9 +584,48 @@ func createLogExportJob(c *gin.Context, self bool) {
 		job.Mode = req.Mode
 		job.SummaryDims = summaryDims
 	}
+	submitLogExportJob(c, job)
+}
+
+func submitLogExportJob(c *gin.Context, job *model.LogExportJob) {
+	setting := operation_setting.GetLogExportSetting()
+	userId := job.UserID
+	if model.CountActiveLogExportJobs(userId) >= setting.GetMaxActiveJobsPerUser() {
+		common.ApiErrorI18n(c, i18n.MsgLogExportTooManyJobs,
+			map[string]any{"Max": setting.GetMaxActiveJobsPerUser()})
+		return
+	}
+	if err := model.CheckLogExportDiskSpace(); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgLogExportDiskFull)
+		return
+	}
+
+	jobID := job.JobID
+	// 先抢槽位再计冷却：系统正忙时不该白白消耗掉用户的一次导出机会。
+	slotTTL := time.Duration(setting.GetTimeoutSec()) * time.Second
+	if !model.AcquireLogExportSlot(jobID, setting.GetMaxConcurrentJobs(), slotTTL) {
+		common.ApiErrorI18n(c, i18n.MsgLogExportBusy)
+		return
+	}
+	cooldownSec := setting.GetUserCooldownSec()
+	if job.CreatorRole >= common.RoleAdminUser {
+		cooldownSec = setting.GetAdminCooldownSec()
+	}
+	if model.CheckAndSetLogExportCooldown(userId, cooldownSec) {
+		model.ReleaseLogExportSlot(jobID)
+		common.ApiErrorI18n(c, i18n.MsgLogExportCooldown,
+			map[string]any{"Minutes": (cooldownSec + 59) / 60})
+		return
+	}
+
+	// 被动清理孤儿文件，放 goroutine 里避免慢 IO 拖住这次请求。
+	go model.CleanupOrphanLogExportFiles()
+
 	if err := model.CreateLogExportJob(job); err != nil {
 		model.ReleaseLogExportSlot(jobID)
-		model.ClearLogExportCooldown(userId)
+		if cooldownSec > 0 {
+			model.ClearLogExportCooldown(userId)
+		}
 		common.SysError("log export: create job failed: " + err.Error())
 		common.ApiErrorI18n(c, i18n.MsgLogExportCreateFailed)
 		return
@@ -595,11 +642,12 @@ func createLogExportJob(c *gin.Context, self bool) {
 func auditLogExportJobCreated(c *gin.Context, job *model.LogExportJob, extra ...map[string]interface{}) {
 	common.SetContextKey(c, constant.ContextKeyAuditLogged, true)
 	params := map[string]interface{}{
-		"job_id":  job.JobID,
-		"start":   job.Filters.StartTimestamp,
-		"end":     job.Filters.EndTimestamp,
-		"columns": len(job.Columns),
-		"format":  job.Format,
+		"data_source": job.EffectiveDataSource(),
+		"job_id":      job.JobID,
+		"start":       job.Filters.StartTimestamp,
+		"end":         job.Filters.EndTimestamp,
+		"columns":     len(job.Columns),
+		"format":      job.Format,
 	}
 	if scope := logExportFilterScope(job.Filters); scope != "" {
 		params["filters"] = scope
@@ -721,6 +769,9 @@ func resolveLogExportRequestShape(c *gin.Context, req createLogExportJobRequest)
 		return nil, "", options, err
 	}
 	columns = set.Keys
+	if model.LogExportHasRawColumn(columns) && (req.Mode == model.LogExportModeSummary || req.GroupRatioOverride != nil) {
+		return nil, "", options, model.ErrLogExportRawOptions
+	}
 
 	format = model.LogExportFormatCSVGz
 
@@ -750,7 +801,8 @@ func GetLogExportJobs(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 	defer cancel()
-	page, err := model.ListManagedLogExportJobs(ctx, logExportRequestAccess(c), query)
+	access := logExportRequestAccess(c)
+	page, err := model.ListManagedLogExportJobs(ctx, access, query)
 	if err != nil {
 		if errors.Is(err, model.ErrLogExportListQuery) {
 			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
@@ -759,19 +811,27 @@ func GetLogExportJobs(c *gin.Context) {
 		}
 		return
 	}
+	maxRange := operation_setting.GetLogExportSetting().GetAdminMaxRangeSec()
+	if isSelfLogExportRoute(c) {
+		maxRange = operation_setting.GetLogExportSetting().GetUserMaxRangeSec()
+	}
 	common.ApiSuccess(c, gin.H{
-		"jobs":          page.Jobs,
-		"next_cursor":   page.NextCursor,
-		"has_more":      page.HasMore,
-		"enabled":       operation_setting.GetLogExportSetting().Enabled && (!isSelfLogExportRoute(c) || operation_setting.GetLogSetting().UserExportEnabled),
-		"max_range_sec": operation_setting.GetLogExportSetting().GetUserMaxRangeSec(),
+		"jobs":                page.Jobs,
+		"next_cursor":         page.NextCursor,
+		"has_more":            page.HasMore,
+		"enabled":             operation_setting.GetLogExportSetting().Enabled && (!isSelfLogExportRoute(c) || operation_setting.GetLogSetting().UserExportEnabled),
+		"max_range_sec":       maxRange,
+		"risk_export_enabled": access.AuditSecurityExport,
 	})
 }
 
 func logExportRequestAccess(c *gin.Context) model.LogExportAccess {
-	scope := "admin"
+	if access, ok := c.Get("log_export_access"); ok {
+		return access.(model.LogExportAccess)
+	}
+	scope := "usage_admin"
 	if isSelfLogExportRoute(c) {
-		scope = "self"
+		scope = "usage_self"
 	} else if isEmployeeExportRoute(c) {
 		scope = "employee"
 	}
@@ -862,7 +922,15 @@ func GetLogExportDownloadURL(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !job.HasCurrentAuditProjection() {
+		common.ApiErrorI18n(c, i18n.MsgAuditExportObsolete)
+		return
+	}
 	access := c.MustGet("log_export_access").(model.LogExportAccess)
+	if !access.CanReadData(job) {
+		employeeExportError(c, model.ErrEmployeeExportAccess)
+		return
+	}
 	if access.Scope == "employee" && job.EmployeeScope != nil {
 		if err := model.ValidateEmployeeExportJob(c.Request.Context(), job); err != nil {
 			employeeExportError(c, err)
@@ -980,9 +1048,22 @@ func DownloadLogExport(c *gin.Context) {
 			grant.Scope = "employee"
 		}
 	}
+	if !grant.MatchesSource(job) {
+		respondLogExportManagementError(c, model.ErrEmployeeExportAccess)
+		return
+	}
+	if !job.HasCurrentAuditProjection() {
+		common.ApiErrorI18n(c, i18n.MsgAuditExportObsolete)
+		return
+	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 	defer cancel()
-	access, err := model.CurrentLogExportAccess(ctx, grant.UserID, grant.Scope)
+	var access model.LogExportAccess
+	if job.EffectiveDataSource() == model.LogExportDataAudit {
+		access, err = auditexport.CurrentAccess(ctx, grant.UserID, grant.Scope)
+	} else {
+		access, err = model.CurrentLogExportAccess(ctx, grant.UserID, grant.Scope)
+	}
 	if err == nil {
 		err = access.LoadCustomers(ctx, []*model.LogExportJob{job}, model.LogExportListQuery{})
 	}
@@ -990,8 +1071,7 @@ func DownloadLogExport(c *gin.Context) {
 		respondLogExportManagementError(c, err)
 		return
 	}
-	_, operate := access.Permissions(job)
-	if !operate {
+	if !access.CanReadData(job) {
 		employeeExportError(c, model.ErrEmployeeExportAccess)
 		return
 	}

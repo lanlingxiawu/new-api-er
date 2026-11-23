@@ -22,7 +22,7 @@ const requestLogRecoveryMaxRecord = 256 << 20
 // under reqLogMu. A checkpoint makes intentional removals survive a restart while
 // allowing records written after the checkpoint to be recovered from the tail.
 var requestLogCommitted = make(map[string]int64)
-var requestLogRecoveryIncomplete bool // set at startup, before serving requests
+var requestLogRecoveryIncomplete atomic.Bool // explicit deletion may repair incomplete recovery
 
 type requestLogRecoveryCheckpoint struct {
 	Version  int                       `json:"version"`
@@ -35,11 +35,54 @@ type requestLogRecoveryCheckpoint struct {
 // The caller holds reqLogMu so no committed record can fall between entries and
 // file positions. Never call it from the relay goroutine.
 func saveRequestLogCheckpointLocked(items []requestLogIndexEntry) error {
+	if requestLogRecoveryIncomplete.Load() {
+		return errors.New("request log recovery is incomplete")
+	}
+	return writeRequestLogCheckpointLocked(items, requestLogCommitted)
+}
+
+// saveRequestLogDeletionCheckpointLocked lets an explicit deletion replace an
+// untrusted recovery checkpoint without replaying old bodies. The file inventory
+// records deletion boundaries even for files recovery could not parse.
+func saveRequestLogDeletionCheckpointLocked(items []requestLogIndexEntry) error {
+	if !requestLogRecoveryIncomplete.Load() {
+		return saveRequestLogCheckpointLocked(items)
+	}
 	if !RequestLogStoreReady() {
 		return errRequestLogStoreUnavailable
 	}
-	if requestLogRecoveryIncomplete {
-		return errors.New("request log recovery is incomplete")
+	root, err := os.OpenRoot(requestLogRoot)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	active, snapSeq := requestLogSegmentSnapshot()
+	recovery := requestLogDiskRecovery{root: root, files: make(map[string]int64), positionsOnly: true}
+	recovery.scanDir(".", 0)
+	if recovery.incomplete {
+		return errors.New("request log file inventory is incomplete")
+	}
+	for name := range recovery.files {
+		base := name[strings.LastIndexByte(name, '/')+1:]
+		if keepRequestLogSegment(name, base, active, snapSeq) {
+			// A writer can have written bytes while waiting to acquire reqLogMu.
+			// Only its committed prefix belongs to the deletion; recover the tail.
+			recovery.files[name] = requestLogCommitted[name]
+		}
+	}
+	if err := writeRequestLogCheckpointLocked(items, recovery.files); err != nil {
+		return err
+	}
+	requestLogCommitted = recovery.files
+	requestLogRecoveryIncomplete.Store(false)
+	return nil
+}
+
+// writeRequestLogCheckpointLocked persists the target index and its recovery
+// boundaries before callers commit any deletion to memory.
+func writeRequestLogCheckpointLocked(items []requestLogIndexEntry, files map[string]int64) error {
+	if !RequestLogStoreReady() {
+		return errRequestLogStoreUnavailable
 	}
 	root, err := os.OpenRoot(requestLogRoot)
 	if err != nil {
@@ -47,9 +90,9 @@ func saveRequestLogCheckpointLocked(items []requestLogIndexEntry) error {
 	}
 	defer root.Close()
 	checkpoint := requestLogRecoveryCheckpoint{Version: 1, Sequence: atomic.LoadInt64(&reqLogSeq), Files: make(map[string]int64)}
-	for name, offset := range requestLogCommitted {
+	for name, offset := range files {
 		if _, err := root.Stat(name); os.IsNotExist(err) {
-			delete(requestLogCommitted, name)
+			delete(files, name)
 			continue
 		}
 		checkpoint.Files[name] = offset
@@ -88,13 +131,14 @@ func CheckpointRequestLogs() {
 }
 
 type requestLogDiskRecovery struct {
-	root       *os.Root
-	items      []requestLogIndexEntry
-	files      map[string]int64
-	sequence   int64
-	count      int
-	limit      int
-	incomplete bool
+	root          *os.Root
+	items         []requestLogIndexEntry
+	files         map[string]int64
+	sequence      int64
+	count         int
+	limit         int
+	incomplete    bool
+	positionsOnly bool
 }
 
 func (r *requestLogDiskRecovery) fail(err error) {
@@ -180,7 +224,19 @@ func (r *requestLogDiskRecovery) scanFile(name string, segment bool) {
 		r.fail(err)
 		return
 	}
-	if !info.Mode().IsRegular() || offset < 0 || offset > info.Size() {
+	if !info.Mode().IsRegular() {
+		r.fail(fmt.Errorf("not a regular request log file: %s", name))
+		return
+	}
+	if r.positionsOnly {
+		if segment {
+			r.files[name] = info.Size()
+		} else {
+			r.files[name] = -1
+		}
+		return
+	}
+	if offset < 0 || offset > info.Size() {
 		r.fail(fmt.Errorf("invalid file or checkpoint position: %s", name))
 		return
 	}
@@ -196,7 +252,8 @@ func (r *requestLogDiskRecovery) scanFile(name string, segment bool) {
 			for {
 				part, err := reader.ReadSlice('\n')
 				if len(data)+len(part) > requestLogRecoveryMaxRecord {
-					r.fail(fmt.Errorf("record too large: %s", name))
+					r.files[name] = info.Size()
+					common.SysError("request log recovery: skipping oversized record and remaining file tail: " + name)
 					return
 				}
 				data = append(data, part...)
@@ -208,7 +265,8 @@ func (r *requestLogDiskRecovery) scanFile(name string, segment bool) {
 		} else {
 			data, readErr = io.ReadAll(io.LimitReader(reader, requestLogRecoveryMaxRecord+1))
 			if len(data) > requestLogRecoveryMaxRecord {
-				r.fail(fmt.Errorf("record too large: %s", name))
+				r.files[name] = -1
+				common.SysError("request log recovery: skipping oversized record: " + name)
 				return
 			}
 		}
@@ -219,12 +277,7 @@ func (r *requestLogDiskRecovery) scanFile(name string, segment bool) {
 		if len(data) == 0 {
 			return
 		}
-		var log RequestLog
-		if err := common.Unmarshal(data, &log); err != nil || log.Id <= 0 || log.CreatedAt <= 0 {
-			r.fail(fmt.Errorf("invalid record at %s offset %d", name, offset))
-			return
-		}
-		log.Url = common.RedactURIString(log.Url)
+		recordOffset := offset
 		rel := name
 		if segment {
 			length := len(data)
@@ -237,7 +290,15 @@ func (r *requestLogDiskRecovery) scanFile(name string, segment bool) {
 		} else {
 			r.files[name] = -1
 		}
-		r.retain(requestLogIndexEntry{meta: cloneRequestLogMeta(&log), rel: rel})
+		var log RequestLog
+		if err := common.Unmarshal(data, &log); err != nil || log.Id <= 0 || log.CreatedAt <= 0 {
+			// Corruption is local to this record, not a reason to disable every
+			// deletion and sweep. Its bytes remain behind the saved boundary.
+			common.SysError(fmt.Sprintf("request log recovery: skipping invalid record at %s offset %d", name, recordOffset))
+		} else {
+			log.Url = common.RedactURIString(log.Url)
+			r.retain(requestLogIndexEntry{meta: cloneRequestLogMeta(&log), rel: rel})
+		}
 		if !segment || readErr == io.EOF {
 			return
 		}
@@ -250,7 +311,7 @@ func restoreRequestLogsFromDisk() {
 	}
 	root, err := os.OpenRoot(requestLogRoot)
 	if err != nil {
-		requestLogRecoveryIncomplete = true
+		requestLogRecoveryIncomplete.Store(true)
 		common.SysError("request log recovery: " + err.Error())
 		return
 	}
@@ -332,7 +393,7 @@ func restoreRequestLogsFromDisk() {
 	defer reqLogMu.Unlock()
 	reqLogItems, requestLogCommitted = r.items, r.files
 	atomic.StoreInt64(&reqLogSeq, r.sequence)
-	requestLogRecoveryIncomplete = r.incomplete
+	requestLogRecoveryIncomplete.Store(r.incomplete)
 	if !r.incomplete {
 		if err := saveRequestLogCheckpointLocked(reqLogItems); err != nil {
 			common.SysError("request log checkpoint failed: " + err.Error())

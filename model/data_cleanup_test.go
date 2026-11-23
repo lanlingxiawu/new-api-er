@@ -2,6 +2,8 @@ package model
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -26,7 +28,8 @@ func cleanupTestDB(t *testing.T) *gorm.DB {
 	var dialect gorm.Dialector = sqlite.Open(fmt.Sprintf("file:cleanup_%d?mode=memory&cache=shared", time.Now().UnixNano()))
 	prefix := ""
 	if dsn := os.Getenv("CLEANUP_TEST_DSN"); dsn != "" {
-		prefix = fmt.Sprintf("cleanup_%d_", time.Now().UnixNano())
+		// Leave room for long model names within MySQL's 64-character limit.
+		prefix = fmt.Sprintf("cl_%x_", time.Now().UnixNano())
 		if strings.HasPrefix(dsn, "postgres") {
 			admin, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 			require.NoError(t, err)
@@ -65,11 +68,552 @@ func cleanupTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		if prefix != "" {
-			require.NoError(t, db.Migrator().DropTable(&ConsumptionCost{}, &EmployeeCommissionLog{}, &Log{}, &FinancialDetailTombstone{}, &DataCleanupRun{}, &SystemTask{}, &SystemTaskLock{}, &PlatformChannelDailyStat{}, &EmployeeCommissionDailyStat{}))
+			require.NoError(t, db.Migrator().DropTable(&ConsumptionCost{}, &EmployeeCommissionLog{}, &Log{}, &FinancialDetailTombstone{}, &DataCleanupRun{}, &SystemTask{}, &SystemTaskLock{}, &PlatformChannelDailyStat{}, &EmployeeCommissionDailyStat{}, &EmployeeCustomerCommissionDailyStat{}))
 		}
 		require.NoError(t, sqlDB.Close())
 	})
 	return db
+}
+
+func TestErrorLogCleanupExistingIndexes(t *testing.T) {
+	for _, mode := range []string{"error_time", "time", "id"} {
+		t.Run(mode, func(t *testing.T) {
+			db := cleanupTestDB(t)
+			if mode != "error_time" {
+				require.NoError(t, db.Migrator().DropIndex(&Log{}, "idx_cleanup_created_id"))
+			}
+			if mode == "id" {
+				require.NoError(t, db.Migrator().DropIndex(&Log{}, "idx_created_at_id"))
+			}
+			logs := []Log{
+				{Id: 1, CreatedAt: 10, Type: LogTypeConsume},
+				{Id: 2, CreatedAt: 10, Type: LogTypeError},
+				{Id: 3, CreatedAt: 10, Type: LogTypeManage},
+				{Id: 4, CreatedAt: 0, Type: LogTypeError},
+				{Id: 5, CreatedAt: -1, Type: LogTypeError},
+				{Id: 6, CreatedAt: 100, Type: LogTypeError},
+				{Id: 7, CreatedAt: 101, Type: LogTypeError},
+			}
+			require.NoError(t, db.Create(&logs).Error)
+			require.NoError(t, db.Model(&Log{}).Where("id = ?", 4).Update("created_at", 0).Error)
+			run, err := PrepareErrorLogCleanup(context.Background(), db, 100)
+			require.NoError(t, err)
+			require.Equal(t, mode, run.ScanMode)
+			require.Equal(t, 2, run.Matched)
+			require.True(t, run.CountExact)
+			require.Zero(t, run.Scanned, "preview must not advance the execution cursor")
+			require.NoError(t, db.Create(&Log{Id: 1000, CreatedAt: 9, Type: LogTypeError}).Error)
+			for i := 0; ; i++ {
+				require.Less(t, i, 20, "scan must exhaust its snapshot")
+				batch, err := DeleteDataCleanupBatch(context.Background(), db, run, 1)
+				require.NoError(t, err)
+				if mode == "id" {
+					require.LessOrEqual(t, batch.Scanned, 10)
+				} else {
+					require.LessOrEqual(t, batch.Scanned, 1)
+				}
+				require.LessOrEqual(t, batch.Deleted, int64(1))
+				if batch.Done {
+					break
+				}
+			}
+			require.EqualValues(t, 2, run.Deleted)
+			var remaining []int
+			require.NoError(t, db.Model(&Log{}).Order("id").Pluck("id", &remaining).Error)
+			require.Equal(t, []int{1, 3, 5, 6, 7, 1000}, remaining)
+			for _, limit := range []int{0, 10001} {
+				_, err := DeleteDataCleanupBatch(context.Background(), db, run, limit)
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestErrorLogCleanupBoundedIDWindows(t *testing.T) {
+	db := cleanupTestDB(t)
+	logs := []Log{{Id: 131075, Type: LogTypeError, CreatedAt: 10}, {Id: 131076, Type: LogTypeConsume, CreatedAt: 10}, {Id: 131077, Type: LogTypeError, CreatedAt: 10}}
+	require.NoError(t, db.Create(&logs).Error)
+	run := DataCleanupRun{Kind: CleanupErrorLogs, Before: 20, MaxID: 131076, ErrorLogCleanupPlan: ErrorLogCleanupPlan{ScanMode: "id", ScanEndID: 131076}}
+	for _, end := range []int{65536, 131072} {
+		batch, err := DeleteDataCleanupBatch(context.Background(), db, &run, 100)
+		require.NoError(t, err)
+		require.False(t, batch.Done, "an empty window must not finish the snapshot")
+		require.Zero(t, batch.Scanned)
+		require.Zero(t, batch.Deleted)
+		require.Equal(t, end, run.CursorID)
+	}
+	batch, err := DeleteDataCleanupBatch(context.Background(), db, &run, 100)
+	require.NoError(t, err)
+	require.True(t, batch.Done)
+	require.Equal(t, 2, batch.Scanned)
+	require.EqualValues(t, 1, batch.Deleted)
+	require.Equal(t, run.MaxID, run.CursorID)
+	require.EqualValues(t, 2, run.Scanned, "ID holes are not scanned records")
+	var remaining []int
+	require.NoError(t, db.Model(&Log{}).Order("id").Pluck("id", &remaining).Error)
+	require.Equal(t, []int{131076, 131077}, remaining)
+}
+
+func TestErrorLogCleanupPrefetchedTailAndBounds(t *testing.T) {
+	db := cleanupTestDB(t)
+	logs := []Log{
+		{Id: 1, Type: LogTypeConsume, CreatedAt: 10},
+		{Id: 2, Type: LogTypeError, CreatedAt: 10},
+		{Id: 3, Type: LogTypeError, CreatedAt: 9},
+		{Id: 4, Type: LogTypeError, CreatedAt: 10},
+		{Id: 5, Type: LogTypeManage, CreatedAt: 10},
+		{Id: 6, Type: LogTypeError, CreatedAt: 8},
+		{Id: 7, Type: LogTypeError, CreatedAt: 10},
+		{Id: 8, Type: LogTypeError, CreatedAt: 20},
+		{Id: 9, Type: LogTypeError, CreatedAt: -1},
+		{Id: 10, Type: LogTypeConsume, CreatedAt: 21},
+		{Id: 11, Type: LogTypeError, CreatedAt: 1},
+	}
+	require.NoError(t, db.Create(&logs).Error)
+	run := DataCleanupRun{Kind: CleanupErrorLogs, Before: 20, MaxID: 10, ErrorLogCleanupPlan: ErrorLogCleanupPlan{ScanMode: "id", ScanEndID: 10}}
+	for _, end := range []int{3, 6} {
+		batch, err := DeleteDataCleanupBatch(context.Background(), db, &run, 2)
+		require.NoError(t, err)
+		require.EqualValues(t, 2, batch.Deleted)
+		require.Equal(t, 3, batch.Scanned)
+		require.False(t, batch.Done)
+		require.Equal(t, end, run.CursorID, "unprocessed prefetched errors must remain ahead of the cursor")
+	}
+	batch, err := DeleteDataCleanupBatch(context.Background(), db, &run, 2)
+	require.NoError(t, err)
+	require.True(t, batch.Done)
+	require.EqualValues(t, 5, run.Deleted)
+	require.EqualValues(t, 10, run.Scanned)
+	var ids []int
+	require.NoError(t, db.Model(&Log{}).Order("id").Pluck("id", &ids).Error)
+	require.Equal(t, []int{1, 5, 8, 9, 10, 11}, ids)
+	// Even an empty range near the integer limit must advance without overflow.
+	run.MaxID = int(^uint(0) >> 1)
+	run.CursorID = run.MaxID - 5
+	batch, err = DeleteDataCleanupBatch(context.Background(), db, &run, 500)
+	require.NoError(t, err)
+	require.True(t, batch.Done)
+	require.Equal(t, run.MaxID, run.CursorID)
+}
+
+func TestErrorLogCleanupBoundedPreview(t *testing.T) {
+	db := cleanupTestDB(t)
+	for _, index := range []string{"idx_cleanup_created_id", "idx_created_at_id"} {
+		require.NoError(t, db.Migrator().DropIndex(&Log{}, index))
+	}
+	require.NoError(t, db.Create(&Log{Id: 65537, Type: LogTypeError, CreatedAt: 10}).Error)
+	run, err := PrepareErrorLogCleanup(context.Background(), db, 20)
+	require.NoError(t, err)
+	require.Equal(t, "id", run.ScanMode)
+	require.Zero(t, run.Matched)
+	require.False(t, run.CountExact, "an empty first window cannot prove there are no eligible logs")
+	require.Zero(t, run.CursorID)
+	batch, err := DeleteDataCleanupBatch(context.Background(), db, run, 100)
+	require.NoError(t, err)
+	require.False(t, batch.Done)
+	batch, err = DeleteDataCleanupBatch(context.Background(), db, run, 100)
+	require.NoError(t, err)
+	require.True(t, batch.Done)
+	require.EqualValues(t, 1, run.Deleted)
+}
+
+func TestErrorLogCleanupInvalidBatchOptions(t *testing.T) {
+	db := cleanupTestDB(t)
+	for _, options := range []ErrorLogCleanupBatchOptions{
+		{DeleteLimit: 0, IDSpan: 65536}, {DeleteLimit: 10001, IDSpan: 65536},
+		{DeleteLimit: 1, IDSpan: 0}, {DeleteLimit: 1, IDSpan: 65537},
+	} {
+		run := DataCleanupRun{Kind: CleanupErrorLogs, Before: 20, MaxID: 100, ErrorLogCleanupPlan: ErrorLogCleanupPlan{ScanMode: "id"}}
+		original := run
+		_, err := DeleteErrorLogCleanupBatch(context.Background(), db, &run, options)
+		require.Error(t, err)
+		require.Equal(t, original, run)
+	}
+	for _, cursor := range []int{-1, 101} {
+		run := DataCleanupRun{Kind: CleanupErrorLogs, Before: 20, MaxID: 100, CursorID: cursor, ErrorLogCleanupPlan: ErrorLogCleanupPlan{ScanMode: "id"}}
+		_, err := DeleteErrorLogCleanupBatch(context.Background(), db, &run, DefaultErrorLogCleanupBatchOptions(100))
+		require.Error(t, err)
+		require.Equal(t, cursor, run.CursorID)
+	}
+}
+
+func TestErrorLogCleanupSeekExistingRecords(t *testing.T) {
+	db := cleanupTestDB(t)
+	logs := []Log{{Id: 1000000001, Type: LogTypeConsume, CreatedAt: 30}, {Id: 1000000010, Type: LogTypeError, CreatedAt: 10}}
+	require.NoError(t, db.Create(&logs).Error)
+	run := DataCleanupRun{Kind: CleanupErrorLogs, Before: 20, MaxID: 1000000010, ErrorLogCleanupPlan: ErrorLogCleanupPlan{ScanMode: "id"}}
+	cursor, err := SeekErrorLogCleanupCursor(context.Background(), db, &run)
+	require.NoError(t, err)
+	require.Equal(t, 1000000000, cursor, "seek must include consumption and recent records")
+	require.Zero(t, run.CursorID, "the caller must persist a seek before using it")
+	run.CursorID = cursor
+	batch, err := DeleteErrorLogCleanupBatch(context.Background(), db, &run, DefaultErrorLogCleanupBatchOptions(2000))
+	require.NoError(t, err)
+	require.True(t, batch.Done)
+	require.EqualValues(t, 1, batch.Deleted)
+	require.Equal(t, 2, batch.Scanned)
+	cursor, err = SeekErrorLogCleanupCursor(context.Background(), db, &run)
+	require.NoError(t, err)
+	require.Equal(t, run.MaxID, cursor)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = SeekErrorLogCleanupCursor(ctx, db, &run)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestErrorLogCleanupLargeBatchAtomicity(t *testing.T) {
+	for _, count := range []int{400, 401, 2000, 5000, 5001, 10000} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			db := cleanupTestDB(t)
+			logs := make([]Log, count+3)
+			for i := range logs {
+				logs[i] = Log{Id: i + 1, Type: LogTypeError, CreatedAt: 10}
+			}
+			logs[count].Type = LogTypeConsume
+			logs[count+1].CreatedAt = 20
+			require.NoError(t, db.CreateInBatches(logs, 200).Error)
+			run := DataCleanupRun{Kind: CleanupErrorLogs, Before: 20, MaxID: count + 2, ErrorLogCleanupPlan: ErrorLogCleanupPlan{ScanMode: "id"}}
+			original := run
+			calls := 0
+			injected := errors.New("second delete failed")
+			require.NoError(t, db.Callback().Delete().Before("gorm:delete").Register("test:second_delete", func(tx *gorm.DB) {
+				calls++
+				if calls == 2 {
+					tx.AddError(injected)
+				}
+			}))
+			_, err := DeleteDataCleanupBatch(context.Background(), db, &run, count)
+			if calls > 1 {
+				require.ErrorIs(t, err, injected)
+				require.Equal(t, original, run)
+				var remaining int64
+				require.NoError(t, db.Model(&Log{}).Count(&remaining).Error)
+				require.EqualValues(t, count+3, remaining, "earlier DELETE statements must roll back")
+			} else {
+				require.NoError(t, err)
+			}
+			require.NoError(t, db.Callback().Delete().Remove("test:second_delete"))
+			if calls > 1 {
+				_, err = DeleteDataCleanupBatch(context.Background(), db, &run, count)
+				require.NoError(t, err)
+			}
+			require.EqualValues(t, count, run.Deleted)
+			var ids []int
+			require.NoError(t, db.Model(&Log{}).Order("id").Pluck("id", &ids).Error)
+			require.Equal(t, []int{count + 1, count + 2, count + 3}, ids)
+		})
+	}
+}
+
+func TestErrorLogCleanupNullTimeIsNotEpoch(t *testing.T) {
+	db := cleanupTestDB(t)
+	for _, index := range []string{"idx_cleanup_created_id", "idx_created_at_id"} {
+		require.NoError(t, db.Migrator().DropIndex(&Log{}, index))
+	}
+	logs := []Log{{Id: 1, Type: LogTypeError, CreatedAt: 10}, {Id: 2, Type: LogTypeError, CreatedAt: 10}, {Id: 3, Type: LogTypeConsume, CreatedAt: 10}}
+	require.NoError(t, db.Create(&logs).Error)
+	require.NoError(t, db.Model(&Log{}).Where("id = ?", 1).Update("created_at", nil).Error)
+	require.NoError(t, db.Model(&Log{}).Where("id = ?", 2).Update("created_at", 0).Error)
+	run, err := PrepareErrorLogCleanup(context.Background(), db, 20)
+	require.NoError(t, err)
+	require.Equal(t, "id", run.ScanMode)
+	require.True(t, run.CountExact)
+	require.Equal(t, 1, run.Matched, "NULL is protected, but Unix epoch zero is eligible")
+	batch, err := DeleteDataCleanupBatch(context.Background(), db, run, 100)
+	require.NoError(t, err)
+	require.True(t, batch.Done)
+	require.EqualValues(t, 1, batch.Deleted)
+	var ids []int
+	require.NoError(t, db.Model(&Log{}).Order("id").Pluck("id", &ids).Error)
+	require.Equal(t, []int{1, 3}, ids)
+}
+
+func TestErrorLogCleanupBoundedIDQueryPlans(t *testing.T) {
+	db := cleanupTestDB(t)
+	logs := make([]Log, 12000)
+	for i := range logs {
+		logs[i] = Log{Id: i + 1, CreatedAt: int64(i/100 + 1), Type: LogTypeError}
+	}
+	require.NoError(t, db.CreateInBatches(logs, 100).Error)
+	prefix := "EXPLAIN "
+	if db.Dialector.Name() == "sqlite" {
+		prefix = "EXPLAIN QUERY PLAN "
+	} else if db.Dialector.Name() == "mysql" {
+		// Recent MySQL versions default to TREE, whose DELETE output can be
+		// an iterator-executor placeholder instead of an inspectable plan.
+		prefix = "EXPLAIN FORMAT=TRADITIONAL "
+	}
+	var queries []struct {
+		sql  string
+		args []any
+	}
+	capture := func(tx *gorm.DB) {
+		queries = append(queries, struct {
+			sql  string
+			args []any
+		}{tx.Statement.SQL.String(), append([]any(nil), tx.Statement.Vars...)})
+	}
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("test:cleanup_plan_query", capture))
+	require.NoError(t, db.Callback().Delete().After("gorm:delete").Register("test:cleanup_plan_delete", capture))
+	run := DataCleanupRun{Kind: CleanupErrorLogs, Before: 1000, MaxID: 8000, CursorID: 6000, ErrorLogCleanupPlan: ErrorLogCleanupPlan{ScanMode: "id"}}
+	rollback := errors.New("rollback cleanup plan sample")
+	err := db.Transaction(func(tx *gorm.DB) error {
+		cursor, err := SeekErrorLogCleanupCursor(context.Background(), tx, &run)
+		if err != nil {
+			return err
+		}
+		require.Equal(t, run.CursorID, cursor)
+		batch, err := DeleteDataCleanupBatch(context.Background(), tx, &run, 100)
+		if err != nil {
+			return err
+		}
+		require.EqualValues(t, 100, batch.Deleted)
+		return rollback
+	})
+	require.ErrorIs(t, err, rollback)
+	require.NoError(t, db.Callback().Query().Remove("test:cleanup_plan_query"))
+	require.NoError(t, db.Callback().Delete().Remove("test:cleanup_plan_delete"))
+	require.Len(t, queries, 3, "inspect the seek, bounded scan and DELETE actually issued by the cleanup model")
+	for _, query := range queries {
+		var plan []map[string]any
+		require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+			if err := configureCleanupIndexScan(tx); err != nil {
+				return err
+			}
+			return tx.Raw(prefix+query.sql, query.args...).Scan(&plan).Error
+		}))
+		text := strings.ToLower(fmt.Sprint(plan))
+		t.Logf("bounded cleanup plan: %s", text)
+		if db.Dialector.Name() == "mysql" {
+			require.NotEmpty(t, plan)
+			for _, row := range plan {
+				require.Equal(t, "PRIMARY", fmt.Sprintf("%s", row["key"]))
+				require.Equal(t, "range", fmt.Sprintf("%s", row["type"]))
+			}
+		}
+		require.NotContains(t, text, "sort")
+		require.NotContains(t, text, "bitmap")
+		require.NotContains(t, text, "seq scan")
+		require.True(t, strings.Contains(text, "primary") || strings.Contains(text, "pkey"), "must use the existing primary key: %s", text)
+	}
+}
+
+// These wrappers execute real SQL and simulate only the lost commit acknowledgement.
+type cleanupUnconfirmedCommitPool struct{ *sql.DB }
+
+func (pool cleanupUnconfirmedCommitPool) BeginTx(ctx context.Context, opts *sql.TxOptions) (gorm.ConnPool, error) {
+	tx, err := pool.DB.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &cleanupUnconfirmedCommitTx{tx}, nil
+}
+
+type cleanupUnconfirmedCommitTx struct{ *sql.Tx }
+
+func (tx cleanupUnconfirmedCommitTx) Commit() error {
+	if err := tx.Tx.Commit(); err != nil {
+		return err
+	}
+	return context.DeadlineExceeded
+}
+
+func TestErrorLogCleanupUnconfirmedCommit(t *testing.T) {
+	db := cleanupTestDB(t)
+	require.NoError(t, db.Create(&Log{Id: 1, Type: LogTypeError, CreatedAt: 10}).Error)
+	pool, err := db.DB()
+	require.NoError(t, err)
+	unconfirmed := db.Session(&gorm.Session{NewDB: true}).WithContext(context.Background())
+	unconfirmed.ConnPool = cleanupUnconfirmedCommitPool{pool}
+	unconfirmed.Statement.ConnPool = unconfirmed.ConnPool
+	run := DataCleanupRun{Kind: CleanupErrorLogs, Before: 20, MaxID: 1, ErrorLogCleanupPlan: ErrorLogCleanupPlan{ScanMode: "id", ScanEndID: 1}}
+	original := run
+	batch, err := DeleteDataCleanupBatch(context.Background(), unconfirmed, &run, 100)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorContains(t, err, "commit")
+	require.Equal(t, original, run)
+	require.Zero(t, batch.Deleted)
+	var count int64
+	require.NoError(t, db.Model(&Log{}).Count(&count).Error)
+	require.Zero(t, count, "the server committed despite the lost acknowledgement")
+	batch, err = DeleteDataCleanupBatch(context.Background(), db, &run, 100)
+	require.NoError(t, err)
+	require.True(t, batch.Done)
+	require.Zero(t, run.Deleted, "confirmed deletions must remain a lower bound")
+}
+
+func TestErrorLogCleanupSparsePreviewAndProgress(t *testing.T) {
+	db := cleanupTestDB(t)
+	require.NoError(t, db.Migrator().DropIndex(&Log{}, "idx_cleanup_created_id"))
+	logs := make([]Log, 1003)
+	for i := range logs {
+		logs[i] = Log{Id: i + 1, CreatedAt: 10, Type: LogTypeConsume}
+	}
+	logs[1002].Type = LogTypeError
+	require.NoError(t, db.CreateInBatches(logs, 100).Error)
+	run, err := PrepareErrorLogCleanup(context.Background(), db, 20)
+	require.NoError(t, err)
+	require.Zero(t, run.Matched)
+	require.False(t, run.CountExact, "a bounded preview cannot claim there are no errors")
+	batch, err := DeleteDataCleanupBatch(context.Background(), db, run, 500)
+	require.NoError(t, err)
+	require.Equal(t, 500, batch.Scanned)
+	require.Zero(t, batch.Deleted)
+	require.Equal(t, 500, run.CursorID)
+	batch, err = DeleteDataCleanupBatch(context.Background(), db, run, 500)
+	require.NoError(t, err)
+	require.Equal(t, 500, batch.Scanned)
+	batch, err = DeleteDataCleanupBatch(context.Background(), db, run, 500)
+	require.NoError(t, err)
+	require.Equal(t, 3, batch.Scanned)
+	require.EqualValues(t, 1, batch.Deleted)
+	require.EqualValues(t, 1003, run.Scanned)
+	batch, err = DeleteDataCleanupBatch(context.Background(), db, run, 500)
+	require.NoError(t, err)
+	require.Zero(t, batch.Scanned)
+}
+
+func TestErrorLogCleanupIndexAliasAndLostIndex(t *testing.T) {
+	db := cleanupTestDB(t)
+	require.NoError(t, db.Migrator().DropIndex(&Log{}, "idx_cleanup_created_id"))
+	require.NoError(t, db.Migrator().RenameIndex(&Log{}, "idx_created_at_id", "cleanup_time_alias"))
+	run, err := PrepareErrorLogCleanup(context.Background(), db, 20)
+	require.NoError(t, err)
+	require.Equal(t, "time", run.ScanMode)
+	require.NoError(t, ValidateErrorLogCleanupPlan(context.Background(), db, run))
+	require.NoError(t, db.Migrator().DropIndex(&Log{}, "cleanup_time_alias"))
+	require.ErrorIs(t, ValidateErrorLogCleanupPlan(context.Background(), db, run), ErrCleanupScanIndex)
+}
+
+func TestErrorLogCleanupNoSchemaChange(t *testing.T) {
+	db := cleanupTestDB(t)
+	legacy := DataCleanupRun{ID: "legacy-cleanup", Kind: CleanupErrorLogs, Before: 100, MaxID: 10, CursorAt: 2, CursorID: 4, Deleted: 2, Scanned: 4, Status: "failed"}
+	require.NoError(t, db.Create(&legacy).Error)
+	for _, column := range []string{"scan_mode", "scan_end_at", "scan_end_id"} {
+		require.False(t, db.Migrator().HasColumn(&DataCleanupRun{}, column), "scan state must stay in task JSON")
+	}
+	recorder := &cleanupDDLRecorder{Interface: db.Logger}
+	for range 2 {
+		require.NoError(t, db.Session(&gorm.Session{Logger: recorder}).AutoMigrate(&DataCleanupRun{}, &Log{}, &SystemTask{}, &SystemTaskLock{}))
+	}
+	require.Empty(t, recorder.statements, "existing cleanup tables must need no DDL")
+	var upgraded DataCleanupRun
+	require.NoError(t, db.First(&upgraded, "id = ?", legacy.ID).Error)
+	require.Empty(t, upgraded.ScanMode)
+	require.Zero(t, upgraded.ScanEndAt)
+	require.Zero(t, upgraded.ScanEndID)
+	require.Equal(t, legacy.CursorID, upgraded.CursorID)
+	require.Equal(t, legacy.Deleted, upgraded.Deleted)
+}
+
+func TestErrorLogCleanupInvisibleMySQLIndex(t *testing.T) {
+	db := cleanupTestDB(t)
+	if db.Dialector.Name() != "mysql" {
+		t.Skip("MySQL invisible-index behavior")
+	}
+	var version string
+	require.NoError(t, db.Raw("SELECT VERSION()").Scan(&version).Error)
+	if !strings.HasPrefix(version, "8.") {
+		t.Skip("invisible indexes require MySQL 8")
+	}
+	require.NoError(t, db.Migrator().DropIndex(&Log{}, "idx_cleanup_created_id"))
+	stmt := &gorm.Statement{DB: db}
+	require.NoError(t, stmt.Parse(&Log{}))
+	require.NoError(t, db.Exec("ALTER TABLE "+stmt.Quote(stmt.Table)+" ALTER INDEX idx_created_at_id INVISIBLE").Error)
+	run, err := PrepareErrorLogCleanup(context.Background(), db, 100)
+	require.NoError(t, err)
+	require.Equal(t, "id", run.ScanMode)
+}
+
+func TestErrorLogCleanupPartialIndexAndCancellation(t *testing.T) {
+	db := cleanupTestDB(t)
+	if db.Dialector.Name() == "mysql" {
+		t.Skip("MySQL does not support partial indexes")
+	}
+	require.NoError(t, db.Migrator().DropIndex(&Log{}, "idx_cleanup_created_id"))
+	require.NoError(t, db.Migrator().DropIndex(&Log{}, "idx_created_at_id"))
+	require.NoError(t, db.Exec("CREATE INDEX cleanup_partial ON logs (created_at,id) WHERE type=2").Error)
+	run, err := PrepareErrorLogCleanup(context.Background(), db, 100)
+	require.NoError(t, err)
+	require.Equal(t, "id", run.ScanMode, "a partial index must not hide eligible errors")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = PrepareErrorLogCleanup(ctx, db, 100)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestErrorLogCleanupFailureAndRemovedSnapshotEnd(t *testing.T) {
+	db := cleanupTestDB(t)
+	require.NoError(t, db.Migrator().DropIndex(&Log{}, "idx_cleanup_created_id"))
+	logs := []Log{{Id: 1, CreatedAt: 10, Type: LogTypeError}, {Id: 2, CreatedAt: 11, Type: LogTypeError}}
+	require.NoError(t, db.Create(&logs).Error)
+	run, err := PrepareErrorLogCleanup(context.Background(), db, 100)
+	require.NoError(t, err)
+	original := *run
+	failure := errors.New("test delete failure")
+	require.NoError(t, db.Callback().Delete().Before("gorm:delete").Register("cleanup_test_failure", func(tx *gorm.DB) { tx.AddError(failure) }))
+	_, err = DeleteDataCleanupBatch(context.Background(), db, run, 1)
+	require.ErrorIs(t, err, failure)
+	require.Equal(t, original, *run, "rollback must not advance progress")
+	require.NoError(t, db.Callback().Delete().Remove("cleanup_test_failure"))
+	require.NoError(t, db.Where("id = ?", 2).Delete(&Log{}).Error)
+	require.NoError(t, db.Create(&Log{Id: 3, CreatedAt: 11, Type: LogTypeError}).Error)
+	batch, err := DeleteDataCleanupBatch(context.Background(), db, run, 500)
+	require.NoError(t, err)
+	require.Equal(t, 1, batch.Scanned)
+	require.EqualValues(t, 1, batch.Deleted)
+	batch, err = DeleteDataCleanupBatch(context.Background(), db, run, 500)
+	require.NoError(t, err)
+	require.Zero(t, batch.Scanned, "a deleted upper-bound row must not prevent exhaustion")
+	var remaining Log
+	require.NoError(t, db.First(&remaining, 3).Error)
+}
+
+func TestErrorLogCleanupExistingTimeIndexPlan(t *testing.T) {
+	db := cleanupTestDB(t)
+	pool, err := db.DB()
+	require.NoError(t, err)
+	pool.SetMaxOpenConns(1)
+	var originalPlannerSettings string
+	if db.Dialector.Name() == "postgres" {
+		require.NoError(t, db.Raw("SELECT current_setting('enable_seqscan') || ',' || current_setting('enable_bitmapscan') || ',' || current_setting('enable_sort')").Scan(&originalPlannerSettings).Error)
+	}
+	require.NoError(t, db.Migrator().DropIndex(&Log{}, "idx_cleanup_created_id"))
+	logs := make([]Log, 12000)
+	for i := range logs {
+		logs[i] = Log{Id: i + 1, CreatedAt: int64(i/100 + 1), Type: LogTypeConsume}
+	}
+	require.NoError(t, db.CreateInBatches(logs, 100).Error)
+	stmt := db.Model(&Log{}).Select("id,created_at").Where("created_at >= ? AND created_at < ? AND created_at > ? AND created_at <= ?", 0, 1000, 50, 120).Order("created_at,id").Limit(100).Session(&gorm.Session{DryRun: true}).Find(&[]Log{}).Statement
+	prefix := "EXPLAIN "
+	if db.Dialector.Name() == "sqlite" {
+		prefix = "EXPLAIN QUERY PLAN "
+	}
+	var plan []map[string]any
+	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+		if err := configureCleanupIndexScan(tx); err != nil {
+			return err
+		}
+		return tx.Raw(prefix+stmt.SQL.String(), stmt.Vars...).Scan(&plan).Error
+	}))
+	t.Logf("bounded time-candidate plan: %v", plan)
+	planText := strings.ToLower(fmt.Sprint(plan))
+	require.NotContains(t, planText, "sort", "bounded candidates must not be obtained by sorting a large range")
+	require.NotContains(t, planText, "bitmap")
+	require.Contains(t, planText, "idx_created_at_id")
+	run, err := PrepareErrorLogCleanup(context.Background(), db, 1000)
+	require.NoError(t, err)
+	run.CursorAt, run.CursorID = 50, 5000
+	batch, err := DeleteDataCleanupBatch(context.Background(), db, run, 100)
+	require.NoError(t, err)
+	require.Equal(t, 100, batch.Scanned)
+	require.Equal(t, 5100, run.CursorID)
+	require.Zero(t, batch.Deleted)
+	if db.Dialector.Name() == "postgres" {
+		var restored string
+		require.NoError(t, db.Raw("SELECT current_setting('enable_seqscan') || ',' || current_setting('enable_bitmapscan') || ',' || current_setting('enable_sort')").Scan(&restored).Error)
+		require.Equal(t, originalPlannerSettings, restored, "maintenance planner settings must not escape the transaction")
+	}
 }
 
 func TestFinancialCleanupSurvivesAllReplayWriters(t *testing.T) {

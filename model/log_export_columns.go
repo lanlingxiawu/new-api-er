@@ -58,6 +58,7 @@ func LogExportTypeI18nKey(logType int) string {
 // rowCtx 承载单行导出所需的派生数据。other 每行只解析一次，所有依赖列共享结果，
 // 避免按列重复 Unmarshal。
 type rowCtx struct {
+	rawLogJSON      string
 	repricer        *logExportRepricer
 	repriceOwner    *Log
 	repriced        bool
@@ -705,6 +706,9 @@ func buildLogExportColumns() []LogExportColumn {
 		{Key: "other_raw", Label: "Raw Other JSON", Group: LogExportGroupAdmin,
 			AdminOnly: true, RootOnly: true, NeedOther: true,
 			Extract: func(l *Log, _ *rowCtx) string { return l.Other }},
+		{Key: LogExportRawColumn, Label: "Raw Log JSON", Group: LogExportGroupDiagnostic,
+			AdminOnly: true, RootOnly: true, NeedOther: true,
+			Extract: func(_ *Log, ctx *rowCtx) string { return ctx.rawLogJSON }},
 
 		// ── audit ────────────────────────────────────────────
 		adminInfoCol("admin_username", "admin_username", "Operator", LogExportGroupAudit),
@@ -746,6 +750,7 @@ const (
 	LogExportTemplatePerformance = "builtin:performance"
 	LogExportTemplateAudit       = "builtin:audit"
 	LogExportTemplateFull        = "builtin:full"
+	LogExportTemplateFullRaw     = "builtin:full_raw"
 	// LogExportTemplateCustomerInvoice 唯一一个可以直接发给客户的模板。
 	LogExportTemplateCustomerInvoice = "builtin:customer_invoice"
 	LogExportTemplateOperations      = "builtin:operations"
@@ -864,6 +869,9 @@ var anomalyColumns = []string{
 func BuiltinLogExportTemplates() []BuiltinLogExportTemplate {
 	full := make([]string, 0, len(logExportColumns))
 	for i := range logExportColumns {
+		if logExportColumns[i].Key == LogExportRawColumn {
+			continue
+		}
 		full = append(full, logExportColumns[i].Key)
 	}
 	return []BuiltinLogExportTemplate{
@@ -884,6 +892,8 @@ func BuiltinLogExportTemplates() []BuiltinLogExportTemplate {
 		{ID: LogExportTemplateAudit, Name: "Top-up & Legacy Audit", Columns: auditColumns,
 			Purpose: LogExportPurposeAudit, Audience: LogExportAudienceInternal.String()},
 		{ID: LogExportTemplateFull, Name: "All Columns", Columns: full,
+			Purpose: LogExportPurposeDiagnostic, Audience: LogExportAudienceInternal.String()},
+		{ID: LogExportTemplateFullRaw, Name: "Complete Raw Fields", Columns: append(append([]string(nil), full...), LogExportRawColumn),
 			Purpose: LogExportPurposeDiagnostic, Audience: LogExportAudienceInternal.String()},
 	}
 }
@@ -947,6 +957,9 @@ func ResolveLogExportColumns(keys []string, isAdmin bool) (*LogExportColumnSet, 
 func ResolveLogExportColumnsForRole(keys []string, viewerRole int) (*LogExportColumnSet, error) {
 	isAdmin := viewerRole >= common.RoleAdminUser
 	isRoot := viewerRole >= common.RoleRootUser
+	if LogExportHasRawColumn(keys) && !isRoot {
+		return nil, ErrLogExportRawForbidden
+	}
 	if len(keys) == 0 {
 		keys = DefaultLogExportColumns()
 	}
@@ -1002,6 +1015,9 @@ func (s *LogExportColumnSet) HeaderI18nKeys() []string {
 // SelectFields 返回本次导出实际需要的数据库列，避免 SELECT *。
 // 不含 other 依赖列时不取 other——该列通常是行宽的大头。
 func (s *LogExportColumnSet) SelectFields() []string {
+	if LogExportHasRawColumn(s.Keys) {
+		return logExportRawFields()
+	}
 	// id 与 created_at 是 keyset 游标必需，始终选取。
 	fields := map[string]bool{"id": true, "created_at": true}
 	for _, col := range s.Columns {

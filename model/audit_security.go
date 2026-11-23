@@ -213,6 +213,12 @@ func OpenAuditSecurityDB(ctx context.Context, logStore bool) (*gorm.DB, error) {
 	return openAuditSecurityDB(ctx, logStore, 5*time.Second)
 }
 
+// OpenAuditLogCleanupDB reuses the isolated log-store pool. Callers bound every
+// query by the cleanup budget and close the pool when the task ends.
+func OpenAuditLogCleanupDB(ctx context.Context) (*gorm.DB, error) {
+	return openAuditSecurityDB(ctx, true, 0)
+}
+
 func openAuditSecurityDB(ctx context.Context, logStore bool, readTimeout time.Duration) (*gorm.DB, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()

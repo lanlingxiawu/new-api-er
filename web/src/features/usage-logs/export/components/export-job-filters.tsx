@@ -29,6 +29,8 @@ export function ExportJobFilters(props: {
   onApply: (filters: ExportJobListFilters) => void
   self?: boolean
   employee?: boolean
+  /** Quota jobs have no usage source, mode or customer. Hide those controls. */
+  quotaTasks?: boolean
   jobs?: Pick<ExportJob, 'job_id' | 'username' | 'created_at'>[]
   hasMoreJobs?: boolean
   loadingMoreJobs?: boolean
@@ -55,28 +57,32 @@ export function ExportJobFilters(props: {
         { value: 'mine', label: t('My exports') },
       ],
     },
-    {
-      key: 'source' as const,
-      label: t('Export source'),
-      items: [
-        { value: '', label: t('All') },
-        ...(!props.employee
-          ? [{ value: 'admin', label: t('Administrator export') }]
-          : []),
-        { value: 'employee', label: t('Employee export') },
-        { value: 'self', label: t('Self-service export') },
-      ],
-    },
-    {
-      key: 'mode' as const,
-      label: t('Export mode'),
-      items: [
-        { value: '', label: t('All') },
-        { value: 'detail', label: t('One row per log') },
-        { value: 'summary', label: t('Aggregated summary') },
-        { value: 'both', label: t('Detail + summary') },
-      ],
-    },
+    ...(props.quotaTasks
+      ? []
+      : [
+          {
+            key: 'source' as const,
+            label: t('Export source'),
+            items: [
+              { value: '', label: t('All') },
+              ...(!props.employee
+                ? [{ value: 'admin', label: t('Administrator export') }]
+                : []),
+              { value: 'employee', label: t('Employee export') },
+              { value: 'self', label: t('Self-service export') },
+            ],
+          },
+          {
+            key: 'mode' as const,
+            label: t('Export mode'),
+            items: [
+              { value: '', label: t('All') },
+              { value: 'detail', label: t('One row per log') },
+              { value: 'summary', label: t('Aggregated summary') },
+              { value: 'both', label: t('Detail + summary') },
+            ],
+          },
+        ]),
   ]
   return (
     <form
@@ -125,21 +131,25 @@ export function ExportJobFilters(props: {
                 />
               </Field>
             )}
-            <Field>
-              <FieldLabel>{t('Customer')}</FieldLabel>
-              <ExportFilterSelect
-                field='customer'
-                label={t('Customer')}
-                base={props.employee ? '/api/user/employee/export' : undefined}
-                value={draft.customer_id ? String(draft.customer_id) : ''}
-                onChange={(value) =>
-                  setDraft({
-                    ...draft,
-                    customer_id: value ? Number(value) : undefined,
-                  })
-                }
-              />
-            </Field>
+            {!props.quotaTasks && (
+              <Field>
+                <FieldLabel>{t('Customer')}</FieldLabel>
+                <ExportFilterSelect
+                  field='customer'
+                  label={t('Customer')}
+                  base={
+                    props.employee ? '/api/user/employee/export' : undefined
+                  }
+                  value={draft.customer_id ? String(draft.customer_id) : ''}
+                  onChange={(value) =>
+                    setDraft({
+                      ...draft,
+                      customer_id: value ? Number(value) : undefined,
+                    })
+                  }
+                />
+              </Field>
+            )}
           </>
         )}
         <Field>
@@ -303,25 +313,11 @@ export function ExportJobFilters(props: {
               />
             </Field>
           </FieldGroup>
-          {!props.self && (
-            <p className='text-muted-foreground mt-2 text-xs'>
-              {t(
-                'Find exports created by this customer or by an employee for this customer.'
-              )}
-            </p>
-          )}
         </CollapsibleContent>
       </Collapsible>
       {error && (
         <p role='alert' className='text-destructive text-sm'>
           {t('Start time must not be after end time.')}
-        </p>
-      )}
-      {Object.values(props.value).some(
-        (value) => value !== undefined && value !== ''
-      ) && (
-        <p className='text-muted-foreground text-xs'>
-          {t('Filters applied. Reset to see all visible exports.')}
         </p>
       )}
     </form>

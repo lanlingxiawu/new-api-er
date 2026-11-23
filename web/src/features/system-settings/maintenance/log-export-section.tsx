@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { Link } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -40,7 +41,9 @@ import {
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
+import { useAuthStore } from '@/stores/auth-store'
 
+import { canViewSettingsSection } from '../access'
 import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
@@ -63,10 +66,10 @@ const schema = z.object({
     employee_customer_manage_enabled: z.boolean(),
     employee_max_customers_per_job: z.number().int().min(1).max(1000),
     user_cooldown_sec: z.number().int().min(0).max(86400),
+    admin_cooldown_sec: z.number().int().min(-1).max(86400),
     // 0 是有意义的取值：停止接受新任务，但不打断运行中的任务。
     max_concurrent_jobs: z.number().int().min(0).max(16),
     max_active_jobs_per_user: z.number().int().min(1).max(20),
-    user_max_range_sec: z.number().int().min(1).max(31622400),
     admin_max_range_sec: z.number().int().min(1).max(31622400),
     timeout_sec: z.number().int().min(1).max(86400),
     job_ttl_hours: z.number().int().min(1).max(720),
@@ -110,10 +113,10 @@ const FIELD_KEYS = [
   'employee_customer_manage_enabled',
   'employee_max_customers_per_job',
   'user_cooldown_sec',
+  'admin_cooldown_sec',
   'max_concurrent_jobs',
   'max_active_jobs_per_user',
   'admin_max_range_sec',
-  'user_max_range_sec',
   'timeout_sec',
   'job_ttl_hours',
   'max_templates_per_user',
@@ -174,22 +177,34 @@ type NumberField = {
 
 const quotaFields: NumberField[] = [
   {
+    name: 'user_cooldown_sec',
+    label: 'User and Employee Export Cooldown (s)',
+    description:
+      'Minimum seconds between exports by the same user or employee. Rejected requests do not start the cooldown.',
+    min: 1,
+    max: 86400,
+    // GetUserCooldownSec treats 0 as unset and applies DefaultLogExportUserCooldownSec.
+    presets: [{ value: 0, label: 'Default 300 seconds' }],
+  },
+  {
+    name: 'admin_cooldown_sec',
+    label: 'Administrator Export Cooldown (s)',
+    description:
+      'Applies to administrators and super administrators, including their own log exports. Existing cooldowns keep their original expiry unless cooldown is disabled.',
+    min: 1,
+    max: 86400,
+    presets: [
+      { value: -1, label: 'Use user and employee cooldown' },
+      { value: 0, label: 'No cooldown' },
+    ],
+  },
+  {
     name: 'employee_max_customers_per_job',
     label: 'Customers per export',
     description:
       'Maximum customers in one employee export, including all-customer exports.',
     min: 1,
     max: 1000,
-  },
-  {
-    name: 'user_cooldown_sec',
-    label: 'Export Cooldown (s)',
-    description:
-      'Minimum seconds between exports from the same account. Rejected requests do not start the cooldown.',
-    min: 1,
-    max: 86400,
-    // GetUserCooldownSec treats 0 as unset and applies DefaultLogExportUserCooldownSec.
-    presets: [{ value: 0, label: 'Default 300 seconds' }],
   },
   {
     name: 'max_concurrent_jobs',
@@ -212,13 +227,6 @@ const quotaFields: NumberField[] = [
     label: 'Max Export Time Range (s)',
     description:
       'Longest time span a single export may cover. Also drives the range hint in the export dialog.',
-    min: 1,
-    max: 31622400,
-  },
-  {
-    name: 'user_max_range_sec',
-    label: 'User Export Time Range (s)',
-    description: 'Maximum time range for users exporting their own logs.',
     min: 1,
     max: 31622400,
   },
@@ -314,6 +322,14 @@ const throttleFields: NumberField[] = [
 
 const outputFields: NumberField[] = [
   {
+    name: 'xlsx_max_rows',
+    label: 'XLSX Row Limit',
+    description:
+      'Maximum rows in one XLSX export. Use CSV.GZ for larger exports.',
+    min: 1,
+    max: 1000000,
+  },
+  {
     name: 'gzip_level',
     label: 'Gzip Level (1-9)',
     description:
@@ -375,6 +391,7 @@ const downloadFields: NumberField[] = [
 
 export function LogExportSection({ defaultValues }: LogExportSectionProps) {
   const { t } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
   const updateOption = useUpdateOption()
   const requestSaveConfirmation = useSettingsSaveConfirmation()
 
@@ -456,7 +473,10 @@ export function LogExportSection({ defaultValues }: LogExportSectionProps) {
     ))
 
   return (
-    <SettingsSection title={t('Usage Log Export Settings')}>
+    <SettingsSection title={t('Log Export Settings')}>
+      <p className='text-muted-foreground text-sm'>
+        {t('These settings apply to both usage and audit log exports.')}
+      </p>
       <Form {...form}>
         <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
           <SettingsPageFormActions
@@ -540,6 +560,20 @@ export function LogExportSection({ defaultValues }: LogExportSectionProps) {
             )}
           />
           {renderNumberFields(quotaFields)}
+          <p className='text-muted-foreground text-sm'>
+            {t(
+              'Configure the user export time range in Operations → Log Maintenance → Longest log time range (days).'
+            )}
+            {user && canViewSettingsSection(user, 'operations', 'logs') && (
+              <Link
+                className='text-primary ml-1 underline underline-offset-4'
+                to='/system-settings/operations/$section'
+                params={{ section: 'logs' }}
+              >
+                {t('Log Maintenance')}
+              </Link>
+            )}
+          </p>
 
           <Separator />
 
@@ -557,7 +591,7 @@ export function LogExportSection({ defaultValues }: LogExportSectionProps) {
                   <FormLabel>{t('Off-peak Only')}</FormLabel>
                   <FormDescription>
                     {t(
-                      'Restrict exports to the window below. Jobs created outside it wait instead of failing, and the wait does not consume the job timeout.'
+                      'Restrict exports to the window below. Waiting for this window counts toward the job timeout.'
                     )}
                   </FormDescription>
                 </div>

@@ -43,6 +43,20 @@ it('submits combined filters only on search and clears all conditions on reset',
   )
 })
 
+it('hides usage source, mode and customer on quota tasks', async () => {
+  const user = userEvent.setup()
+  render(<ExportJobFilters value={{}} onApply={vi.fn()} quotaTasks />)
+  expect(screen.queryByText('Customer')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'More filters' }))
+  expect(
+    screen.queryByRole('combobox', { name: 'Export source' })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('combobox', { name: 'Export mode' })
+  ).not.toBeInTheDocument()
+  expect(screen.getByRole('combobox', { name: 'Export scope' })).toBeVisible()
+})
+
 it('submits text filters on Enter and hides cross-user filters in the self view', async () => {
   const user = userEvent.setup()
   const onApply = vi.fn()

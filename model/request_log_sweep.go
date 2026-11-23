@@ -68,7 +68,7 @@ func runRequestLogSweep() {
 // SweepRequestLogFiles 执行一轮清理并返回统计。导出供测试使用。
 func SweepRequestLogFiles() requestLogSweepStats {
 	var stats requestLogSweepStats
-	if !RequestLogStoreReady() || requestLogRecoveryIncomplete {
+	if !RequestLogStoreReady() || requestLogRecoveryIncomplete.Load() {
 		return stats
 	}
 

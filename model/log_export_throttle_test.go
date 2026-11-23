@@ -40,6 +40,10 @@ func fakeGate(cpu float64, cpuOK bool, now time.Time) (*exportGate, *time.Durati
 	return g, &slept
 }
 
+func observeFullExportBatch(g *exportGate, cost time.Duration) {
+	g.Observe(exportQuerySample{cost: cost, windowSec: 3600, batchSize: 3000, rowsRead: 3000})
+}
+
 func TestExportGate_BelowSoftLimitSleepsBaseOnly(t *testing.T) {
 	withLogExportSetting(t, func(s *operation_setting.LogExportSetting) {
 		s.BatchSleepMs = 100
@@ -168,18 +172,18 @@ func TestExportGate_ObserveAdjustsPenalty(t *testing.T) {
 	})
 	g, _ := fakeGate(10, true, time.Now())
 
-	g.Observe(20 * time.Millisecond) // 建立基线
+	observeFullExportBatch(g, 20*time.Millisecond) // 建立基线
 	assert.Zero(t, g.penalty)
 
-	g.Observe(100 * time.Millisecond) // 慢 5 倍 → 加压
+	observeFullExportBatch(g, 100*time.Millisecond) // 慢 5 倍 → 加压
 	assert.Equal(t, 100*time.Millisecond, g.penalty)
 
-	g.Observe(100 * time.Millisecond) // 持续慢 → 继续加压
+	observeFullExportBatch(g, 100*time.Millisecond) // 持续慢 → 继续加压
 	assert.Equal(t, 200*time.Millisecond, g.penalty)
 
-	g.Observe(21 * time.Millisecond) // 恢复 → 衰减
+	observeFullExportBatch(g, 21*time.Millisecond) // 恢复 → 衰减
 	assert.Equal(t, 100*time.Millisecond, g.penalty)
-	g.Observe(21 * time.Millisecond)
+	observeFullExportBatch(g, 21*time.Millisecond)
 	assert.Equal(t, 50*time.Millisecond, g.penalty)
 }
 
@@ -188,9 +192,9 @@ func TestExportGate_ObservePenaltyIsCapped(t *testing.T) {
 		s.BatchSleepMs = 100
 	})
 	g, _ := fakeGate(10, true, time.Now())
-	g.Observe(10 * time.Millisecond)
+	observeFullExportBatch(g, 10*time.Millisecond)
 	for i := 0; i < 20; i++ {
-		g.Observe(time.Second)
+		observeFullExportBatch(g, time.Second)
 	}
 	assert.Equal(t, 800*time.Millisecond, g.penalty, "penalty must be capped at 8x base sleep")
 }
@@ -341,6 +345,7 @@ func TestExportGate_PressureSignalsNotScaledByRows(t *testing.T) {
 	})
 	// CPU 处于软硬限中点 → 额外休眠 = base*0.5*4 = 200ms，与行数无关。
 	g, slept := fakeGate(80, true, time.Now())
+	g.Observe(exportQuerySample{cost: time.Second, windowSec: 3600, batchSize: 3000, rowsRead: 1})
 	g.penalty = 300 * time.Millisecond
 	g.Before(context.Background())
 	// 只读到 1 行：base 部分几乎为 0，但 200ms 软限 + 300ms penalty 必须全额生效。
@@ -369,4 +374,115 @@ func TestExportGate_BeforeStillGatesCPUHardLimit(t *testing.T) {
 	}
 	g.Before(context.Background())
 	assert.Equal(t, 2*50*time.Millisecond, *slept, "硬限之上必须在开工前就暂停")
+}
+
+func TestExportGate_QueryFeedbackCannotDwarfFastReads(t *testing.T) {
+	withLogExportSetting(t, func(s *operation_setting.LogExportSetting) {
+		s.BatchSleepMs = 100
+		s.MaxRowsPerSec = 5000
+		s.CPUSoftLimit, s.CPUHardLimit = 70, 90
+	})
+	g, slept := fakeGate(80, true, time.Now())
+	observeFullExportBatch(g, 10*time.Millisecond)
+	for range 4 {
+		observeFullExportBatch(g, 40*time.Millisecond)
+	}
+	g.Before(context.Background())
+	g.Charge(context.Background(), 3000, 3000)
+	// The 600 ms row-rate budget and 200 ms CPU wait stay intact. Query
+	// feedback may add at most the 40 ms read, even after repeated slowdowns.
+	assert.Equal(t, 840*time.Millisecond, *slept)
+	assert.Equal(t, 800*time.Millisecond, g.penalty, "retain pressure history for subsequent expensive reads")
+
+	before := *slept
+	observeFullExportBatch(g, time.Second)
+	g.Before(context.Background())
+	g.Charge(context.Background(), 3000, 3000)
+	assert.Equal(t, 1600*time.Millisecond, *slept-before, "expensive reads must still pay the full pressure penalty")
+}
+
+func TestExportGate_ComparesEquivalentQueryWork(t *testing.T) {
+	withLogExportSetting(t, func(s *operation_setting.LogExportSetting) {
+		s.BatchSleepMs = 100
+		s.MaxRowsPerSec = 1000000
+	})
+	for _, tc := range []struct {
+		name    string
+		samples []exportQuerySample
+	}{
+		{"window grows and shrinks", []exportQuerySample{
+			{cost: 100 * time.Millisecond, windowSec: 3600, batchSize: 3000, rowsRead: 10},
+			{cost: 300 * time.Millisecond, windowSec: 7200, batchSize: 3000, rowsRead: 30},
+			{cost: 900 * time.Millisecond, windowSec: 14400, batchSize: 3000, rowsRead: 90},
+			{cost: 110 * time.Millisecond, windowSec: 3600, batchSize: 3000, rowsRead: 10},
+		}},
+		{"batch size changes", []exportQuerySample{
+			{cost: 20 * time.Millisecond, windowSec: 3600, batchSize: 100, rowsRead: 100},
+			{cost: 100 * time.Millisecond, windowSec: 3600, batchSize: 1000, rowsRead: 1000},
+			{cost: 300 * time.Millisecond, windowSec: 3600, batchSize: 3000, rowsRead: 3000},
+		}},
+		{"empty partial and full batches", []exportQuerySample{
+			{cost: time.Millisecond, windowSec: 3600, batchSize: 3000},
+			{cost: 50 * time.Millisecond, windowSec: 3600, batchSize: 3000, rowsRead: 40},
+			{cost: 500 * time.Millisecond, windowSec: 3600, batchSize: 3000, rowsRead: 3000},
+			{cost: time.Millisecond, windowSec: 3600, batchSize: 3000},
+			{cost: 55 * time.Millisecond, windowSec: 3600, batchSize: 3000, rowsRead: 50},
+			{cost: 510 * time.Millisecond, windowSec: 3600, batchSize: 3000, rowsRead: 3000},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g, _ := fakeGate(0, false, time.Now())
+			for _, sample := range tc.samples {
+				g.Observe(sample)
+				assert.Zero(t, g.penalty, "changing the requested work is not a pressure signal")
+			}
+			// The final profile must still detect a real slowdown of equivalent work.
+			last := tc.samples[len(tc.samples)-1]
+			last.cost *= 3
+			g.Observe(last)
+			assert.Equal(t, 100*time.Millisecond, g.penalty)
+		})
+	}
+}
+
+func TestExportGate_ReadTimeoutAlwaysBacksOffWithoutTrainingBaseline(t *testing.T) {
+	withLogExportSetting(t, func(s *operation_setting.LogExportSetting) { s.BatchSleepMs = 100 })
+	g, slept := fakeGate(0, false, time.Now())
+	for i := range 4 {
+		g.Observe(exportQuerySample{cost: 10 * time.Second, windowSec: 3600 >> i, batchSize: 3000, timedOut: true})
+		g.Charge(context.Background(), 0, 3000)
+	}
+	assert.Equal(t, 1500*time.Millisecond, *slept, "timeouts must back off even before any successful read")
+	assert.Equal(t, 800*time.Millisecond, g.penalty)
+
+	g.Observe(exportQuerySample{cost: 100 * time.Millisecond, windowSec: 450, batchSize: 3000})
+	assert.Equal(t, 800*time.Millisecond, g.penalty, "a new success baseline must not erase timeout pressure")
+	g.Observe(exportQuerySample{cost: 110 * time.Millisecond, windowSec: 450, batchSize: 3000})
+	assert.Equal(t, 400*time.Millisecond, g.penalty)
+	for _, cost := range []time.Duration{0, -time.Second} {
+		g.Observe(exportQuerySample{cost: cost, timedOut: true})
+	}
+	assert.Equal(t, 400*time.Millisecond, g.penalty)
+	assert.Equal(t, 110*time.Millisecond, g.lastQueryCost)
+}
+
+func TestExportGate_ResetQueryBaselinesPreservesResourceAccounting(t *testing.T) {
+	withLogExportSetting(t, func(s *operation_setting.LogExportSetting) {
+		s.BatchSleepMs = 100
+		s.MaxRowsPerSec = 1000000
+		s.CPUSoftLimit, s.CPUHardLimit = 70, 90
+	})
+	g, slept := fakeGate(80, true, time.Now())
+	g.Observe(exportQuerySample{cost: time.Millisecond, windowSec: 3600, batchSize: 3000, rowsRead: 1})
+	g.penalty = 300 * time.Millisecond
+	g.debt = 2 * time.Millisecond
+	g.throttledMs = 7
+	g.Before(context.Background())
+	g.ResetQueryBaselines()
+	g.Observe(exportQuerySample{cost: time.Second, windowSec: 3600, batchSize: 3000, rowsRead: 1})
+	g.Charge(context.Background(), 1, 3000)
+	want := 502*time.Millisecond + 100*time.Millisecond/3000
+	assert.Equal(t, want, *slept)
+	assert.Equal(t, int64(7)+want.Milliseconds(), g.ThrottledMs())
+	assert.Equal(t, 300*time.Millisecond, g.penalty, "a new customer establishes its own baseline")
 }

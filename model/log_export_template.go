@@ -65,7 +65,7 @@ func (t *LogExportTemplate) dehydrate() error {
 		return ErrLogExportTemplateNameLong
 	}
 	// 列集合按注册表校验：未知 key 直接报错，避免坏模板被静默存下来。
-	if _, err := ResolveLogExportColumns(t.ColumnKeys, true); err != nil {
+	if _, err := ResolveLogExportColumnsForRole(t.ColumnKeys, common.RoleRootUser); err != nil {
 		return err
 	}
 	if !ValidLogExportFormat(t.Format) {

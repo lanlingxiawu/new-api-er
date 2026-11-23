@@ -23,10 +23,11 @@ import (
 type exportGate struct {
 	// throttledMs 累计因闸门让出的毫秒数，回写进任务状态供运维观察。
 	throttledMs int64
-	// penalty 由实测查询耗时反馈得出的额外休眠，查询变慢说明 DB 有压力。
+	// penalty 保留同类查询变慢或超时的压力反馈，实际休眠另受本批查询耗时限制。
 	penalty time.Duration
-	// baselineCost 首批查询耗时，作为后续对比基线。
-	baselineCost time.Duration
+	// Separate empty, partial and full reads; different work must not train the same baseline.
+	queryBaselines [3]exportQueryBaseline
+	lastQueryCost  time.Duration
 	// softExtra Before 在 CPU 软限区间内算出的额外休眠，留给 Charge 一并结算。
 	softExtra time.Duration
 	// debt 尚未兑现的休眠。读到的行数很少时单批应付的休眠可能不足 1 毫秒，
@@ -38,6 +39,20 @@ type exportGate struct {
 	nowFn   func() time.Time
 	// cpuFn 返回当前 CPU 使用率与该读数是否可用。
 	cpuFn func() (float64, bool)
+}
+
+type exportQuerySample struct {
+	cost      time.Duration
+	windowSec int64
+	batchSize int
+	rowsRead  int
+	timedOut  bool
+}
+
+type exportQueryBaseline struct {
+	cost      time.Duration
+	windowSec int64
+	batchSize int
 }
 
 const (
@@ -121,9 +136,9 @@ func (g *exportGate) Charge(ctx context.Context, rowsRead, batchSize int) {
 		owed = max(owed, time.Duration(float64(rowsRead)/float64(maxRows)*float64(time.Second)))
 	}
 
-	// 软限额外休眠与 penalty 是「CPU 吃紧 / 数据库变慢」的压力信号，与这一批读到
-	// 多少行无关，刻意不随产出缩放——该退让的时候读得少也要退让。
-	owed += g.softExtra + g.penalty
+	// CPU pressure is independent of output and is paid in full. Query feedback
+	// must not dwarf a fast read; retain its history for later expensive reads.
+	owed += g.softExtra + min(g.penalty, g.lastQueryCost)
 	g.softExtra = 0
 
 	g.debt += max(owed, exportGateMinCharge)
@@ -174,38 +189,52 @@ func (g *exportGate) waitCPU(ctx context.Context) time.Duration {
 	return 0
 }
 
-// Observe 用实测查询耗时反馈调节：查询显著变慢说明 DB 有压力，加大 penalty；
-// 恢复正常则逐步衰减。
-func (g *exportGate) Observe(cost time.Duration) {
-	if cost <= 0 {
+// ResetQueryBaselines starts a new customer/source scope without forgiving any
+// accumulated resource debt or pressure from previous queries.
+func (g *exportGate) ResetQueryBaselines() {
+	g.queryBaselines = [3]exportQueryBaseline{}
+}
+
+// Observe compares successful reads of equivalent work. Timeouts always back
+// off, even before a baseline exists, and never train a successful-read baseline.
+func (g *exportGate) Observe(sample exportQuerySample) {
+	if sample.cost <= 0 {
 		return
 	}
-	if g.baselineCost == 0 {
-		g.baselineCost = cost
+	g.lastQueryCost = sample.cost
+	slow := sample.timedOut
+	if !sample.timedOut {
+		class := 0
+		if sample.rowsRead > 0 {
+			class = 1
+			if sample.batchSize > 0 && sample.rowsRead >= sample.batchSize {
+				class = 2
+			}
+		}
+		baseline := &g.queryBaselines[class]
+		if baseline.cost == 0 || baseline.windowSec != sample.windowSec || baseline.batchSize != sample.batchSize {
+			*baseline = exportQueryBaseline{cost: sample.cost, windowSec: sample.windowSec, batchSize: sample.batchSize}
+			return
+		}
+		slow = sample.cost > baseline.cost*2
+		if sample.cost < baseline.cost*6/5 {
+			g.penalty /= 2
+			if g.penalty < time.Millisecond {
+				g.penalty = 0
+			}
+		}
+		baseline.cost = min(baseline.cost, sample.cost)
+	}
+	if !slow {
 		return
 	}
 	base := time.Duration(operation_setting.GetLogExportSetting().GetBatchSleepMs()) * time.Millisecond
-	maxPenalty := base * exportGateMaxPenaltyFactor
-	switch {
-	case cost > g.baselineCost*2:
-		if g.penalty == 0 {
-			g.penalty = base
-		} else {
-			g.penalty *= 2
-		}
-		if g.penalty > maxPenalty {
-			g.penalty = maxPenalty
-		}
-	case cost < g.baselineCost*6/5:
-		g.penalty /= 2
-		if g.penalty < time.Millisecond {
-			g.penalty = 0
-		}
+	if g.penalty == 0 {
+		g.penalty = base
+	} else {
+		g.penalty *= 2
 	}
-	// 基线取观察到的最小耗时，避免第一批恰好偏慢导致后续永远不触发 penalty。
-	if cost < g.baselineCost {
-		g.baselineCost = cost
-	}
+	g.penalty = min(g.penalty, base*exportGateMaxPenaltyFactor)
 }
 
 func (g *exportGate) sleepAndCount(ctx context.Context, d time.Duration) {

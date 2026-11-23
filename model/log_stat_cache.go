@@ -227,6 +227,10 @@ func queryLogHourStatRange(ctx context.Context, from, to int64) (logHourStat, er
 	if err != nil {
 		return out, err
 	}
+	// A completed scan may succeed even when its request was cancelled.
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
 	out = logHourStat{
 		CountAll: row.CountAll,
 		Quota:    row.Quota,

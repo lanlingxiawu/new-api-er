@@ -57,7 +57,7 @@ func InitRequestLogStore() {
 	closeDefaultRequestLogWriter()
 	reqLogMu.Lock()
 	requestLogCommitted = make(map[string]int64)
-	requestLogRecoveryIncomplete = false
+	requestLogRecoveryIncomplete.Store(false)
 	reqLogMu.Unlock()
 
 	requestLogRoot = resolveRequestLogRoot()

@@ -345,3 +345,46 @@ it('shows the seconds of the selected range on the trigger', () => {
     })
   ).toBeVisible()
 })
+
+it('keeps an oversized preset as an editable draft and applies a valid preset', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(2026, 10, 16, 12))
+  const onChange = vi.fn()
+  render(
+    <CompactDateTimeRangePicker maxRangeSec={7 * 86400} onChange={onChange} />
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Date Range' }))
+  await userEvent.click(screen.getByRole('button', { name: '30 Days' }))
+  expect(onChange).not.toHaveBeenCalled()
+  expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled()
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'The time range cannot exceed 7 days'
+  )
+  await userEvent.click(screen.getByRole('button', { name: '7 Days' }))
+  expect(onChange).toHaveBeenCalledWith({
+    start: new Date(2026, 10, 10),
+    end: new Date(2026, 10, 16, 23, 59, 59, 999),
+  })
+})
+
+it.each(['', '2026-11-01T00:00:01'])(
+  'blocks incomplete or reversed export dates (start=%s)',
+  async (start) => {
+    const onChange = vi.fn()
+    render(
+      <CompactDateTimeRangePicker maxRangeSec={86400} onChange={onChange} />
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Date Range' }))
+    fireEvent.change(screen.getByLabelText('Start Time'), {
+      target: { value: start },
+    })
+    fireEvent.change(screen.getByLabelText('End Time'), {
+      target: { value: '2026-11-01T00:00:00' },
+    })
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled()
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Please select a valid time range'
+    )
+    expect(onChange).not.toHaveBeenCalled()
+  }
+)

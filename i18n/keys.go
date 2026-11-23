@@ -1,5 +1,7 @@
 package i18n
 
+const MsgLogQueryTimeRange = "log_query.time_range"
+
 const (
 	MsgLoginProtectionLocked      = "login_protection.locked"
 	MsgLoginProtectionCredentials = "login_protection.credentials"
@@ -20,6 +22,41 @@ const MsgBodyCacheCapacity = "relay.body_cache_capacity"
 const MsgStreamValidationLegacyConflict = "setting.stream_validation_legacy_conflict"
 const MsgGroupRetryGuardInvalid = "setting.group_retry_guard_invalid"
 const MsgLogExportInvalidGroupRatio = "log_export.invalid_group_ratio"
+const MsgLogExportRawOptions = "log_export.raw_options"
+
+const (
+	MsgAuditExportInvalid               = "audit_export.invalid"
+	MsgAuditExportObsolete              = "audit_export.obsolete"
+	MsgAuditExportColumnClient          = "audit_export.column.client"
+	MsgAuditExportColumnLoginMethod     = "audit_export.column.login_method"
+	MsgAuditExportColumnTarget          = "audit_export.column.target"
+	MsgAuditExportColumnChanges         = "audit_export.column.changes"
+	MsgAuditExportColumnChangeCount     = "audit_export.column.change_count"
+	MsgAuditExportColumnChangeResult    = "audit_export.column.change_result"
+	MsgAuditExportFileTitle             = "audit_export.file_title"
+	MsgQuotaExportFileTitle             = "quota_export.file_title"
+	MsgAuditExportColumnEventID         = "audit_export.column.event_id"
+	MsgAuditExportColumnTime            = "audit_export.column.time"
+	MsgAuditExportColumnUserID          = "audit_export.column.user_id"
+	MsgAuditExportColumnUsername        = "audit_export.column.username"
+	MsgAuditExportColumnActorRole       = "audit_export.column.actor_role"
+	MsgAuditExportColumnActorIsEmployee = "audit_export.column.actor_is_employee"
+	MsgAuditExportColumnCategory        = "audit_export.column.category"
+	MsgAuditExportColumnAction          = "audit_export.column.action"
+	MsgAuditExportColumnAuthMethod      = "audit_export.column.auth_method"
+	MsgAuditExportColumnIP              = "audit_export.column.ip"
+	MsgAuditExportColumnUserAgent       = "audit_export.column.user_agent"
+	MsgAuditExportColumnMethod          = "audit_export.column.method"
+	MsgAuditExportColumnRoute           = "audit_export.column.route"
+	MsgAuditExportColumnStatus          = "audit_export.column.status"
+	MsgAuditExportColumnSuccess         = "audit_export.column.success"
+	MsgAuditExportColumnRequestID       = "audit_export.column.request_id"
+	MsgAuditExportColumnTokenRef        = "audit_export.column.token_ref"
+	MsgAuditExportColumnContent         = "audit_export.column.content"
+	MsgAuditExportColumnOther           = "audit_export.column.other"
+	MsgAuditExportColumnIPMarker        = "audit_export.column.ip_marker"
+	MsgAuditExportColumnCoverage        = "audit_export.column.coverage"
+)
 
 // These existing locale entries are also used by the payment controllers.
 const MsgPaymentInfiniCheckoutFailed = "payment.infini_checkout_failed"
@@ -88,6 +125,8 @@ const (
 
 const (
 	MsgCleanupInvalidDate    = "cleanup.invalid_date"
+	MsgCleanupInvalidLogDate = "cleanup.invalid_log_date"
+	MsgCleanupInvalidScope   = "cleanup.invalid_scope"
 	MsgCleanupDisabled       = "cleanup.disabled"
 	MsgCleanupPreviewExpired = "cleanup.preview_expired"
 	MsgCleanupBusy           = "cleanup.busy"
@@ -286,6 +325,7 @@ const (
 	MsgLogExportColIsStream                         = "log_export.col.is_stream"
 	MsgLogExportColLocalCountTokens                 = "log_export.col.local_count_tokens"
 	MsgLogExportColLoginMethod                      = "log_export.col.login_method"
+	MsgLogExportColLogRaw                           = "log_export.col.log_raw"
 	MsgLogExportColMatchedTier                      = "log_export.col.matched_tier"
 	MsgLogExportColModelName                        = "log_export.col.model_name"
 	MsgLogExportColModelPrice                       = "log_export.col.model_price"
