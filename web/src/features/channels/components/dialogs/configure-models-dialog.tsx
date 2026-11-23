@@ -94,11 +94,6 @@ export function ConfigureModelsDialog(props: ConfigureModelsDialogProps) {
       open={props.open}
       onOpenChange={props.onOpenChange}
       title={t('Configure Models')}
-      description={
-        plugins.length > 0
-          ? t('Select models and apply to channel models list.')
-          : t('Select the models to keep in this channel.')
-      }
       contentClassName='sm:max-w-3xl'
       footer={
         <>
@@ -128,11 +123,7 @@ export function ConfigureModelsDialog(props: ConfigureModelsDialogProps) {
           className='min-w-0 gap-3'
         >
           <div className='max-w-full overflow-x-auto'>
-            <TabsList
-              variant='line'
-              aria-label={t('Models')}
-              className='min-w-max'
-            >
+            <TabsList aria-label={t('Models')} className='min-w-max'>
               <TabsTrigger value='all'>{t('All')}</TabsTrigger>
               {plugins.map((item) => (
                 <TabsTrigger

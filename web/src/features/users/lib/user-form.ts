@@ -45,6 +45,8 @@ export const userFormSchema = z.object({
   role: z.number().optional(),
   quota_dollars: z.number().min(0).optional(),
   group: z.string().optional(),
+  stream_protocol_validation: z.boolean().nullable().optional(),
+  claude_stream_validation: z.boolean().nullable().optional(),
   excluded_channel_ids: z
     .array(z.number().int().positive())
     .max(256)
@@ -114,6 +116,8 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   role: 1, // Default to common user
   quota_dollars: 0,
   group: DEFAULT_GROUP,
+  stream_protocol_validation: undefined,
+  claude_stream_validation: null,
   stream_response_timeout: 0,
   stream_response_timeout_mode: 'first_output',
   stream_total_timeout: 0,
@@ -143,6 +147,10 @@ export function transformFormDataToPayload(
     username: data.username,
     display_name: data.display_name || data.username,
     password: data.password || undefined,
+  }
+
+  if (data.stream_protocol_validation !== undefined) {
+    payload.stream_protocol_validation = data.stream_protocol_validation
   }
 
   const role = userId === undefined ? data.role || 1 : (data.role ?? 0)
@@ -194,6 +202,8 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     role: user.role,
     quota_dollars: quotaUnitsToDollars(user.quota),
     group: user.group || DEFAULT_GROUP,
+    stream_protocol_validation: user.stream_protocol_validation ?? undefined,
+    claude_stream_validation: user.claude_stream_validation ?? null,
     excluded_channel_ids: user.excluded_channel_ids,
     stream_response_timeout: user.stream_response_timeout ?? 0,
     stream_response_timeout_mode:

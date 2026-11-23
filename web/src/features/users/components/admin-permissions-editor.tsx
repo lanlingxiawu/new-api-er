@@ -1,68 +1,60 @@
-import {
-  CheckCircle2,
-  Circle,
-  FileSearch,
-  Menu,
-  RadioTower,
-  Settings,
-  ShieldCheck,
-} from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { useTranslation } from 'react-i18next'
 
-import {
-  SideDrawerSection,
-  SideDrawerSectionHeader,
-} from '@/components/drawer-layout'
+import { PermissionOption } from '@/components/permission-matrix'
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from '@/components/ui/accordion'
-import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Field,
-  FieldContent,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-  FieldLegend,
-  FieldSet,
-} from '@/components/ui/field'
+import { FieldGroup, FieldLegend, FieldSet } from '@/components/ui/field'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
   normalizeAdminPermissions,
   viewDependentActions,
   type AdminPermissionMatrix,
+  type PermissionActionDef,
   type PermissionCatalog,
   type PermissionResourceDef,
 } from '@/lib/admin-permissions'
-import { cn } from '@/lib/utils'
 
 type AdminPermissionsEditorProps = {
   catalog: PermissionCatalog
   value: AdminPermissionMatrix | undefined
   onChange: (value: AdminPermissionMatrix) => void
-  administratorLabel: string
-  embedded?: boolean
 }
+
+const TOKEN_READ_ACTIONS = new Set([
+  'users_list',
+  'groups_read',
+  'employees_read',
+  'users_stats',
+])
 
 type PermissionGroup = {
   key: string
   labelKey?: string
   resources: PermissionResourceDef[]
 }
-
-const ADMIN_PERMISSION_SECTION_IDS = [
-  'admin-permissions-menu',
-  'admin-permissions-channel',
-  'admin-permissions-settings',
-  'admin-permissions-other',
-] as const
-
-const SECTION_IDS = ADMIN_PERMISSION_SECTION_IDS
 
 function groupResources(resources: PermissionResourceDef[]): PermissionGroup[] {
   const groups = new Map<string, PermissionGroup>()
@@ -87,82 +79,49 @@ function groupResources(resources: PermissionResourceDef[]): PermissionGroup[] {
 export function AdminPermissionsEditor(props: AdminPermissionsEditorProps) {
   const { t } = useTranslation()
   const selected = normalizeAdminPermissions(props.value, props.catalog)
-  const [activeSection, setActiveSection] = useState<string>(SECTION_IDS[0])
-  const [openSettingsGroups, setOpenSettingsGroups] = useState<string[]>([])
   const menuResources = props.catalog.resources.filter((resource) =>
     resource.resource.startsWith(ADMIN_PERMISSION_RESOURCES.ADMIN_MENU_PREFIX)
+  )
+  const tokenResources = props.catalog.resources.filter(
+    (resource) =>
+      resource.resource === ADMIN_PERMISSION_RESOURCES.ADMIN_ACCESS_TOKEN
   )
   const channelResources = props.catalog.resources.filter(
     (resource) =>
       resource.resource === ADMIN_PERMISSION_RESOURCES.CHANNEL ||
       resource.resource === ADMIN_PERMISSION_RESOURCES.TASK_PLUGIN
   )
-  const otherResources = props.catalog.resources.filter(
-    (resource) =>
-      !resource.resource.startsWith(
-        ADMIN_PERMISSION_RESOURCES.ADMIN_MENU_PREFIX
-      ) &&
-      !resource.resource.startsWith(
-        ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX
-      ) &&
-      resource.resource !== ADMIN_PERMISSION_RESOURCES.CHANNEL &&
-      resource.resource !== ADMIN_PERMISSION_RESOURCES.TASK_PLUGIN
-  )
-  const settingsGroups = groupResources(
-    props.catalog.resources.filter((resource) =>
-      resource.resource.startsWith(
-        ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX
-      )
+  const settingsResources = props.catalog.resources.filter((resource) =>
+    resource.resource.startsWith(
+      ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX
     )
   )
-  const enabledMenuCount = menuResources.filter(
+  const otherResources = props.catalog.resources.filter(
     (resource) =>
-      selected[resource.resource]?.[ADMIN_PERMISSION_ACTIONS.VIEW] === true
-  ).length
-  const sections = useMemo(
-    () => [
-      {
-        id: SECTION_IDS[0],
-        label: t('Menu access'),
-        description: t('{{enabled}} of {{total}} enabled', {
-          enabled: enabledMenuCount,
-          total: menuResources.length,
-        }),
-        icon: <Menu className='size-4' aria-hidden='true' />,
-      },
-      {
-        id: SECTION_IDS[1],
-        label: t('Channel permissions'),
-        description: t('Channel operations'),
-        icon: <RadioTower className='size-4' aria-hidden='true' />,
-      },
-      {
-        id: SECTION_IDS[2],
-        label: t('System settings'),
-        description: t('{{count}} permission groups', {
-          count: settingsGroups.length,
-        }),
-        icon: <Settings className='size-4' aria-hidden='true' />,
-      },
-      ...(otherResources.length > 0
-        ? [
-            {
-              id: SECTION_IDS[3],
-              label: t('Other permissions'),
-              description: t('Audit logs and other access'),
-              icon: <FileSearch className='size-4' aria-hidden='true' />,
-            },
-          ]
-        : []),
-    ],
-    [
-      enabledMenuCount,
-      menuResources.length,
-      otherResources.length,
-      settingsGroups.length,
-      t,
-    ]
+      !menuResources.includes(resource) &&
+      !tokenResources.includes(resource) &&
+      !channelResources.includes(resource) &&
+      !settingsResources.includes(resource)
   )
+  const sections = [
+    { id: 'menu', label: t('Menu access'), resources: menuResources },
+    {
+      id: 'token',
+      label: t('Administrator token access'),
+      resources: tokenResources,
+    },
+    {
+      id: 'channel',
+      label: t('Channel permissions'),
+      resources: channelResources,
+    },
+    {
+      id: 'settings',
+      label: t('System settings'),
+      resources: settingsResources,
+    },
+    { id: 'other', label: t('Other permissions'), resources: otherResources },
+  ].filter((section) => section.resources.length > 0)
 
   const updatePermission = (
     resource: string,
@@ -183,239 +142,153 @@ export function AdminPermissionsEditor(props: AdminPermissionsEditorProps) {
     props.onChange(next)
   }
 
-  const scrollTo = useCallback((id: string) => {
-    setActiveSection(id)
-    document
-      .querySelector<HTMLElement>(`#${id}`)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }, [])
-
-  const updateActiveSection = useCallback(() => {
-    const form = document.querySelector<HTMLElement>('#user-form')
-    if (!form) return
-    const activationY = form.getBoundingClientRect().top + 80
-    let nextActive: string = SECTION_IDS[0]
-    for (const sectionId of SECTION_IDS) {
-      const section = document.querySelector<HTMLElement>(`#${sectionId}`)
-      if (!section) continue
-      if (section.getBoundingClientRect().top <= activationY) {
-        nextActive = sectionId
-      } else {
-        break
-      }
-    }
-    setActiveSection((current) =>
-      current === nextActive ? current : nextActive
-    )
-  }, [])
-
-  useEffect(() => {
-    if (props.embedded) return
-    const form = document.querySelector<HTMLElement>('#user-form')
-    if (!form) return
-    updateActiveSection()
-    form.addEventListener('scroll', updateActiveSection, { passive: true })
-    window.addEventListener('resize', updateActiveSection)
-    return () => {
-      form.removeEventListener('scroll', updateActiveSection)
-      window.removeEventListener('resize', updateActiveSection)
-    }
-  }, [props.embedded, updateActiveSection])
+  const renderActions = (
+    resource: PermissionResourceDef,
+    actions: PermissionActionDef[] = resource.actions
+  ) => (
+    <FieldGroup className='gap-5'>
+      {actions.map((option) => (
+        <PermissionOption
+          key={option.action}
+          control={
+            resource.resource ===
+              ADMIN_PERMISSION_RESOURCES.ADMIN_ACCESS_TOKEN &&
+            option.action === 'use'
+              ? 'switch'
+              : 'checkbox'
+          }
+          label={t(option.label_key)}
+          description={t(option.description_key)}
+          checked={selected[resource.resource]?.[option.action] === true}
+          onCheckedChange={(checked) =>
+            updatePermission(resource.resource, option.action, checked)
+          }
+        />
+      ))}
+    </FieldGroup>
+  )
 
   const renderResources = (resources: PermissionResourceDef[]) => (
     <FieldGroup className='gap-0'>
       {resources.map((resource) => (
         <FieldSet
           key={resource.resource}
-          className='border-border/60 gap-3 border-b py-4 first:pt-0 last:border-b-0 last:pb-0'
+          className='border-border/60 gap-4 border-b py-5 first:pt-0 last:border-b-0 last:pb-0'
         >
           <FieldLegend variant='label'>{t(resource.label_key)}</FieldLegend>
-          <FieldGroup className='gap-3 sm:grid sm:grid-cols-2'>
-            {resource.actions.map((option) => {
-              const id = `${resource.resource}-${option.action}`
-              return (
-                <Field key={option.action} orientation='horizontal'>
-                  <Checkbox
-                    id={id}
-                    aria-describedby={`${id}-description`}
-                    checked={
-                      selected[resource.resource]?.[option.action] === true
-                    }
-                    onCheckedChange={(checked) =>
-                      updatePermission(
-                        resource.resource,
-                        option.action,
-                        checked === true
-                      )
-                    }
-                  />
-                  <FieldContent>
-                    <FieldLabel htmlFor={id} className='font-medium'>
-                      {t(option.label_key)}
-                    </FieldLabel>
-                    <FieldDescription id={`${id}-description`}>
-                      {t(option.description_key)}
-                    </FieldDescription>
-                  </FieldContent>
-                </Field>
-              )
-            })}
-          </FieldGroup>
+          {renderActions(resource)}
         </FieldSet>
       ))}
     </FieldGroup>
   )
 
   return (
-    <div
-      className={cn(
-        'gap-5',
-        props.embedded
-          ? 'flex min-w-0 flex-col'
-          : 'grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start'
-      )}
+    <Accordion
+      multiple
+      defaultValue={['token']}
+      className='border-border/60 rounded-lg border px-4'
     >
-      {!props.embedded && (
-        <aside className='hidden self-start lg:sticky lg:top-4 lg:z-20 lg:block'>
-          <div className='flex max-h-[calc(100dvh-12rem)] flex-col gap-3 overflow-y-auto overscroll-contain pr-1'>
-            <div className='border-border/60 bg-muted/20 rounded-lg border p-3'>
-              <div className='flex min-w-0 items-center gap-2'>
-                <span className='bg-background flex size-8 shrink-0 items-center justify-center rounded-md border'>
-                  <ShieldCheck className='size-4' aria-hidden='true' />
+      {sections.map((section) => {
+        const actions = section.resources.flatMap((resource) =>
+          resource.actions.map(
+            (action) => selected[resource.resource]?.[action.action] === true
+          )
+        )
+        // Offset the scroll padding from sideDrawerFormClassName so content cannot peek above the header.
+        return (
+          <AccordionItem
+            key={section.id}
+            value={section.id}
+            className='data-open:[&>h3]:bg-background data-open:[&>h3]:sticky data-open:[&>h3]:-top-4 data-open:[&>h3]:z-10 sm:data-open:[&>h3]:-top-5'
+          >
+            <AccordionTrigger className='items-center gap-3 py-4'>
+              <span className='flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1'>
+                <span>{section.label}</span>
+                <span
+                  className='text-muted-foreground text-xs font-normal'
+                  aria-hidden='true'
+                >
+                  {t('{{enabled}} of {{total}} enabled', {
+                    enabled: actions.filter(Boolean).length,
+                    total: actions.length,
+                  })}
                 </span>
-                <div className='min-w-0'>
-                  <p className='truncate text-sm font-medium'>
-                    {props.administratorLabel}
-                  </p>
-                  <p className='text-muted-foreground truncate text-xs'>
-                    {t('Administrator permissions')}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <nav
-              className='border-border/60 bg-background rounded-lg border p-1'
-              aria-label={t('Administrator permissions')}
-            >
-              {sections.map((section) => {
-                const isActive = activeSection === section.id
-                return (
-                  <button
-                    key={section.id}
-                    type='button'
-                    className={cn(
-                      'hover:bg-muted/60 flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors',
-                      isActive && 'bg-muted/70'
-                    )}
-                    onClick={() => scrollTo(section.id)}
-                    aria-current={isActive ? 'true' : undefined}
-                  >
-                    <span className='bg-muted text-muted-foreground mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md'>
-                      {section.icon}
-                    </span>
-                    <span className='min-w-0 flex-1'>
-                      <span className='block truncate text-sm font-medium'>
-                        {section.label}
-                      </span>
-                      <span className='text-muted-foreground block truncate text-xs'>
-                        {section.description}
-                      </span>
-                    </span>
-                    {isActive ? (
-                      <CheckCircle2
-                        className='text-primary mt-1 size-3.5 shrink-0'
-                        aria-hidden='true'
-                      />
-                    ) : (
-                      <Circle
-                        className='text-muted-foreground mt-1 size-3.5 shrink-0'
-                        aria-hidden='true'
-                      />
-                    )}
-                  </button>
-                )
-              })}
-            </nav>
-          </div>
-        </aside>
-      )}
-
-      <div className='flex min-w-0 flex-col gap-5'>
-        <div id={SECTION_IDS[0]} className='scroll-mt-4'>
-          <SideDrawerSection>
-            <SideDrawerSectionHeader
-              title={t('Menu access')}
-              description={t(
-                'Choose which management menus this administrator can access.'
+              </span>
+            </AccordionTrigger>
+            <AccordionContent className='pb-5'>
+              {section.id === 'token' &&
+                section.resources.map((resource) => (
+                  <div key={resource.resource} className='flex flex-col gap-6'>
+                    <div className='bg-muted/40 rounded-lg p-4'>
+                      {renderActions(
+                        resource,
+                        resource.actions.filter(
+                          (action) => action.action === 'use'
+                        )
+                      )}
+                    </div>
+                    <p className='text-muted-foreground text-sm'>
+                      {t(
+                        "Token access is limited to the selected modules and the administrator's menu permissions."
+                      )}
+                    </p>
+                    {[
+                      {
+                        label: t('Read-only access'),
+                        actions: resource.actions.filter((action) =>
+                          TOKEN_READ_ACTIONS.has(action.action)
+                        ),
+                      },
+                      {
+                        label: t('Changes and operations'),
+                        actions: resource.actions.filter(
+                          (action) =>
+                            action.action !== 'use' &&
+                            !TOKEN_READ_ACTIONS.has(action.action)
+                        ),
+                      },
+                    ]
+                      .filter((group) => group.actions.length > 0)
+                      .map((group) => (
+                        <FieldSet
+                          key={group.label}
+                          className='border-border/60 gap-4 border-t pt-5'
+                        >
+                          <FieldLegend variant='label'>
+                            {group.label}
+                          </FieldLegend>
+                          {renderActions(resource, group.actions)}
+                        </FieldSet>
+                      ))}
+                    <p className='text-muted-foreground text-xs'>
+                      {t(
+                        'Token permissions apply immediately. Re-enabling restores valid tokens within their existing scopes. Suspected leaks require revoking the token. Saving administrator permissions may require the administrator to sign in again.'
+                      )}
+                    </p>
+                  </div>
+                ))}
+              {section.id === 'settings' && (
+                <FieldGroup>
+                  {groupResources(section.resources).map((group) => (
+                    <FieldSet
+                      key={group.key}
+                      className='border-border/60 gap-4 border-b pb-5 last:border-0 last:pb-0'
+                    >
+                      <FieldLegend variant='label'>
+                        {t(group.labelKey ?? group.key)}
+                      </FieldLegend>
+                      {renderResources(group.resources)}
+                    </FieldSet>
+                  ))}
+                </FieldGroup>
               )}
-              icon={<Menu className='size-4' aria-hidden='true' />}
-              iconTone='info'
-            />
-            {renderResources(menuResources)}
-          </SideDrawerSection>
-        </div>
-
-        <div id={SECTION_IDS[1]} className='scroll-mt-4'>
-          <SideDrawerSection>
-            <SideDrawerSectionHeader
-              title={t('Channel permissions')}
-              description={t(
-                'Control the operations available inside channel management.'
-              )}
-              icon={<RadioTower className='size-4' aria-hidden='true' />}
-              iconTone='chart-4'
-            />
-            {renderResources(channelResources)}
-          </SideDrawerSection>
-        </div>
-
-        <div id={SECTION_IDS[2]} className='scroll-mt-4'>
-          <SideDrawerSection>
-            <SideDrawerSectionHeader
-              title={t('System settings')}
-              description={t(
-                'Detailed settings permissions are collapsed by category.'
-              )}
-              icon={<Settings className='size-4' aria-hidden='true' />}
-              iconTone='warning'
-            />
-            <Accordion
-              multiple
-              value={openSettingsGroups}
-              onValueChange={setOpenSettingsGroups}
-              className='border-border/60 rounded-lg border px-3'
-            >
-              {settingsGroups.map((group) => (
-                <AccordionItem key={group.key} value={group.key}>
-                  <AccordionTrigger>
-                    {t(group.labelKey ?? group.key)}
-                  </AccordionTrigger>
-                  <AccordionContent>
-                    {renderResources(group.resources)}
-                  </AccordionContent>
-                </AccordionItem>
-              ))}
-            </Accordion>
-          </SideDrawerSection>
-        </div>
-
-        {otherResources.length > 0 && (
-          <div id={SECTION_IDS[3]} className='scroll-mt-4'>
-            <SideDrawerSection>
-              <SideDrawerSectionHeader
-                title={t('Other permissions')}
-                description={t(
-                  'Permissions that are not tied to a management menu, channel or system setting.'
-                )}
-                icon={<FileSearch className='size-4' aria-hidden='true' />}
-                iconTone='info'
-              />
-              {renderResources(otherResources)}
-            </SideDrawerSection>
-          </div>
-        )}
-      </div>
-    </div>
+              {section.id !== 'token' &&
+                section.id !== 'settings' &&
+                renderResources(section.resources)}
+            </AccordionContent>
+          </AccordionItem>
+        )
+      })}
+    </Accordion>
   )
 }

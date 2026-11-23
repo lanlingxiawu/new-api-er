@@ -57,7 +57,7 @@ func TestUserChannelExclusionDatabaseMatrix(t *testing.T) {
 			}
 			require.NoError(t, db.Raw(query).Scan(&version).Error)
 			t.Logf("%s %s", dialect, version)
-			models := []any{&User{}, &Channel{}, &Ability{}, &ChannelCostConfig{}, &UserChannelExclusion{}, &UserChannelExclusionCleanup{}, &SystemTaskLock{}, &ChannelDailyUsage{}, &ChannelLimitPeriodUsage{}, &PlatformChannelDailyStat{}}
+			models := []any{&User{}, &Channel{}, &Ability{}, &ChannelCreator{}, &ChannelCostConfig{}, &UserChannelExclusion{}, &UserChannelExclusionCleanup{}, &SystemTaskLock{}, &ChannelDailyUsage{}, &ChannelLimitPeriodUsage{}, &PlatformChannelDailyStat{}}
 			t.Cleanup(func() {
 				for i := len(models) - 1; i >= 0; i-- {
 					require.NoError(t, db.Migrator().DropTable(models[i]))

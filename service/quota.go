@@ -172,6 +172,12 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	if relayInfo.StreamResult != nil && relayInfo.StreamResult.SettlementAttempted {
 		return
 	}
+	if relayInfo.MainStreamMode() {
+		if relayInfo.RealtimeSettlementAttempted {
+			return
+		}
+		relayInfo.RealtimeSettlementAttempted = true
+	}
 
 	var tieredResult *billingexpr.TieredResult
 	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, billingexpr.TokenParams{
@@ -248,6 +254,11 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
+		if relayInfo.MainStreamMode() {
+			// Preserve main's zero charge without recognizing the discarded
+			// estimate as revenue in the fork's cost/commission ledger.
+			ledgerQuota = 0
+		}
 		logContent = append(logContent, common.NewMessage("Possibly an upstream timeout"))
 		logger.LogError(ctx, common.LogText("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d",
 			relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
@@ -268,6 +279,11 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 
 	logModel := modelName
 	logContent = append(logContent, extraContent...)
+	if relayInfo.MainStreamMode() {
+		// The compatibility handler already selected and settled these counts.
+		// This copy only gives existing zero-output diagnostic retention its input.
+		relayInfo.StreamFinalUsage = &dto.Usage{PromptTokens: usage.InputTokens, CompletionTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens}
+	}
 	other := GenerateWssOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
 		completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	if tieredResult != nil {

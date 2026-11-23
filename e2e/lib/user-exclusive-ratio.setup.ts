@@ -137,7 +137,7 @@ export default async function setup() {
       db.exec('PRAGMA busy_timeout=5000');
       const insert = db.query('INSERT INTO users (username,password,role,status,"group",group_ratios,aff_code,setting,created_at) VALUES (?,?,1,1,?,?,?,?,?)');
       db.transaction(() => {
-        for (let i=0; i<25; i++) insert.run('exr-ratio-'+String(i).padStart(2,'0'),'fixture-no-login',i<23?'default':'vip',JSON.stringify({default:i===0?0:0.5}),'ratio'+i,'{}',1700000000);
+        for (let i=0; i<25; i++) insert.run('exr-ratio-'+String(i).padStart(2,'0'),'fixture-no-login',i<23?'default':'vip',JSON.stringify({default:i===0?0:0.5,...(i>=20?{vip:0.8}:{})}),'ratio'+i,'{}',1700000000);
         const empty = ['',null,'{}',' { '+String.fromCharCode(10)+' } '];
         for (let i=0; i<24; i++) insert.run('exr-plain-'+String(i).padStart(2,'0'),'fixture-no-login',i<22?'default':'vip',empty[i%4],'plain'+i,'{}',1700000000);
       })();

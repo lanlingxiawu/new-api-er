@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -58,6 +60,10 @@ func normalizePrefixedPage(c *gin.Context, prefix string) (int, int) {
 
 // AdminListEmployees GET /api/admin/employee
 func AdminListEmployees(c *gin.Context) {
+	if c.GetBool("use_access_token") {
+		adminTokenReadRequest(c)
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	userId, _ := strconv.Atoi(c.Query("user_id"))
@@ -499,6 +505,10 @@ func AdminRevertPerformanceAdjustment(c *gin.Context) {
 
 // AdminListCommissionLogs GET /api/admin/employee/commission
 func AdminListCommissionLogs(c *gin.Context) {
+	if c.Query("pagination") == "cursor" {
+		listCommissionLogPage(c, 0)
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	employeeUserId, _ := strconv.Atoi(c.Query("employee_user_id"))
@@ -529,7 +539,7 @@ func AdminListCommissionLogs(c *gin.Context) {
 		PageSize:       pageSize,
 	})
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		commissionLogQueryError(c, err)
 		return
 	}
 	// 按页解析渠道名称（兼容已删除渠道），明细表本身不存名称快照，避免大表回填
@@ -935,7 +945,7 @@ func AdminUpsertChannelCost(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	if err := model.UpsertChannelCostConfig(req.ChannelId, req.CostRatio, req.Remark); err != nil {
+	if err := model.UpsertChannelCostConfig(req.ChannelId, req.CostRatio, req.Remark, model.RequestAuditChanges(c)); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
@@ -949,7 +959,7 @@ func AdminDeleteChannelCost(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid channel id"})
 		return
 	}
-	if err := model.DeleteChannelCostConfig(channelId); err != nil {
+	if err := model.DeleteChannelCostConfig(channelId, model.RequestAuditChanges(c)); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
@@ -1211,7 +1221,8 @@ func AdminSwitchCommissionPeriod(c *gin.Context) {
 
 	processed, err := model.SwitchCommissionPeriod(periodStart, req.ResetTiers, includePeriodData, operatedBy)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		logger.LogError(c, "commission period switch failed: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
 	}
 	// 把 last_reset_at 对齐到本期起点，避免定时任务把这次口径切换当成"错过的边界"补跑重置。
@@ -1311,6 +1322,10 @@ func GetMyCommissionLogs(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "permission denied"})
 		return
 	}
+	if c.Query("pagination") == "cursor" {
+		listCommissionLogPage(c, userId)
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	customerUserId, _ := strconv.Atoi(c.Query("customer_user_id"))
@@ -1340,7 +1355,7 @@ func GetMyCommissionLogs(c *gin.Context) {
 		PageSize:       pageSize,
 	})
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		commissionLogQueryError(c, err)
 		return
 	}
 	// 注意：员工端不返回渠道名称（渠道名可能包含上游内部信息），仅管理员端展示。
@@ -1491,6 +1506,10 @@ func GetMyCommissionCalendarStats(c *gin.Context) {
 
 // AdminAssignCustomerToEmployee POST /api/admin/employee/:id/assign-customer
 func AdminAssignCustomerToEmployee(c *gin.Context) {
+	if c.GetBool("use_access_token") {
+		adminTokenUserRequest(c)
+		return
+	}
 	employeeId, _ := strconv.Atoi(c.Param("id"))
 	if employeeId <= 0 {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid employee id"})
@@ -1522,13 +1541,12 @@ func AdminAssignCustomerToEmployee(c *gin.Context) {
 		return
 	}
 
-	if err := model.UpdateUserInviterId(req.UserId, emp.UserId); err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+	change, err := model.ChangeCustomerEmployee(c.Request.Context(), employeeId, req.UserId, false)
+	if err != nil {
+		writeAdminTokenUserError(c, err)
 		return
 	}
-	// Keep customer_profiles in sync so customer_count is accurate and the
-	// search picker shows the correct "already assigned" state.
-	_ = model.UpsertCustomerProfileEmployee(req.UserId, emp.UserId)
+	recordCustomerAssignment(c, change)
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
@@ -1579,6 +1597,10 @@ func AdminListEmployeeCustomers(c *gin.Context) {
 
 // AdminUnassignCustomerFromEmployee DELETE /api/admin/employee/:id/customer/:user_id
 func AdminUnassignCustomerFromEmployee(c *gin.Context) {
+	if c.GetBool("use_access_token") {
+		adminTokenUserRequest(c)
+		return
+	}
 	employeeId, err := strconv.Atoi(c.Param("id"))
 	if err != nil || employeeId <= 0 {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid employee id"})
@@ -1610,13 +1632,11 @@ func AdminUnassignCustomerFromEmployee(c *gin.Context) {
 		return
 	}
 
-	if err := model.UnassignCustomerFromEmployee(customerUserId, emp.UserId); err != nil {
-		if err == gorm.ErrRecordNotFound {
-			c.JSON(http.StatusOK, gin.H{"success": false, "message": "customer is not assigned to this employee"})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+	change, err := model.ChangeCustomerEmployee(c.Request.Context(), employeeId, customerUserId, true)
+	if err != nil {
+		writeAdminTokenUserError(c, err)
 		return
 	}
+	recordCustomerAssignment(c, change)
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }

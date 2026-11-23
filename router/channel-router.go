@@ -39,7 +39,7 @@ func joinPaths(absolutePath, relativePath string) string {
 
 func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 	channelRoute := apiRouter.Group("/channel")
-	channelRoute.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.AdminMenuChannelsView))
+	channelRoute.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.AdminMenuChannelsView), controller.AdminTokenChannelRequest)
 
 	channelRoute.POST("/:id/key",
 		middleware.RootAuth(),

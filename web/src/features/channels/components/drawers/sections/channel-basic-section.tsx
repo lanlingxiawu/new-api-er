@@ -36,7 +36,6 @@ export function ChannelBasicSection(props: ChannelBasicSectionProps) {
     <SideDrawerSection>
       <SideDrawerSectionHeader
         title={t('Basic Information')}
-        description={t('Name, provider type, and availability.')}
         icon={<Server className='h-4 w-4' aria-hidden='true' />}
         iconTone='info'
       />

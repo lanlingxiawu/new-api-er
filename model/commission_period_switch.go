@@ -2,6 +2,9 @@ package model
 
 import (
 	"fmt"
+	"time"
+
+	"github.com/QuantumNous/new-api/common"
 
 	"gorm.io/gorm"
 )
@@ -41,15 +44,10 @@ func SwitchCommissionPeriod(targetPeriodStart int64, resetTiers, includePeriodDa
 	// 1) baseline 对齐到 P，先做（新数据从此刻起落入 P 桶），可选同时重置等级。
 	processed := 0
 	if resetTiers {
-		for {
-			n, selected, err := ResetEmployeeTierLevelsForPeriod(targetPeriodStart, tierResetSwitchBatchSize, operatedBy)
-			if err != nil {
-				return processed, err
-			}
-			processed += n
-			if selected < tierResetSwitchBatchSize {
-				break
-			}
+		var err error
+		processed, err = resetEmployeeTiersForPeriodSwitch(targetPeriodStart, employeeUserIds, operatedBy)
+		if err != nil {
+			return processed, err
 		}
 	} else {
 		n, err := advanceCommissionBaselineOnly(targetPeriodStart, employeeUserIds)
@@ -77,6 +75,71 @@ func SwitchCommissionPeriod(targetPeriodStart int64, resetTiers, includePeriodDa
 }
 
 const tierResetSwitchBatchSize = 300
+
+func resetEmployeeTiersForPeriodSwitch(targetPeriodStart int64, employeeUserIds []int, operatedBy int) (int, error) {
+	tiers := GetAllTiersCached()
+	tierByID := make(map[int64]*EmployeeCommissionTier, len(tiers))
+	minimumByGroup := make(map[string]*EmployeeCommissionTier)
+	for _, tier := range tiers {
+		tierByID[tier.Id] = tier
+		if current := minimumByGroup[tier.Group]; current == nil || tier.Level < current.Level {
+			minimumByGroup[tier.Group] = tier
+		}
+	}
+	processed := 0
+	for start := 0; start < len(employeeUserIds); start += tierResetSwitchBatchSize {
+		userIDs := employeeUserIds[start:min(start+tierResetSwitchBatchSize, len(employeeUserIds))]
+		var cursor int64
+		for {
+			var levels []EmployeeTierLevel
+			if err := DB.Where("user_id IN ? AND id > ?", userIDs, cursor).Order("id ASC").Limit(30).Find(&levels).Error; err != nil {
+				return processed, err
+			}
+			if len(levels) == 0 {
+				break
+			}
+			changedIDs := make([]int, 0, len(levels))
+			err := DB.Transaction(func(tx *gorm.DB) error {
+				for _, level := range levels {
+					targetTierID := level.TierId
+					if tier := tierByID[level.TierId]; tier != nil {
+						targetTierID = minimumByGroup[tier.Group].Id
+					} else if level.TierId != 0 {
+						common.SysError(fmt.Sprintf("period switch: employee %d has orphaned tier %d", level.UserId, level.TierId))
+					}
+					baseline := max(level.BaselineResetAt, targetPeriodStart)
+					if targetTierID == level.TierId && baseline == level.BaselineResetAt {
+						continue
+					}
+					operatedAt := time.Now().Unix()
+					result := tx.Model(&EmployeeTierLevel{}).
+						Where("id = ? AND tier_id = ? AND baseline_reset_at = ? AND effective_at = ? AND source = ? AND updated_by = ?", level.Id, level.TierId, level.BaselineResetAt, level.EffectiveAt, level.Source, level.UpdatedBy).
+						Updates(map[string]any{"tier_id": targetTierID, "baseline_reset_at": baseline, "source": "reset", "effective_at": operatedAt, "updated_by": operatedBy})
+					if result.Error != nil {
+						return result.Error
+					}
+					if result.RowsAffected == 0 {
+						return fmt.Errorf("period switch: concurrent tier update for employee %d", level.UserId)
+					}
+					if tierByID[level.TierId] != nil || level.TierId == 0 {
+						if err := tx.Create(&EmployeeTierLog{UserId: level.UserId, FromTierId: level.TierId, ToTierId: targetTierID, Source: "reset", OperatedAt: operatedAt, OperatedBy: operatedBy}).Error; err != nil {
+							return err
+						}
+					}
+					changedIDs = append(changedIDs, level.UserId)
+				}
+				return nil
+			})
+			if err != nil {
+				return processed, err
+			}
+			processed += len(changedIDs)
+			refreshTierLevelCacheFromDBByUserIds(changedIDs)
+			cursor = levels[len(levels)-1].Id
+		}
+	}
+	return processed, nil
+}
 
 // advanceCommissionBaselineOnly 仅把 baseline_reset_at 前移到 P（不动等级、不写日志），
 // 幂等守卫 baseline_reset_at < P 保证重复调用安全。返回实际推进的行数。

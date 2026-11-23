@@ -26,6 +26,7 @@ export type AdminCapabilities = AdminPermissionMatrix
 export const ADMIN_PERMISSION_RESOURCES = {
   AUDIT: 'audit',
   CHANNEL: 'channel',
+  ADMIN_ACCESS_TOKEN: 'admin_access_token',
   VERIDROP_DETECTION: 'admin_menu.veridrop_detection',
   PRICE_MONITOR: 'admin_menu.price_monitor',
   REQUEST_LOGS: 'admin_menu.request_logs',
@@ -92,6 +93,12 @@ export function hasPermission(
   action: string
 ): boolean {
   if (!user) return false
+  if (
+    resource === ADMIN_PERMISSION_RESOURCES.ADMIN_ACCESS_TOKEN &&
+    user.role !== ROLE.ADMIN
+  ) {
+    return false
+  }
   if (user.role === ROLE.SUPER_ADMIN) return true
   return user.permissions?.admin_permissions?.[resource]?.[action] === true
 }

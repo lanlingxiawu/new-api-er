@@ -1,9 +1,29 @@
-import { useEffect, useMemo, useState } from 'react'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { useQueryClient } from '@tanstack/react-query'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -13,7 +33,16 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+
 import { addEmployeePerformance } from '../api'
 import type { EmployeeProfile } from '../types'
 
@@ -56,6 +85,8 @@ export function PerformanceAdjustDialog({
 }: Props) {
   const { t } = useTranslation()
   const qc = useQueryClient()
+  const formId = useId()
+  const inFlight = useRef(false)
   const [amount, setAmount] = useState('')
   const [reason, setReason] = useState('')
   const [historical, setHistorical] = useState(false)
@@ -76,7 +107,8 @@ export function PerformanceAdjustDialog({
   }, [open])
 
   const amountNum = Number(amount)
-  const amountValid = amount.trim() !== '' && !Number.isNaN(amountNum) && amountNum !== 0
+  const amountValid =
+    amount.trim() !== '' && Number.isFinite(amountNum) && amountNum !== 0
   const rate = Number(employee?.current_tier_rate ?? 0)
   // 预估提成仅在当前周期可算（用现等级费率）；历史周期费率由后端按当期还原，前端不试算。
   const previewCommissionUsd = !historical ? amountNum * rate : null
@@ -84,11 +116,12 @@ export function PerformanceAdjustDialog({
   const empName = employee?.username || (employee ? `#${employee.user_id}` : '')
 
   const handleSubmit = async () => {
-    if (!employee || !amountValid) return
+    if (!employee || !amountValid || inFlight.current) return
     if (historical && !month) {
       toast.error(t('Please choose a period'))
       return
     }
+    inFlight.current = true
     setSubmitting(true)
     try {
       const periodStartAt = historical && month ? monthToUnix(month) : 0
@@ -107,12 +140,18 @@ export function PerformanceAdjustDialog({
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : t('Operation failed'))
     } finally {
+      inFlight.current = false
       setSubmitting(false)
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!inFlight.current) onOpenChange(next)
+      }}
+    >
       <DialogContent
         className='max-h-[86vh] overflow-y-auto sm:max-w-120'
         initialFocus={false}
@@ -146,10 +185,12 @@ export function PerformanceAdjustDialog({
 
         {/* Amount */}
         <div className='space-y-1.5'>
-          <label className='text-sm font-medium'>
+          <label htmlFor={`${formId}-amount`} className='text-sm font-medium'>
             {t('Performance amount (USD)')}
           </label>
           <Input
+            id={`${formId}-amount`}
+            disabled={submitting}
             type='number'
             step='any'
             inputMode='decimal'
@@ -168,32 +209,36 @@ export function PerformanceAdjustDialog({
         {/* Period */}
         <div className='space-y-1.5'>
           <label className='flex items-center gap-2 text-sm font-medium'>
-            <input
-              type='checkbox'
-              className='size-4'
+            <Checkbox
+              disabled={submitting}
               checked={historical}
-              onChange={(e) => {
-                setHistorical(e.target.checked)
-                if (!e.target.checked) setMonth('')
+              onCheckedChange={(checked) => {
+                setHistorical(checked)
+                if (!checked) setMonth('')
               }}
             />
             {t('Backfill to a historical period')}
           </label>
           {historical ? (
             <>
-              <select
-                aria-label={t('Choose a period')}
-                className='border-input bg-background focus-visible:ring-ring h-9 w-full rounded-md border px-3 text-sm focus-visible:ring-1 focus-visible:outline-none'
-                value={month}
-                onChange={(e) => setMonth(e.target.value)}
+              <Select
+                value={month || null}
+                onValueChange={(value) => setMonth(value ?? '')}
+                disabled={submitting}
               >
-                <option value=''>{t('Choose a period')}</option>
-                {monthOptions.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger aria-label={t('Choose a period')}>
+                  <SelectValue placeholder={t('Choose a period')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {monthOptions.map((value) => (
+                      <SelectItem key={value} value={value}>
+                        {value}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
               <p className='text-muted-foreground text-xs'>
                 {t(
                   "Historical periods use that period's tier rate and do not change the tier."
@@ -202,15 +247,21 @@ export function PerformanceAdjustDialog({
             </>
           ) : (
             <p className='text-muted-foreground text-xs'>
-              {t('Applied to the current period; may trigger tier re-evaluation.')}
+              {t(
+                'Applied to the current period; may trigger tier re-evaluation.'
+              )}
             </p>
           )}
         </div>
 
         {/* Reason */}
         <div className='space-y-1.5'>
-          <label className='text-sm font-medium'>{t('Reason')}</label>
+          <label htmlFor={`${formId}-reason`} className='text-sm font-medium'>
+            {t('Reason')}
+          </label>
           <Textarea
+            id={`${formId}-reason`}
+            disabled={submitting}
             rows={2}
             placeholder={t('Optional')}
             value={reason}
@@ -222,6 +273,7 @@ export function PerformanceAdjustDialog({
           <Button
             type='button'
             variant='outline'
+            disabled={submitting}
             onClick={() => onOpenChange(false)}
           >
             {t('Cancel')}

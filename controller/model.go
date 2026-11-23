@@ -8,6 +8,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
@@ -220,7 +222,7 @@ func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 	}, nil
 }
 
-func ListModels(c *gin.Context, modelType int) {
+func visibleModels(c *gin.Context) ([]dto.OpenAIModels, error) {
 	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
 	if !acceptUnsetRatioModel {
 		userId := c.GetInt("id")
@@ -235,11 +237,7 @@ func ListModels(c *gin.Context, modelType int) {
 	userModelNames := make([]string, 0)
 	groups, err := getModelListGroups(c)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "get user group failed",
-		})
-		return
+		return nil, err
 	}
 	ownerGroups := groups.ownerGroups
 	modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
@@ -274,6 +272,18 @@ func ListModels(c *gin.Context, modelType int) {
 	userOpenAiModels := make([]dto.OpenAIModels, 0, len(userModelNames))
 	for _, modelName := range userModelNames {
 		userOpenAiModels = append(userOpenAiModels, buildOpenAIModel(modelName, ownerByModel))
+	}
+	return userOpenAiModels, nil
+}
+
+func ListModels(c *gin.Context, modelType int) {
+	userOpenAiModels, err := visibleModels(c)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "get user group failed",
+		})
+		return
 	}
 
 	switch modelType {
@@ -359,8 +369,17 @@ func EnabledListModels(c *gin.Context) {
 }
 
 func RetrieveModel(c *gin.Context, modelType int) {
-	modelId := c.Param("model")
-	if aiModel, ok := openAIModelsMap[modelId]; ok {
+	modelId := strings.TrimPrefix(c.Param("model"), "/")
+	models, err := visibleModels(c)
+	if err != nil {
+		logger.LogError(c, "failed to resolve visible models: "+err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": types.OpenAIError{Message: i18n.T(c, i18n.MsgDatabaseError), Type: "server_error", Code: "model_lookup_failed"}})
+		return
+	}
+	for _, aiModel := range models {
+		if aiModel.Id != modelId {
+			continue
+		}
 		switch modelType {
 		case constant.ChannelTypeAnthropic:
 			c.JSON(200, dto.AnthropicModel{
@@ -372,15 +391,13 @@ func RetrieveModel(c *gin.Context, modelType int) {
 		default:
 			c.JSON(200, aiModel)
 		}
-	} else {
-		openAIError := types.OpenAIError{
-			Message: fmt.Sprintf("The model '%s' does not exist", modelId),
-			Type:    "invalid_request_error",
-			Param:   "model",
-			Code:    "model_not_found",
-		}
-		c.JSON(200, gin.H{
-			"error": openAIError,
-		})
+		return
 	}
+	openAIError := types.OpenAIError{
+		Message: fmt.Sprintf("The model '%s' does not exist", modelId),
+		Type:    "invalid_request_error",
+		Param:   "model",
+		Code:    "model_not_found",
+	}
+	c.JSON(200, gin.H{"error": openAIError})
 }

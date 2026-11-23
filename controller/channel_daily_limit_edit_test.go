@@ -12,12 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 单渠道编辑路径上「每日金额上限」的写入语义。
-//
-// 背景：Channel.Update() 走 DB.Updates(struct)，GORM 会跳过结构体零值，于是
-// daily_quota_limit = 0（清除上限）与 daily_limit_recover_minutes = 0（回到按日模式）都会被
-// 静默丢弃；Update() 也刻意不写限时恢复的两列。批量与按 Tag 两条路径早已改用 map 更新绕开
-// 这个坑，applyChannelDailyLimitEdit 是给单渠道路径补的第三条。
+// 单渠道编辑路径上「每日金额上限」的写入语义：显式零值、恢复周期与渠道配置
+// 都由 UpdateConfiguration 在同一事务中提交。
 
 func reloadTestChannel(t *testing.T, id int) *model.Channel {
 	t.Helper()
@@ -38,7 +34,7 @@ func TestApplyChannelDailyLimitEdit_ClearsLimit(t *testing.T) {
 	patch.Channel = *ch
 	patch.DailyQuotaLimit = 0
 
-	require.NoError(t, applyChannelDailyLimitEdit(ch.Id, buildChannelDailyLimitEdit(patch, map[string]any{
+	require.NoError(t, patch.UpdateConfiguration(buildChannelDailyLimitEdit(patch, map[string]any{
 		"daily_quota_limit": float64(0),
 	})))
 
@@ -57,7 +53,7 @@ func TestApplyChannelDailyLimitEdit_IgnoresAbsentFields(t *testing.T) {
 	patch.Channel = *ch
 	patch.DailyQuotaLimit = 0 // 客户端没传该字段时，解码后就是零值
 
-	require.NoError(t, applyChannelDailyLimitEdit(ch.Id, buildChannelDailyLimitEdit(patch, map[string]any{
+	require.NoError(t, patch.UpdateConfiguration(buildChannelDailyLimitEdit(patch, map[string]any{
 		"name": "unrelated edit",
 	})))
 
@@ -81,7 +77,7 @@ func TestApplyChannelDailyLimitEdit_WritesDayModeWithoutAutoRecover(t *testing.T
 	patch.DailyLimitAutoRecover = &off
 	patch.DailyLimitRecoverMinutes = 0
 
-	require.NoError(t, applyChannelDailyLimitEdit(ch.Id, buildChannelDailyLimitEdit(patch, map[string]any{
+	require.NoError(t, patch.UpdateConfiguration(buildChannelDailyLimitEdit(patch, map[string]any{
 		"daily_quota_limit":           float64(900000),
 		"daily_limit_auto_recover":    float64(0),
 		"daily_limit_recover_minutes": float64(0),
@@ -108,14 +104,14 @@ func TestApplyChannelDailyLimitEdit_TimedModeKeepsRoundUnlessIntervalChanges(t *
 	patch.DailyLimitAutoRecover = &off
 	patch.DailyLimitRecoverMinutes = 30
 	echo := map[string]any{"daily_limit_auto_recover": float64(0), "daily_limit_recover_minutes": float64(30)}
-	require.NoError(t, applyChannelDailyLimitEdit(ch.Id, buildChannelDailyLimitEdit(patch, echo)))
+	require.NoError(t, patch.UpdateConfiguration(buildChannelDailyLimitEdit(patch, echo)))
 	got := reloadTestChannel(t, ch.Id)
 	assert.EqualValues(t, 1_000, got.DailyLimitPeriodStart, "an echoed interval must keep the current round")
 	assert.True(t, got.GetDailyLimitAutoRecover(), "timed mode implies auto recovery")
 
 	before := common.GetTimestamp()
 	patch.DailyLimitRecoverMinutes = 45
-	require.NoError(t, applyChannelDailyLimitEdit(ch.Id, buildChannelDailyLimitEdit(patch, map[string]any{
+	require.NoError(t, patch.UpdateConfiguration(buildChannelDailyLimitEdit(patch, map[string]any{
 		"daily_limit_recover_minutes": float64(45),
 	})))
 	got = reloadTestChannel(t, ch.Id)
@@ -124,7 +120,7 @@ func TestApplyChannelDailyLimitEdit_TimedModeKeepsRoundUnlessIntervalChanges(t *
 }
 
 // TestUpdateChannel_ClearsDailyLimitEndToEnd 走完整的 PUT /api/channel/ 处理函数，
-// 把 applyChannelDailyLimitEdit 钉在调用点上。
+// 验证显式零值经过统一事务入口落库。
 func TestUpdateChannel_ClearsDailyLimitEndToEnd(t *testing.T) {
 	requireDB(t)
 	ch := mkChannel(t, func(c *model.Channel) { c.DailyQuotaLimit = 500000 })

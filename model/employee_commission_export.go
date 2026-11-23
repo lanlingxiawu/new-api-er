@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/shopspring/decimal"
 )
 
 // CommissionMonthlyEmployeeRow 是月度统计导出的单员工一行：名字、等级、业绩、分红。
@@ -160,7 +161,7 @@ func GetCommissionMonthlyEmployeeExport(startTime, endTime int64) (*CommissionMo
 				row.TierLevel = t.Level
 				row.TierGroup = t.Group
 				row.TierRate = t.Rate
-				row.CommissionQuota = int64(float64(profit) * t.Rate)
+				row.CommissionQuota = common.Int64FromDecimal(decimal.NewFromInt(profit).Mul(decimal.NewFromFloat(t.Rate)), 0)
 			}
 		}
 		row.CommissionUsd = common.QuotaToUSD(row.CommissionQuota)

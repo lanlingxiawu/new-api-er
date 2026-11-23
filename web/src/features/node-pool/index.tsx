@@ -44,10 +44,27 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { StaticDataTable } from '@/components/data-table/static/static-data-table'
 import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
 
 import { deleteNode, getNodeAccounts, getNodes } from './api'
@@ -387,26 +404,25 @@ function AccountsTable({
               startTransition(() => setPage(1))
             }}
           />
-          <div className='flex rounded-md border text-xs'>
-            {(['all', 'online', 'offline'] as StatusFilter[]).map((s) => (
-              <button
-                key={s}
-                type='button'
-                onClick={() => {
-                  setFilterStatus(s)
-                  startTransition(() => setPage(1))
-                }}
-                className={cn(
-                  'px-2.5 py-1 first:rounded-l-md last:rounded-r-md transition-colors',
-                  filterStatus === s
-                    ? 'bg-primary text-primary-foreground'
-                    : 'hover:bg-muted'
-                )}
-              >
-                {statusFilterLabels[s]}
-              </button>
+          <ToggleGroup
+            value={[filterStatus]}
+            variant='outline'
+            size='sm'
+            aria-label={t('Status')}
+            onValueChange={(values) => {
+              const next = values.find((value) => value !== filterStatus)
+              if (next) {
+                setFilterStatus(next as StatusFilter)
+                startTransition(() => setPage(1))
+              }
+            }}
+          >
+            {(['all', 'online', 'offline'] as StatusFilter[]).map((value) => (
+              <ToggleGroupItem key={value} value={value}>
+                {statusFilterLabels[value]}
+              </ToggleGroupItem>
             ))}
-          </div>
+          </ToggleGroup>
         </div>
       )}
 
@@ -432,53 +448,61 @@ function AccountsTable({
           </div>
         )}
         {hasData && (
-          <table className='w-full text-sm'>
-            <thead className='bg-card sticky top-0 z-10'>
-              <tr className='text-muted-foreground border-b text-left text-xs'>
-                <th className='pt-3 pr-3 pb-2 font-medium'>{t('ID')}</th>
-                <th className='pt-3 pr-3 pb-2 font-medium'>{t('Name')}</th>
-                <th className='pt-3 pr-3 pb-2 font-medium'>{t('Status')}</th>
-                <th className='pt-3 pr-3 pb-2 text-right font-medium'>
+          <StaticDataTable tableClassName='text-sm'>
+            <TableHeader className='bg-card sticky top-0 z-10'>
+              <TableRow className='text-muted-foreground border-b text-left text-xs'>
+                <TableHead className='pt-3 pr-3 pb-2 font-medium'>
+                  {t('ID')}
+                </TableHead>
+                <TableHead className='pt-3 pr-3 pb-2 font-medium'>
+                  {t('Name')}
+                </TableHead>
+                <TableHead className='pt-3 pr-3 pb-2 font-medium'>
+                  {t('Status')}
+                </TableHead>
+                <TableHead className='pt-3 pr-3 pb-2 text-right font-medium'>
                   {t('Requests')}
-                </th>
-                <th className='pt-3 pr-3 pb-2 text-right font-medium'>
+                </TableHead>
+                <TableHead className='pt-3 pr-3 pb-2 text-right font-medium'>
                   {t('Token Count')}
-                </th>
-                <th className='pt-3 pr-3 pb-2 text-right font-medium'>
+                </TableHead>
+                <TableHead className='pt-3 pr-3 pb-2 text-right font-medium'>
                   {t('Account Cost')}
-                </th>
-                <th className='pt-3 pr-3 pb-2 text-right font-medium'>
+                </TableHead>
+                <TableHead className='pt-3 pr-3 pb-2 text-right font-medium'>
                   {t('User Cost')}
-                </th>
-                <th className='pt-3 pb-2 text-right font-medium'>
+                </TableHead>
+                <TableHead className='pt-3 pb-2 text-right font-medium'>
                   {t('Used / Total')}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {pageAccounts.map((acc) => (
-                <tr
+                <TableRow
                   key={acc.id}
                   className='hover:bg-muted/40 border-b last:border-b-0'
                 >
-                  <td className='py-2 pr-3 font-mono text-xs'>{acc.id}</td>
-                  <td className='py-2 pr-3'>{acc.name || '–'}</td>
-                  <td className='py-2 pr-3'>
+                  <TableCell className='py-2 pr-3 font-mono text-xs'>
+                    {acc.id}
+                  </TableCell>
+                  <TableCell className='py-2 pr-3'>{acc.name || '–'}</TableCell>
+                  <TableCell className='py-2 pr-3'>
                     <AccountStatusBadge status={acc.status} />
-                  </td>
-                  <td className='py-2 pr-3 text-right tabular-nums'>
+                  </TableCell>
+                  <TableCell className='py-2 pr-3 text-right tabular-nums'>
                     {acc.req ?? 0}
-                  </td>
-                  <td className='py-2 pr-3 text-right tabular-nums'>
+                  </TableCell>
+                  <TableCell className='py-2 pr-3 text-right tabular-nums'>
                     {acc.tokens ?? 0}
-                  </td>
-                  <td className='py-2 pr-3 text-right tabular-nums'>
+                  </TableCell>
+                  <TableCell className='py-2 pr-3 text-right tabular-nums'>
                     ${formatNumber(acc.account_cost)}
-                  </td>
-                  <td className='py-2 pr-3 text-right tabular-nums'>
+                  </TableCell>
+                  <TableCell className='py-2 pr-3 text-right tabular-nums'>
                     ${formatNumber(acc.user_cost)}
-                  </td>
-                  <td className='py-2 text-right tabular-nums'>
+                  </TableCell>
+                  <TableCell className='py-2 text-right tabular-nums'>
                     {acc.used_capacity != null || acc.total_capacity != null ? (
                       <div className='flex flex-col items-end gap-1'>
                         <span>
@@ -497,36 +521,52 @@ function AccountsTable({
                     ) : (
                       '–'
                     )}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </StaticDataTable>
         )}
       </div>
 
       {/* 分页栏 — 固定底部，不随表格滚动 */}
       {hasData && (
-        <div className='text-muted-foreground flex shrink-0 items-center justify-between border-t px-4 py-2.5 text-xs'>
+        <div className='text-muted-foreground flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-4 py-2.5 text-xs'>
           <div className='flex items-center gap-2'>
             <span>
               {(page - 1) * pageSize + 1}–
               {Math.min(page * pageSize, filtered.length)} / {filtered.length}
             </span>
-            <select
-              value={pageSize}
-              onChange={(e) => {
-                setPageSize(Number(e.target.value))
-                startTransition(() => setPage(1))
+            <Select
+              items={PAGE_SIZE_OPTIONS.map((value) => ({
+                value: String(value),
+                label: `${value} / ${t('page')}`,
+              }))}
+              value={String(pageSize)}
+              onValueChange={(value) => {
+                if (value) {
+                  setPageSize(Number(value))
+                  startTransition(() => setPage(1))
+                }
               }}
-              className='bg-background h-6 rounded border px-1 text-xs'
             >
-              {PAGE_SIZE_OPTIONS.map((n) => (
-                <option key={n} value={n}>
-                  {n} / {t('page')}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger
+                size='sm'
+                className='w-auto'
+                aria-label={t('Rows per page')}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {PAGE_SIZE_OPTIONS.map((value) => (
+                    <SelectItem key={value} value={String(value)}>
+                      {value} / {t('page')}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
           </div>
           <div className='flex items-center gap-1'>
             <Button

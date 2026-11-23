@@ -1,9 +1,12 @@
 package model
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -255,6 +258,49 @@ func TestDailyLimitEdit_RecoverMinutesChangeStartsNewPeriod(t *testing.T) {
 	_, err = UpdateChannelDailyLimitByIds([]int{ch.Id}, DailyLimitEdit{RecoverMinutes: &tooLong})
 	require.Error(t, err)
 	assert.Equal(t, 60, reloadChannel(t, ch.Id).DailyLimitRecoverMinutes, "an invalid edit writes nothing")
+}
+
+func TestDailyLimitEdit_CountsOnlyConfigurationChanges(t *testing.T) {
+	t.Run("configured", testDailyLimitChangeCount)
+	t.Run("sqlite", func(t *testing.T) {
+		db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "daily.db")), &gorm.Config{})
+		require.NoError(t, err)
+		pool, err := db.DB()
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, pool.Close()) })
+		require.NoError(t, db.AutoMigrate(&Channel{}))
+		previousDB, previousType := DB, common.MainDatabaseType()
+		DB = db
+		common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+		t.Cleanup(func() { DB = previousDB; common.SetMainDatabaseType(previousType) })
+		testDailyLimitChangeCount(t)
+	})
+}
+
+func testDailyLimitChangeCount(t *testing.T) {
+	t.Helper()
+	requireDB(t)
+	first := mkTimedChannel(t, 30, 1_000, nil)
+	second := mkTimedChannel(t, 60, 2_000, nil)
+	unselected := mkTimedChannel(t, 60, 3_000, nil)
+	for _, edit := range []DailyLimitEdit{
+		{RecoverMinutes: common.GetPointer(30)},
+		{QuotaLimit: common.GetPointer(int64(2_000_000))},
+		{AutoRecover: common.GetPointer(0)},
+	} {
+		changed, err := UpdateChannelDailyLimitByIds([]int{first.Id, second.Id, first.Id}, edit)
+		require.NoError(t, err)
+		if edit.RecoverMinutes != nil {
+			require.EqualValues(t, 1, changed)
+		} else {
+			require.EqualValues(t, 2, changed)
+		}
+		changed, err = UpdateChannelDailyLimitByIds([]int{first.Id, second.Id}, edit)
+		require.NoError(t, err)
+		require.Zero(t, changed, "saving identical configuration must not generate an alert")
+	}
+	require.EqualValues(t, 1_000_000, reloadChannel(t, unselected.Id).DailyQuotaLimit)
+	require.Equal(t, 60, reloadChannel(t, unselected.Id).DailyLimitRecoverMinutes)
 }
 
 func TestChannelLimitPeriodUsage_UpsertGetAndCleanup(t *testing.T) {

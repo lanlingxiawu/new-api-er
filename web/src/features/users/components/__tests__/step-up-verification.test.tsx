@@ -24,9 +24,12 @@ import { useEffect } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 
 import type { User } from '../../types'
 import { DataTableRowActions } from '../data-table-row-actions'
+import { UsersClearAccessTokensDialog } from '../users-clear-access-tokens-dialog'
+import { UsersClearAPIKeysDialog } from '../users-clear-api-keys-dialog'
 import { UsersDeleteDialog } from '../users-delete-dialog'
 import { UsersProvider, useUsers } from '../users-provider'
 
@@ -83,6 +86,257 @@ function OpenDeleteDialog() {
   return null
 }
 
+function OpenClearAPIKeysDialog() {
+  const users = useUsers()
+  useEffect(() => {
+    users.setCurrentRow(target)
+    users.setOpen('clear-api-keys')
+    // Seed the target once, just like opening its row menu.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  return <UsersClearAPIKeysDialog />
+}
+
+function OpenClearAccessTokensDialog() {
+  const users = useUsers()
+  useEffect(() => {
+    users.setCurrentRow(target)
+    users.setOpen('clear-access-tokens')
+    // Seed the target once, just like opening its row menu.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  return <UsersClearAccessTokensDialog />
+}
+
+it.each([0, 21])(
+  'clears access tokens with a target-bound proof and reports %s revoked',
+  async (count) => {
+    const proof = mockVerification(
+      'admin.user.access_tokens.delete_all',
+      'access-clear-proof'
+    )
+    const post = vi.spyOn(api, 'post').mockResolvedValue(proof)
+    const del = vi.spyOn(api, 'delete').mockResolvedValue({
+      data: { success: true, data: { revoked_count: count } },
+    })
+    renderInProvider(<OpenClearAccessTokensDialog />)
+    expect(api.get).not.toHaveBeenCalled()
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Clear access tokens' })
+    )
+    await screen.findByLabelText('Authenticator code or backup code')
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(del).not.toHaveBeenCalled()
+    await completeTwoFactorVerification()
+    await waitFor(() =>
+      expect(del).toHaveBeenCalledWith(
+        '/api/user/2/access_tokens',
+        expect.objectContaining({
+          headers: { 'X-Security-Proof': 'access-clear-proof' },
+          singleUseAuthorization: true,
+        })
+      )
+    )
+    expect(post).toHaveBeenCalledWith(
+      '/api/verify',
+      expect.objectContaining({
+        scope: 'admin.user.access_tokens.delete_all',
+        context: { user_id: 2 },
+      }),
+      expect.anything()
+    )
+    expect(
+      vi
+        .mocked(api.get)
+        .mock.calls.every(([url]) => url === '/api/verify/methods')
+    ).toBe(true)
+    await waitFor(() =>
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    )
+  }
+)
+
+it('cancelling access token verification keeps credentials untouched', async () => {
+  mockVerification('admin.user.access_tokens.delete_all', 'access-clear-proof')
+  const del = vi.spyOn(api, 'delete')
+  renderInProvider(<OpenClearAccessTokensDialog />)
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Clear access tokens' })
+  )
+  await screen.findByLabelText('Authenticator code or backup code')
+  await userEvent.keyboard('{Escape}')
+  await screen.findByRole('alertdialog')
+  expect(del).not.toHaveBeenCalled()
+})
+
+it('retries failed access token clearing only after new verification', async () => {
+  const proof = mockVerification(
+    'admin.user.access_tokens.delete_all',
+    'access-first-proof'
+  )
+  const post = vi
+    .spyOn(api, 'post')
+    .mockResolvedValueOnce(proof)
+    .mockResolvedValueOnce({
+      data: {
+        ...proof.data,
+        data: { ...proof.data.data, proof_token: 'access-retry-proof' },
+      },
+    })
+  const del = vi
+    .spyOn(api, 'delete')
+    .mockResolvedValueOnce({
+      data: { success: false, message: 'Please retry.' },
+    })
+    .mockResolvedValueOnce({
+      data: { success: true, data: { revoked_count: 0 } },
+    })
+  renderInProvider(<OpenClearAccessTokensDialog />)
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Clear access tokens' })
+  )
+  await completeTwoFactorVerification()
+  await waitFor(() => expect(del).toHaveBeenCalledTimes(1))
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Clear access tokens' })
+  )
+  await completeTwoFactorVerification()
+  await waitFor(() => expect(del).toHaveBeenCalledTimes(2))
+  expect(post).toHaveBeenCalledTimes(2)
+  expect(del.mock.calls[1][1]).toMatchObject({
+    headers: { 'X-Security-Proof': 'access-retry-proof' },
+  })
+})
+
+it('prevents duplicate access token clearing while pending', async () => {
+  const proof = mockVerification(
+    'admin.user.access_tokens.delete_all',
+    'access-clear-proof'
+  )
+  vi.spyOn(api, 'post').mockResolvedValue(proof)
+  let finish: (value: unknown) => void = () => {}
+  const del = vi.spyOn(api, 'delete').mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      })
+  )
+  renderInProvider(<OpenClearAccessTokensDialog />)
+  await userEvent.dblClick(
+    await screen.findByRole('button', { name: 'Clear access tokens' })
+  )
+  await completeTwoFactorVerification()
+  const button = await screen.findByRole('button', { name: 'Clearing...' })
+  expect(button).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+  await userEvent.click(button)
+  expect(del).toHaveBeenCalledTimes(1)
+  finish({ data: { success: true, data: { revoked_count: 1 } } })
+  await waitFor(() =>
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  )
+})
+
+it('clears all API keys with a target-bound proof without fetching a key list', async () => {
+  const proof = mockVerification(
+    'admin.user.api_keys.delete_all',
+    'clear-proof'
+  )
+  const post = vi.spyOn(api, 'post').mockResolvedValue(proof)
+  const del = vi.spyOn(api, 'delete').mockResolvedValue({
+    data: { success: true, data: { deleted_count: 101, completed: true } },
+  })
+  renderInProvider(<OpenClearAPIKeysDialog />)
+  expect(api.get).not.toHaveBeenCalled()
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Clear API keys' })
+  )
+  await screen.findByLabelText('Authenticator code or backup code')
+  expect(del).not.toHaveBeenCalled()
+  await completeTwoFactorVerification()
+  await waitFor(() =>
+    expect(del).toHaveBeenCalledWith(
+      '/api/user/2/tokens',
+      expect.objectContaining({
+        headers: { 'X-Security-Proof': 'clear-proof' },
+        singleUseAuthorization: true,
+      })
+    )
+  )
+  expect(post).toHaveBeenCalledWith(
+    '/api/verify',
+    expect.objectContaining({
+      scope: 'admin.user.api_keys.delete_all',
+      context: { user_id: 2 },
+    }),
+    expect.anything()
+  )
+  expect(
+    vi
+      .mocked(api.get)
+      .mock.calls.every(([url]) => url === '/api/verify/methods')
+  ).toBe(true)
+  await waitFor(() =>
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  )
+})
+
+it('cancelling API key verification does not clear keys', async () => {
+  mockVerification('admin.user.api_keys.delete_all', 'clear-proof')
+  const del = vi.spyOn(api, 'delete')
+  renderInProvider(<OpenClearAPIKeysDialog />)
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Clear API keys' })
+  )
+  await screen.findByLabelText('Authenticator code or backup code')
+  await userEvent.keyboard('{Escape}')
+  await screen.findByRole('alertdialog')
+  expect(del).not.toHaveBeenCalled()
+})
+
+it('keeps a failed clear operation open and gets a fresh proof before retrying', async () => {
+  const proof = mockVerification(
+    'admin.user.api_keys.delete_all',
+    'first-proof'
+  )
+  const post = vi
+    .spyOn(api, 'post')
+    .mockResolvedValueOnce(proof)
+    .mockResolvedValueOnce({
+      data: {
+        ...proof.data,
+        data: { ...proof.data.data, proof_token: 'retry-proof' },
+      },
+    })
+  const del = vi
+    .spyOn(api, 'delete')
+    .mockResolvedValueOnce({
+      data: {
+        success: false,
+        message: 'Please retry.',
+        data: { deleted_count: 100, completed: false },
+      },
+    })
+    .mockResolvedValueOnce({
+      data: { success: true, data: { deleted_count: 1, completed: true } },
+    })
+  renderInProvider(<OpenClearAPIKeysDialog />)
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Clear API keys' })
+  )
+  await completeTwoFactorVerification()
+  await waitFor(() => expect(del).toHaveBeenCalledTimes(1))
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Clear API keys' })
+  )
+  await completeTwoFactorVerification()
+  await waitFor(() => expect(del).toHaveBeenCalledTimes(2))
+  expect(post).toHaveBeenCalledTimes(2)
+  expect(del.mock.calls[1][1]).toMatchObject({
+    headers: { 'X-Security-Proof': 'retry-proof' },
+  })
+})
+
 function renderInProvider(children: React.ReactNode) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -105,6 +359,65 @@ async function completeTwoFactorVerification() {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  useAuthStore.getState().auth.setUser(null)
+})
+
+it.each([1, 10, 100])(
+  'only offers clearing for lower roles (operator role %s)',
+  async (role) => {
+    useAuthStore.getState().auth.setUser({ id: 1, username: 'operator', role })
+    renderInProvider(
+      <DataTableRowActions
+        row={{ original: { ...target, role: 10 } } as Row<User>}
+      />
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+    if (role === 100) {
+      expect(
+        await screen.findByRole('menuitem', { name: 'Clear access tokens' })
+      ).toBeInTheDocument()
+      expect(
+        await screen.findByRole('menuitem', { name: 'Clear API keys' })
+      ).toBeInTheDocument()
+    } else {
+      expect(
+        screen.queryByRole('menuitem', { name: 'Clear access tokens' })
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('menuitem', { name: 'Clear API keys' })
+      ).not.toBeInTheDocument()
+    }
+  }
+)
+
+it('disables duplicate clearing submissions while the request is pending', async () => {
+  const proof = mockVerification(
+    'admin.user.api_keys.delete_all',
+    'clear-proof'
+  )
+  vi.spyOn(api, 'post').mockResolvedValue(proof)
+  let finish: (value: unknown) => void = () => {}
+  const del = vi.spyOn(api, 'delete').mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      })
+  )
+  renderInProvider(<OpenClearAPIKeysDialog />)
+  await userEvent.dblClick(
+    await screen.findByRole('button', { name: 'Clear API keys' })
+  )
+  await completeTwoFactorVerification()
+  const button = await screen.findByRole('button', { name: 'Clearing...' })
+  expect(button).toBeDisabled()
+  await userEvent.click(button)
+  expect(del).toHaveBeenCalledTimes(1)
+  finish({
+    data: { success: true, data: { deleted_count: 0, completed: true } },
+  })
+  await waitFor(() =>
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  )
 })
 
 it('deleting a user sends the request only with a single-use proof for that user', async () => {
@@ -157,6 +470,62 @@ it('cancelling verification leaves the user untouched and returns to the confirm
   await userEvent.keyboard('{Escape}')
   await screen.findByRole('alertdialog')
   expect(del).not.toHaveBeenCalled()
+})
+
+it('unlocking sign-in requires a proof bound to the user and unlock action', async () => {
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 1, username: 'operator', role: 10 })
+  const proof = mockVerification('admin.user.manage', 'unlock-proof')
+  const post = vi.spyOn(api, 'post').mockImplementation(async (url) => {
+    if (url === '/api/verify') return proof
+    if (url === '/api/user/manage') return { data: { success: true } }
+    throw new Error(`Unexpected POST ${url}`)
+  })
+  renderInProvider(
+    <DataTableRowActions
+      row={
+        {
+          original: {
+            ...target,
+            login_protection: {
+              locked: true,
+              failed_attempts: 5,
+              locked_at: 1,
+            },
+          },
+        } as Row<User>
+      }
+    />
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+  await userEvent.click(
+    await screen.findByRole('menuitem', { name: 'Unlock sign-in' })
+  )
+  expect(post).not.toHaveBeenCalledWith(
+    '/api/user/manage',
+    expect.anything(),
+    expect.anything()
+  )
+  await completeTwoFactorVerification()
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith(
+      '/api/user/manage',
+      { id: 2, action: 'unlock_login' },
+      expect.objectContaining({
+        headers: { 'X-Security-Proof': 'unlock-proof' },
+        singleUseAuthorization: true,
+      })
+    )
+  )
+  expect(post).toHaveBeenCalledWith(
+    '/api/verify',
+    expect.objectContaining({
+      scope: 'admin.user.manage',
+      context: { user_id: 2, action: 'unlock_login' },
+    }),
+    expect.anything()
+  )
 })
 
 it('disabling a user from the row menu binds the proof to the user and action', async () => {

@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -30,7 +32,11 @@ func manageUserQuota(c *gin.Context, req ManageRequest) {
 		params["route"] = c.FullPath()
 	}
 	success := false
+	targetRole := 0
 	defer func() {
+		if success {
+			params["target_role"] = targetRole
+		}
 		content := auditContentEN(action, params)
 		if !success {
 			// Failed requests have no committed balance changes to render.
@@ -61,15 +67,20 @@ func manageUserQuota(c *gin.Context, req ManageRequest) {
 			common.ApiErrorT(c, "User does not exist")
 		case errors.Is(err, model.ErrWalletQuotaLimitExceeded):
 			params["failure_reason"] = "quota_limit_exceeded"
-			common.ApiError(c, err)
+			common.ApiErrorI18n(c, i18n.MsgAdminTokenQuotaLimit)
 		default:
 			params["failure_reason"] = "database_error"
-			common.ApiError(c, err)
+			logger.LogError(c, "manual user quota adjustment failed: "+err.Error())
+			common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		}
 		return
 	}
 
 	params["target_username"] = adjustment.Username
+	targetRole = adjustment.Role
+	target := model.AuditTarget("user", adjustment.UserID, adjustment.Username)
+	target.Consistency = "atomic"
+	model.RequestAuditChanges(c).Add(target, model.AuditFields{"quota": adjustment.Before}, model.AuditFields{"quota": adjustment.After})
 	params["from"] = adjustment.Before
 	params["to"] = adjustment.After
 	if req.Mode != "override" {
@@ -79,5 +90,9 @@ func manageUserQuota(c *gin.Context, req ManageRequest) {
 	operation := model.AuditOperation{Action: action, Params: params}
 	model.RecordLogWithAdminInfo(adjustment.UserID, model.LogTypeTopup,
 		auditContentEN(action, params), auditOperatorInfo(c), &operation, c)
+	if c.GetBool("use_access_token") {
+		common.ApiSuccess(c, gin.H{"id": adjustment.UserID, "quota_before": adjustment.Before, "quota": adjustment.After, "quota_per_unit": common.QuotaPerUnit})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }

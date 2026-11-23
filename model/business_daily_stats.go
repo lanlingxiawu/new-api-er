@@ -801,21 +801,33 @@ func sortConsumptionCostChannels(items []*ConsumptionCostChannelStat, sortBy, so
 		right := items[j]
 		switch sortBy {
 		case "channel_name":
+			if left.ChannelName == right.ChannelName {
+				return left.ChannelId < right.ChannelId
+			}
 			if desc {
 				return left.ChannelName > right.ChannelName
 			}
 			return left.ChannelName < right.ChannelName
 		case "cost_ratio":
+			if left.CostRatio == right.CostRatio {
+				return left.ChannelId < right.ChannelId
+			}
 			if desc {
 				return left.CostRatio > right.CostRatio
 			}
 			return left.CostRatio < right.CostRatio
 		case "consumption_quota":
+			if left.TotalRevenue == right.TotalRevenue {
+				return left.ChannelId < right.ChannelId
+			}
 			if desc {
 				return left.TotalRevenue > right.TotalRevenue
 			}
 			return left.TotalRevenue < right.TotalRevenue
 		case "est_cost_quota":
+			if left.TotalCost == right.TotalCost {
+				return left.ChannelId < right.ChannelId
+			}
 			if desc {
 				return left.TotalCost > right.TotalCost
 			}
@@ -829,6 +841,9 @@ func sortConsumptionCostChannels(items []*ConsumptionCostChannelStat, sortBy, so
 			if right.TotalRevenue != 0 {
 				rightMargin = float64(right.TotalRevenue-right.TotalCost) / float64(right.TotalRevenue)
 			}
+			if leftMargin == rightMargin {
+				return left.ChannelId < right.ChannelId
+			}
 			if desc {
 				return leftMargin > rightMargin
 			}
@@ -836,6 +851,9 @@ func sortConsumptionCostChannels(items []*ConsumptionCostChannelStat, sortBy, so
 		default:
 			leftProfit := left.TotalRevenue - left.TotalCost
 			rightProfit := right.TotalRevenue - right.TotalCost
+			if leftProfit == rightProfit {
+				return left.ChannelId < right.ChannelId
+			}
 			if desc {
 				return leftProfit > rightProfit
 			}
@@ -878,6 +896,7 @@ func GetConsumptionCostByChannelPageWithPlan(plan *ResolvedQueryPlan, page, page
 			"CASE WHEN COALESCE(SUM(platform_channel_daily_stats.revenue_quota),0) <> 0 THEN (COALESCE(SUM(platform_channel_daily_stats.revenue_quota),0) - COALESCE(SUM(platform_channel_daily_stats.cost_quota),0)) * 1.0 / COALESCE(SUM(platform_channel_daily_stats.revenue_quota),0) ELSE 0 END as gross_margin").
 			Group("platform_channel_daily_stats.channel_id").
 			Order(sortExpr + " " + orderDirection).
+			Order("platform_channel_daily_stats.channel_id ASC").
 			Offset(offset).
 			Limit(pageSize).
 			Scan(&rows).Error

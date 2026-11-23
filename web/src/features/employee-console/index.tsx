@@ -1,12 +1,17 @@
 import { useQuery } from '@tanstack/react-query'
 import {
   type ColumnDef,
-  type PaginationState,
   getCoreRowModel,
   getPaginationRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { BadgeDollarSign, DollarSign, TrendingUp, Wallet } from 'lucide-react'
+import {
+  AlertTriangle,
+  BadgeDollarSign,
+  DollarSign,
+  TrendingUp,
+  Wallet,
+} from 'lucide-react'
 import { useMemo, useState, type ComponentType, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -30,8 +35,14 @@ import {
 } from '@/features/business/format'
 import { CommissionCalendarSection } from '@/features/employees/components/commission-financial-calendar'
 import { UsageLogIdHover } from '@/features/employees/components/usage-log-id-hover'
-import type { CommissionLog } from '@/features/employees/types'
+import { useCommissionLogPage } from '@/features/employees/hooks/use-commission-log-page'
+import { COMMISSION_LOG_MAX_RANGE_SECONDS } from '@/features/employees/lib/commission-log-query'
+import type {
+  CommissionLog,
+  CommissionLogFilters,
+} from '@/features/employees/types'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
+import { getRollingDateRange } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
 import {
@@ -298,34 +309,24 @@ function ResetPeriodStats({ effectiveRate }: { effectiveRate: number }) {
 function CommissionHistory() {
   const { t } = useTranslation()
   const columns = useMyCommissionColumns()
-  const [filterForm, setFilterForm] = useState({
+  const [filterForm, setFilterForm] = useState(() => ({
     modelName: '',
     channelId: '',
     lossStatus: 'all' as 'all' | 'loss' | 'normal',
-    start: undefined as Date | undefined,
-    end: undefined as Date | undefined,
-  })
-  const [filters, setFilters] = useState<{
-    model_name?: string
-    channel_id?: number
-    loss_status?: 'loss' | 'normal'
-    start_time?: number
-    end_time?: number
-  }>({})
-  const [pagination, setPagination] = useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: 10,
-  })
-
-  const { data, isLoading } = useQuery({
-    queryKey: ['my-commission-logs', pagination, filters],
-    queryFn: () =>
-      getMyCommissionLogs({
-        page: pagination.pageIndex + 1,
-        page_size: pagination.pageSize,
-        ...filters,
-      }),
-  })
+    ...getRollingDateRange(1),
+  }))
+  const [filters, setFilters] = useState<CommissionLogFilters>(() => ({
+    start_time: Math.floor(filterForm.start.getTime() / 1000),
+    end_time: Math.floor(filterForm.end.getTime() / 1000),
+  }))
+  const {
+    query,
+    pagination,
+    onPaginationChange,
+    resetPagination,
+    hasNextPage,
+  } = useCommissionLogPage('my-commission-logs', filters, getMyCommissionLogs)
+  const { data, isLoading, isFetching, isError, refetch } = query
 
   const applyFilters = () => {
     const channelId = Number(filterForm.channelId)
@@ -339,34 +340,33 @@ function CommissionHistory() {
       ...(filterForm.lossStatus !== 'all'
         ? { loss_status: filterForm.lossStatus }
         : {}),
-      ...(filterForm.start
-        ? { start_time: Math.floor(filterForm.start.getTime() / 1000) }
-        : {}),
-      ...(filterForm.end
-        ? { end_time: Math.floor(filterForm.end.getTime() / 1000) }
-        : {}),
+      start_time: Math.floor(filterForm.start.getTime() / 1000),
+      end_time: Math.floor(filterForm.end.getTime() / 1000),
     })
-    setPagination((current) => ({ ...current, pageIndex: 0 }))
+    resetPagination()
   }
 
   const resetFilters = () => {
+    const range = getRollingDateRange(1)
     setFilterForm({
       modelName: '',
       channelId: '',
       lossStatus: 'all',
-      start: undefined,
-      end: undefined,
+      ...range,
     })
-    setFilters({})
-    setPagination((current) => ({ ...current, pageIndex: 0 }))
+    setFilters({
+      start_time: Math.floor(range.start.getTime() / 1000),
+      end_time: Math.floor(range.end.getTime() / 1000),
+    })
+    resetPagination()
   }
 
   const table = useReactTable({
-    data: data?.data?.items ?? [],
+    data: isError ? [] : (data?.data?.items ?? []),
     columns,
-    rowCount: data?.data?.total ?? 0,
+    pageCount: -1,
     state: { pagination },
-    onPaginationChange: setPagination,
+    onPaginationChange,
     manualPagination: true,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
@@ -385,7 +385,31 @@ function CommissionHistory() {
       table={table}
       columns={columns}
       isLoading={isLoading}
-      emptyTitle={t('No commission records yet')}
+      isFetching={isFetching}
+      showPagination={!isError}
+      cursorPagination={{ hasNextPage, isFetching, allowPageSizeChange: true }}
+      scrollResetKey={JSON.stringify([filters, pagination])}
+      emptyTitle={
+        isError
+          ? t('Failed to load commission records')
+          : t('No commission records yet')
+      }
+      emptyDescription={
+        isError ? t('Retry or narrow the time range.') : undefined
+      }
+      emptyIcon={isError ? <AlertTriangle /> : undefined}
+      emptyAction={
+        isError ? (
+          <Button
+            size='sm'
+            variant='outline'
+            disabled={isFetching}
+            onClick={() => void refetch()}
+          >
+            {t('Retry')}
+          </Button>
+        ) : undefined
+      }
       toolbar={
         <div className='flex flex-wrap items-center gap-2'>
           <Input
@@ -434,8 +458,12 @@ function CommissionHistory() {
             <CompactDateTimeRangePicker
               start={filterForm.start}
               end={filterForm.end}
+              maxRangeSec={COMMISSION_LOG_MAX_RANGE_SECONDS}
               onChange={({ start, end }) =>
-                setFilterForm((form) => ({ ...form, start, end }))
+                setFilterForm((form) => ({
+                  ...form,
+                  ...(start && end ? { start, end } : getRollingDateRange(1)),
+                }))
               }
             />
           </div>

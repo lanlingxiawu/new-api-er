@@ -550,6 +550,7 @@ export function ChannelsTable() {
     ...groupOptions.map((option) => ({
       ...option,
       label: sensitiveVisible ? option.label : '••••',
+      translateLabel: false,
     })),
   ]
 
@@ -583,7 +584,13 @@ export function ChannelsTable() {
           isLoading={isLoading}
           isFetching={isFetching}
           emptyTitle={t('No Channels Found')}
-          emptyDescription={hasActiveChannelFilters ? t('No channels match the current filters.') : t('No channels available. Create your first channel to get started.')}
+          emptyDescription={
+            hasActiveChannelFilters
+              ? t('No channels match the current filters.')
+              : t(
+                  'No channels available. Create your first channel to get started.'
+                )
+          }
           skeletonKeyPrefix='channel-skeleton'
           enableCardView
           viewMode={viewMode}
@@ -616,7 +623,12 @@ export function ChannelsTable() {
               />
             ),
             filters: [
-              { columnId: 'daily_limit', title: t('Daily Limit'), options: dailyLimitFilterOptions, singleSelect: true },
+              {
+                columnId: 'daily_limit',
+                title: t('Daily Limit'),
+                options: dailyLimitFilterOptions,
+                singleSelect: true,
+              },
               {
                 columnId: 'status',
                 title: t('Status'),

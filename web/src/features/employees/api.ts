@@ -2,10 +2,12 @@ import type { UsageLog } from '@/features/usage-logs/types'
 import { api } from '@/lib/api'
 import { appendUnixTimeRangeParams } from '@/lib/query-params'
 
+import { commissionLogQueryParams } from './lib/commission-log-query'
 import type {
   EmployeeProfile,
   EmployeeCustomer,
-  CommissionLog,
+  CommissionLogPage,
+  CommissionLogPageParams,
   ChannelCostConfig,
   CommissionSummaryItem,
   CommissionCalendarStats,
@@ -133,31 +135,14 @@ export async function getEmployeeCustomers(
 
 // Commission Logs
 
-export async function getCommissionLogs(params: {
-  page?: number
-  page_size?: number
-  employee_user_id?: number
-  customer_user_id?: number
-  model_name?: string
-  channel_id?: number
-  loss_status?: 'loss' | 'normal'
-  start_time?: number
-  end_time?: number
-}): Promise<PagedResponse<CommissionLog>> {
-  const q = new URLSearchParams()
-  if (params.page) q.set('page', String(params.page))
-  if (params.page_size) q.set('page_size', String(params.page_size))
-  if (params.employee_user_id) {
-    q.set('employee_user_id', String(params.employee_user_id))
-  }
-  if (params.customer_user_id) {
-    q.set('customer_user_id', String(params.customer_user_id))
-  }
-  if (params.model_name) q.set('model_name', params.model_name)
-  if (params.channel_id) q.set('channel_id', String(params.channel_id))
-  if (params.loss_status) q.set('loss_status', params.loss_status)
-  appendUnixTimeRangeParams(q, params)
-  const res = await api.get(`/api/admin/employee/commission?${q.toString()}`)
+export async function getCommissionLogs(
+  params: CommissionLogPageParams,
+  signal?: AbortSignal
+): Promise<ApiResponse<CommissionLogPage>> {
+  const res = await api.get(
+    `/api/admin/employee/commission?${commissionLogQueryParams(params)}`,
+    { signal }
+  )
   return res.data
 }
 

@@ -57,17 +57,8 @@ func validateChannelDailyLimitI18n(c *gin.Context, channel *model.Channel) bool 
 	return true
 }
 
-// buildChannelDailyLimitEdit 从单渠道编辑请求里摘出每日上限的配置字段。
-//
-// 恢复间隔即使原样回传也照常带上：是否开启新一轮由 DailyLimitEdit 在同一条 UPDATE 里按
-// 「新旧间隔是否不同」判断，原样回传不会重置本轮用量。
-//
-// 必须在 channel.Update() **之前**调用：Update() 末尾会 First(channel) 把整行从库里
-// 重新读回结构体，之后再读 channel.DailyQuotaLimit 拿到的是库里的旧值（正是被 GORM
-// 跳过、没能写进去的那个值），补写就变成了把旧值原样写回，等于什么都没做。
-//
-// 以 requestData 里字段是否出现为准，而不是看值是否非零：没传的字段一律不动，
-// 与 channelHasSensitiveChanges / clearChannelReadOnlyFields 的既有判定方式一致。
+// buildChannelDailyLimitEdit distinguishes omitted fields from explicit zeroes.
+// UpdateConfiguration writes these values in the same transaction as the channel.
 func buildChannelDailyLimitEdit(channel *PatchChannel, requestData map[string]any) model.DailyLimitEdit {
 	edit := model.DailyLimitEdit{}
 	if _, ok := requestData["daily_quota_limit"]; ok {
@@ -83,23 +74,6 @@ func buildChannelDailyLimitEdit(channel *PatchChannel, requestData map[string]an
 		edit.RecoverMinutes = &minutes
 	}
 	return edit
-}
-
-// applyChannelDailyLimitEdit 把每日上限字段单独落一次库。
-//
-// 为什么不能靠 Channel.Update()：它用 Updates(struct) 更新，GORM 会跳过结构体零值，
-// 于是 daily_quota_limit = 0（清除上限）与 daily_limit_recover_minutes = 0（回到按日模式）
-// 都会被静默丢弃；Update() 也刻意不写限时恢复的两列（见其注释）。批量与按 Tag 两条写入路径
-// 早已为此改用 map 更新，这里补齐第三条，让三条路径的写入语义一致。
-//
-// 取值合法性在更早的 validateChannel → ValidateSettings 已经校验过，因此这里返回的
-// 错误只可能来自数据库。
-func applyChannelDailyLimitEdit(channelId int, edit model.DailyLimitEdit) error {
-	if edit.IsEmpty() {
-		return nil
-	}
-	_, err := model.UpdateChannelDailyLimitByIds([]int{channelId}, edit)
-	return err
 }
 
 // BatchUpdateChannelDailyLimit 批量设置选中渠道的每日金额上限。
@@ -126,7 +100,7 @@ func BatchUpdateChannelDailyLimit(c *gin.Context) {
 		return
 	}
 
-	affected, err := model.UpdateChannelDailyLimitByIds(req.Ids, edit)
+	affected, err := model.UpdateChannelDailyLimitByIds(req.Ids, edit, model.RequestAuditChanges(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return

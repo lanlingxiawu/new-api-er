@@ -107,6 +107,8 @@ func (user *UserBase) GetSetting() dto.UserSetting {
 	if user.Setting != "" {
 		err := common.Unmarshal([]byte(user.Setting), &setting)
 		if err != nil {
+			setting.ClaudeStreamValidation = nil
+			setting.StreamProtocolValidation = nil
 			common.SysLog(common.LogText("failed to unmarshal setting: %s", err.Error()))
 		}
 	}

@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // readResetStat fetches a single reset-period daily stat row by its unique key,
@@ -25,6 +26,98 @@ func TestSwitchCommissionPeriod_InvalidTarget(t *testing.T) {
 	assert.Error(t, err)
 	_, err = SwitchCommissionPeriod(-5, true, true, 0)
 	assert.Error(t, err)
+}
+
+func TestSwitchPeriodResetIncludesNewerBaseline(t *testing.T) {
+	requireDB(t)
+	group := uniq("switch")
+	minimum := ctMkTier(t, group, 1, 0, 0.1)
+	higher := ctMkTier(t, group, 2, 1000, 0.2)
+	employee := mkUser(t, nil)
+	ctMkEmployeeProfile(t, employee.Id, 1)
+	ctMkTierLevel(t, employee.Id, higher.Id, 600_000)
+	empCleanupStats(t, employee.Id)
+	processed, err := resetEmployeeTiersForPeriodSwitch(500_000, []int{employee.Id}, 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+	level := reloadTierLevel(t, employee.Id)
+	require.Equal(t, minimum.Id, level.TierId)
+	require.EqualValues(t, 600_000, level.BaselineResetAt)
+	processed, err = resetEmployeeTiersForPeriodSwitch(500_000, []int{employee.Id}, 0)
+	require.NoError(t, err)
+	require.Zero(t, processed)
+	var logs int64
+	require.NoError(t, DB.Model(&EmployeeTierLog{}).Where("user_id = ? AND source = ?", employee.Id, "reset").Count(&logs).Error)
+	require.EqualValues(t, 1, logs)
+}
+
+func TestSwitchPeriodResetAdvancesBaselineAndPreservesOrphan(t *testing.T) {
+	requireDB(t)
+	group := uniq("switchbase")
+	minimum := ctMkTier(t, group, 1, 0, 0.1)
+	for _, tierID := range []int64{0, minimum.Id, -12345} {
+		employee := mkUser(t, nil)
+		ctMkTierLevel(t, employee.Id, tierID, 400_000)
+		empCleanupStats(t, employee.Id)
+		processed, err := resetEmployeeTiersForPeriodSwitch(500_000, []int{employee.Id}, 7)
+		require.NoError(t, err)
+		require.Equal(t, 1, processed)
+		level := reloadTierLevel(t, employee.Id)
+		require.Equal(t, tierID, level.TierId)
+		require.EqualValues(t, 500_000, level.BaselineResetAt)
+		require.Equal(t, 7, level.UpdatedBy)
+	}
+	processed, err := resetEmployeeTiersForPeriodSwitch(500_000, nil, 0)
+	require.NoError(t, err)
+	require.Zero(t, processed)
+}
+
+func TestSwitchPeriodResetBatchAndConcurrentUpdate(t *testing.T) {
+	requireDB(t)
+	group := uniq("switchbatch")
+	minimum := ctMkTier(t, group, 1, 0, 0.1)
+	higher := ctMkTier(t, group, 2, 1000, 0.2)
+	manual := ctMkTier(t, group, 3, 2000, 0.3)
+	levels := make([]EmployeeTierLevel, 301)
+	userIDs := make([]int, len(levels))
+	for index := range levels {
+		userIDs[index] = nextTestID()
+		levels[index] = EmployeeTierLevel{UserId: userIDs[index], TierId: higher.Id, BaselineResetAt: 600_000}
+	}
+	require.NoError(t, DB.Create(&levels).Error)
+	t.Cleanup(func() {
+		DB.Where("user_id IN ?", userIDs).Delete(&EmployeeTierLevel{})
+		DB.Where("user_id IN ?", userIDs).Delete(&EmployeeTierLog{})
+		for _, userID := range userIDs {
+			deleteTierLevelFromMem(userID)
+		}
+	})
+	injected := false
+	callbackName := "test:period-switch-concurrency"
+	require.NoError(t, DB.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		selected, ok := tx.Statement.Dest.(*[]EmployeeTierLevel)
+		if !ok || injected || len(*selected) == 0 || (*selected)[0].UserId != userIDs[30] {
+			return
+		}
+		injected = true
+		require.NoError(t, DB.Model(&EmployeeTierLevel{}).Where("user_id = ?", userIDs[30]).Update("tier_id", manual.Id).Error)
+	}))
+	t.Cleanup(func() { DB.Callback().Query().Remove(callbackName) })
+	processed, err := resetEmployeeTiersForPeriodSwitch(500_000, userIDs, 0)
+	require.ErrorContains(t, err, "concurrent tier update")
+	require.True(t, injected)
+	require.Equal(t, 30, processed)
+	require.Equal(t, manual.Id, reloadTierLevel(t, userIDs[30]).TierId)
+	require.Equal(t, minimum.Id, reloadTierLevel(t, userIDs[0]).TierId)
+	processed, err = resetEmployeeTiersForPeriodSwitch(500_000, userIDs, 0)
+	require.NoError(t, err)
+	require.Equal(t, 271, processed)
+	var logs int64
+	require.NoError(t, DB.Model(&EmployeeTierLog{}).Where("user_id IN ?", userIDs).Count(&logs).Error)
+	require.EqualValues(t, 301, logs)
+	processed, err = resetEmployeeTiersForPeriodSwitch(500_000, userIDs, 0)
+	require.NoError(t, err)
+	require.Zero(t, processed)
 }
 
 // ---------------------------------------------------------------------------

@@ -98,3 +98,22 @@ func TestGetCommissionMonthlyEmployeeExport_Historical(t *testing.T) {
 	assert.EqualValues(t, usdToQuota(7), row.ProfitQuota)
 	assert.EqualValues(t, int64(float64(usdToQuota(7))*0.20), row.CommissionQuota)
 }
+
+func TestCommissionExportRoundsAggregate(t *testing.T) {
+	requireDB(t)
+	tier := ctMkTier(t, uniq("round"), 1, 0, 0.5)
+	now := time.Now().Unix()
+	period := ResolveCommissionMonthlyPeriod(now)
+	for _, testCase := range []struct{ profit, want int64 }{{37, 19}, {-37, -19}, {0, 0}, {1, 1}, {8_000_000_001, 4_000_000_001}} {
+		employee := mkUser(t, nil)
+		ctMkEmployeeProfile(t, employee.Id, 1)
+		empCleanupStats(t, employee.Id)
+		ctMkTierLevel(t, employee.Id, tier.Id, period.PeriodStartAt)
+		ctMkResetStat(t, period.PeriodStartAt, localDayStart(now), employee.Id, testCase.profit, 0, testCase.profit, 0, 1)
+		export, err := GetCommissionMonthlyEmployeeExport(period.PeriodStartAt, now)
+		require.NoError(t, err)
+		row := findExportRow(export.Rows, employee.Id)
+		require.NotNil(t, row)
+		require.Equal(t, testCase.want, row.CommissionQuota)
+	}
+}

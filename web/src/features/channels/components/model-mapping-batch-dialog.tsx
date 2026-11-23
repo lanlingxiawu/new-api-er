@@ -229,7 +229,6 @@ export function ModelMappingBatchDialog(props: ModelMappingBatchDialogProps) {
               }}
             >
               <TabsList
-                variant='line'
                 className='grid w-full grid-cols-2 group-data-horizontal/tabs:h-auto'
                 aria-label={t('Select models')}
               >

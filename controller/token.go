@@ -375,6 +375,7 @@ func AddToken(c *gin.Context) {
 		return
 	}
 	params["id"] = cleanToken.Id
+	model.RequestAuditChanges(c).Add(model.SelfAuditTarget("token", cleanToken.Id, cleanToken.UserId, cleanToken.Name), nil, model.TokenAuditSnapshot(&cleanToken))
 	common.SetContextKey(c, constant.ContextKeyTokenAuditSucceeded, true)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -397,6 +398,7 @@ func DeleteToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	model.RequestAuditChanges(c).Add(model.SelfAuditTarget("token", token.Id, userId, token.Name), model.TokenAuditSnapshot(token), nil)
 	common.SetContextKey(c, constant.ContextKeyTokenAuditSucceeded, true)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -480,6 +482,7 @@ func UpdateToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	model.RequestAuditChanges(c).Add(model.SelfAuditTarget("token", cleanToken.Id, userId, cleanToken.Name), model.TokenAuditSnapshot(&previous), model.TokenAuditSnapshot(cleanToken))
 	params["name"] = cleanToken.Name
 	if statusOnly != "" {
 		params["from"], params["to"] = previous.Status, cleanToken.Status
@@ -532,7 +535,7 @@ func DeleteTokenBatch(c *gin.Context) {
 		return
 	}
 	userId := c.GetInt("id")
-	count, err := model.BatchDeleteTokens(tokenBatch.Ids, userId)
+	count, err := model.BatchDeleteTokens(tokenBatch.Ids, userId, model.RequestAuditChanges(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return

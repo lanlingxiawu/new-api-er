@@ -50,6 +50,7 @@ import type { AdminUserManageAction } from '@/features/auth/secure-verification'
 import { UserSubscriptionsDialog } from '@/features/subscriptions/components/dialogs/user-subscriptions-dialog'
 import { handleServerError } from '@/lib/handle-server-error'
 import { AuthOperationError } from '@/lib/secure-verification'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { manageUser, resetUserPasskey, resetUserTwoFA } from '../api'
 import {
@@ -65,6 +66,7 @@ import { useUsers } from './users-provider'
 
 const MANAGE_ACTION_TITLES: Record<AdminUserManageAction, string> = {
   disable: 'Verify to disable user',
+  unlock_login: 'Verify to unlock sign-in',
   enable: 'Verify to enable user',
   promote: 'Verify to promote user',
   demote: 'Verify to demote user',
@@ -77,6 +79,7 @@ interface DataTableRowActionsProps {
 export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { t } = useTranslation()
   const user = row.original
+  const operatorRole = useAuthStore((state) => state.auth.user?.role ?? 0)
   const {
     setOpen,
     setCurrentRow,
@@ -84,6 +87,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     requestVerification,
     verificationActive,
   } = useUsers()
+  const [managePending, setManagePending] = useState(false)
   const [resetPasskeyOpen, setResetPasskeyOpen] = useState(false)
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
@@ -99,7 +103,19 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     setOpen('delete')
   }
 
+  const handleClearAPIKeys = () => {
+    setCurrentRow(user)
+    setOpen('clear-api-keys')
+  }
+
+  const handleClearAccessTokens = () => {
+    setCurrentRow(user)
+    setOpen('clear-access-tokens')
+  }
+
   const handleManage = async (action: AdminUserManageAction) => {
+    if (managePending) return
+    setManagePending(true)
     try {
       const proof = await requestVerification({
         scope: 'admin.user.manage',
@@ -123,6 +139,8 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         AuthOperationError.from(error),
         t(ERROR_MESSAGES.UNEXPECTED)
       )
+    } finally {
+      setManagePending(false)
     }
   }
 
@@ -214,6 +232,19 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         ariaLabel={t('Open menu')}
         contentClassName='w-48'
       >
+        {user.login_protection?.locked &&
+          !isRoot &&
+          operatorRole > user.role && (
+            <DropdownMenuItem
+              onClick={() => handleManage('unlock_login')}
+              disabled={managePending || verificationActive}
+            >
+              {t('Unlock sign-in')}
+              <DropdownMenuShortcut>
+                <KeyRound size={16} />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          )}
         {isDisabled ? (
           <DropdownMenuItem onClick={() => handleManage('enable')}>
             {t('Enable')}
@@ -304,6 +335,30 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         </DropdownMenuItem>
 
         <DropdownMenuSeparator />
+
+        {operatorRole >= USER_ROLE.ADMIN && operatorRole > user.role && (
+          <DropdownMenuItem
+            onClick={handleClearAPIKeys}
+            className='text-destructive focus:text-destructive'
+          >
+            {t('Clear API keys')}
+            <DropdownMenuShortcut>
+              <KeyRound size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+        )}
+
+        {operatorRole >= USER_ROLE.ADMIN && operatorRole > user.role && (
+          <DropdownMenuItem
+            onClick={handleClearAccessTokens}
+            className='text-destructive focus:text-destructive'
+          >
+            {t('Clear access tokens')}
+            <DropdownMenuShortcut>
+              <KeyRound size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+        )}
 
         <DropdownMenuItem
           onClick={handleDelete}

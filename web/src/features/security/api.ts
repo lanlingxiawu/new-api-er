@@ -59,6 +59,8 @@ export interface AccessTokenCatalog {
   groups: { group: AccessTokenGroup; resources: PermissionResourceDef[] }[]
   max_tokens: number
   default_expiry_days: number
+  management_max_expiry_days?: number
+  management_restricted?: boolean
 }
 
 export interface AccessTokenInput {

@@ -64,7 +64,22 @@ export function AccessTokenCreateDialog(props: AccessTokenCreateDialogProps) {
     defaultValues: defaultAccessTokenFormValues,
   })
   const expiry = form.watch('expiry')
+  const permissions = form.watch('permissions')
   const groups = accessTokenPermissionGroups(props.catalog)
+  const managementScopes = new Set(
+    props.catalog.groups
+      .filter((group) => group.group !== 'personal')
+      .flatMap((group) =>
+        group.resources.flatMap((resource) =>
+          resource.actions.map(
+            (action) => `${resource.resource}:${action.action}`
+          )
+        )
+      )
+  )
+  const hasManagementScope = permissionMatrixToScopes(permissions).some(
+    (scope) => managementScopes.has(scope)
+  )
 
   const close = () => {
     if (props.pending) return
@@ -72,10 +87,24 @@ export function AccessTokenCreateDialog(props: AccessTokenCreateDialogProps) {
     props.onOpenChange(false)
   }
   const submit = async (values: AccessTokenFormValues) => {
+    const scopes = permissionMatrixToScopes(values.permissions)
+    const expiresAt = resolveAccessTokenExpiry(values, Date.now())
+    if (
+      scopes.some((scope) => managementScopes.has(scope)) &&
+      (expiresAt === 0 ||
+        expiresAt > Math.floor(Date.now() / 1000) + 30 * 86400)
+    ) {
+      form.setError('expiry', {
+        message: t(
+          'Management tokens must expire within 30 days. Sign in to create a replacement token.'
+        ),
+      })
+      return
+    }
     const created = await props.onCreate({
       name: values.name.trim(),
-      scopes: permissionMatrixToScopes(values.permissions),
-      expires_at: resolveAccessTokenExpiry(values, Date.now()),
+      scopes,
+      expires_at: expiresAt,
     })
     if (!created) return
     form.reset(defaultAccessTokenFormValues)
@@ -152,11 +181,23 @@ export function AccessTokenCreateDialog(props: AccessTokenCreateDialogProps) {
                       key={option.value}
                       value={option.value}
                       className='w-full'
+                      disabled={
+                        hasManagementScope &&
+                        option.value !== '30d' &&
+                        option.value !== 'custom'
+                      }
                     >
                       {t(option.labelKey)}
                     </ToggleGroupItem>
                   ))}
                 </ToggleGroup>
+                {hasManagementScope && !form.formState.errors.expiry && (
+                  <p className='text-muted-foreground text-xs'>
+                    {t(
+                      'Management tokens must expire within 30 days. Sign in to create a replacement token.'
+                    )}
+                  </p>
+                )}
                 {expiry === 'never' && (
                   <p className='text-warning text-xs'>
                     {t(
@@ -164,6 +205,7 @@ export function AccessTokenCreateDialog(props: AccessTokenCreateDialogProps) {
                     )}
                   </p>
                 )}
+                <FormMessage />
               </FormItem>
             )}
           />

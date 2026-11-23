@@ -51,6 +51,37 @@ function securityProofConfig(proofToken?: string): AxiosRequestConfig {
 // User Management APIs
 // ============================================================================
 
+export interface ClearUserAPIKeysResult {
+  deleted_count: number
+  completed: boolean
+}
+
+export interface ClearUserAccessTokensResult {
+  revoked_count: number
+}
+
+export async function clearUserAccessTokens(
+  userId: number,
+  proofToken: string
+): Promise<ApiResponse<ClearUserAccessTokensResult>> {
+  const res = await api.delete(
+    `/api/user/${userId}/access_tokens`,
+    securityProofConfig(proofToken)
+  )
+  return res.data
+}
+
+export async function clearUserAPIKeys(
+  userId: number,
+  proofToken: string
+): Promise<ApiResponse<ClearUserAPIKeysResult>> {
+  const res = await api.delete(
+    `/api/user/${userId}/tokens`,
+    securityProofConfig(proofToken)
+  )
+  return res.data
+}
+
 /**
  * Get paginated users list
  */
@@ -95,6 +126,9 @@ export async function searchUsers(
   if (status) queryParams.set('status', status)
   if (params.has_exclusive_ratio !== undefined) {
     queryParams.set('has_exclusive_ratio', String(params.has_exclusive_ratio))
+  }
+  if (params.exclusive_ratio_group) {
+    queryParams.set('exclusive_ratio_group', params.exclusive_ratio_group)
   }
   if (exclude_employee) queryParams.set('exclude_employee', 'true')
   if (exclude_admin) queryParams.set('exclude_admin', 'true')

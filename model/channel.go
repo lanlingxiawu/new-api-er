@@ -67,8 +67,8 @@ type Channel struct {
 	AccountBalanceConfigured bool `json:"account_balance_configured" gorm:"-"`
 
 	// CostRatio 渠道成本系数，不持久化到 channels 表（实际存于 ChannelCostConfig）。
-	// 仅用于在渠道增改接口中透传该值，由控制器同步到 ChannelCostConfig；
-	// GetChannel 读取时回填，供前端编辑表单预填。指针区分「未提供(nil)」与「显式设置」。
+	// 增改接口通过该字段透传，由渠道事务写入成本配置；GetChannel 读取时回填。
+	// 指针区分「未提供(nil)」与「显式设置」。
 	CostRatio *float64 `json:"cost_ratio,omitempty" gorm:"-"`
 
 	// —— 渠道每日金额上限（docs/design/channel-daily-quota-limit.md）——
@@ -511,10 +511,16 @@ func GetChannelsByTag(tag string, idSort bool, selectAll bool, sortOptions ...Ch
 // SearchChannels 关键字搜索。limitFilter / statDate 与列表接口共用同一套条件构造
 // （ApplyChannelLimitFilter），保证两条路径在每日上限筛选上的行为完全一致。
 //
-// 注意：本函数的 status / type 过滤仍由 controller 在 Go 侧完成（既有实现），这里不动，
-// 那属于独立的搜索路径重构，不在每日上限功能范围内。
+// 管理列表使用 SearchChannelPage 在数据库中分页；此函数保留给需要完整结果的调用者。
 func SearchChannels(keyword string, group string, model string, idSort bool, limitFilter string, statDate int64, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
 	var channels []*Channel
+	query := channelSearchQuery(DB, keyword, group, model)
+	query = ApplyChannelLimitFilter(query, limitFilter, statDate)
+	err := resolveChannelSortOptions(idSort, sortOptions).Apply(query.Omit("key")).Find(&channels).Error
+	return channels, err
+}
+
+func channelSearchQuery(db *gorm.DB, keyword, group, model string) *gorm.DB {
 	modelsCol := "`models`"
 
 	// 如果是 PostgreSQL，使用双引号
@@ -528,23 +534,13 @@ func SearchChannels(keyword string, group string, model string, idSort bool, lim
 		baseURLCol = `"base_url"`
 	}
 
-	order := resolveChannelSortOptions(idSort, sortOptions)
-
 	// 构造基础查询
-	baseQuery := DB.Model(&Channel{}).Omit("key")
+	baseQuery := db.Model(&Channel{})
 
 	// 构造WHERE子句
 	whereClause := "(channels.id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
 	args := []any{common.String2Int(keyword), "%" + keyword + "%", keyword, "%" + keyword + "%", "%" + model + "%"}
-	baseQuery = ApplyChannelGroupFilter(baseQuery.Where(whereClause, args...), group)
-	baseQuery = ApplyChannelLimitFilter(baseQuery, limitFilter, statDate)
-
-	// 执行查询
-	err := order.Apply(baseQuery).Find(&channels).Error
-	if err != nil {
-		return nil, err
-	}
-	return channels, nil
+	return ApplyChannelGroupFilter(baseQuery.Where(whereClause, args...), group)
 }
 
 // GetChannelById loads a channel directly from the database, bypassing the
@@ -570,7 +566,7 @@ func GetChannelById(id int, selectAll bool) (*Channel, error) {
 	return channel, nil
 }
 
-func BatchInsertChannels(channels []Channel) error {
+func BatchInsertChannels(channels []Channel, creatorUserID ...int) error {
 	if len(channels) == 0 {
 		return nil
 	}
@@ -587,6 +583,11 @@ func BatchInsertChannels(channels []Channel) error {
 
 	// slices.Chunk shares the caller's backing array, so generated IDs reach the caller.
 	for chunk := range slices.Chunk(channels, 50) {
+		if len(creatorUserID) > 0 {
+			for i := range chunk {
+				chunk[i].Id = 0
+			}
+		}
 		if err := tx.Create(&chunk).Error; err != nil {
 			tx.Rollback()
 			return err
@@ -596,19 +597,58 @@ func BatchInsertChannels(channels []Channel) error {
 				tx.Rollback()
 				return err
 			}
+			if len(creatorUserID) > 0 {
+				creator := ChannelCreator{ChannelID: chunk[i].Id, CreatorUserID: creatorUserID[0], CreatedAt: common.GetTimestamp()}
+				if err := tx.Create(&creator).Error; err != nil {
+					tx.Rollback()
+					return err
+				}
+			}
+			if ratio := chunk[i].CostRatio; ratio != nil && *ratio >= 0 {
+				if err := upsertChannelCostConfig(tx, chunk[i].Id, *ratio, ""); err != nil {
+					tx.Rollback()
+					return err
+				}
+			}
 		}
 	}
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	for i := range channels {
+		if ratio := channels[i].CostRatio; ratio != nil && *ratio >= 0 {
+			invalidateChannelCostCache(channels[i].Id)
+		}
+	}
+	return nil
 }
 
-func BatchDeleteChannels(ids []int) (int64, error) {
+func BatchDeleteChannels(ids []int, creatorUserID ...int) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
+	ids = slices.Clone(ids)
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
 	// 使用事务 分批删除channel表和abilities表
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return 0, tx.Error
+	}
+	owner := 0
+	if len(creatorUserID) > 0 {
+		owner = creatorUserID[0]
+	}
+	if owner > 0 {
+		var owned []Channel
+		if err := lockForUpdate(ChannelsCreatedBy(tx, owner).Where("channels.id IN ?", ids)).Select("id").Find(&owned).Error; err != nil {
+			tx.Rollback()
+			return 0, err
+		}
+		if len(owned) != len(ids) {
+			tx.Rollback()
+			return 0, ErrChannelNotAccessible
+		}
 	}
 	allNames := make(map[int]string, len(ids))
 	var deletedCount int64
@@ -621,7 +661,11 @@ func BatchDeleteChannels(ids []int) (int64, error) {
 		for id, name := range captureChannelNamesForSnapshot(tx, chunk) {
 			allNames[id] = name
 		}
-		result := tx.Where("id in (?)", chunk).Delete(&Channel{})
+		query := tx.Model(&Channel{})
+		if owner > 0 {
+			query = ChannelsCreatedBy(tx, owner)
+		}
+		result := query.Where("id in (?)", chunk).Delete(&Channel{})
 		if result.Error != nil {
 			tx.Rollback()
 			return 0, result.Error
@@ -682,66 +726,150 @@ func (channel *Channel) GetStatusCodeMapping() string {
 	return *channel.StatusCodeMapping
 }
 
-func (channel *Channel) Insert() error {
-	var err error
-	err = DB.Create(channel).Error
-	if err != nil {
+func (channel *Channel) Insert(creatorUserID ...int) error {
+	channels := []Channel{*channel}
+	if err := BatchInsertChannels(channels, creatorUserID...); err != nil {
 		return err
 	}
-	err = channel.AddAbilities(nil)
-	return err
+	*channel = channels[0]
+	return nil
 }
 
-func (channel *Channel) Update() error {
-	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
-	if channel.ChannelInfo.IsMultiKey {
-		var keyStr string
-		if channel.Key != "" {
-			keyStr = channel.Key
+func (channel *Channel) Update(creatorUserID ...int) error {
+	return channel.UpdateConfiguration(DailyLimitEdit{}, creatorUserID...)
+}
+
+// UpdateConfiguration commits the channel, its abilities, daily limit and cost
+// configuration together. Cache invalidation happens only after the commit.
+func (channel *Channel) UpdateConfiguration(daily DailyLimitEdit, creatorUserID ...int) error {
+	return channel.updateConfiguration(daily, nil, creatorUserID...)
+}
+
+// UpdateConfigurationWithAudit reuses the existing row lock and final read.
+// Serialization/redaction runs after commit, outside shared channel locks.
+func (channel *Channel) UpdateConfigurationWithAudit(daily DailyLimitEdit, audit *AuditChanges, creatorUserID ...int) error {
+	return channel.updateConfiguration(daily, audit, creatorUserID...)
+}
+
+func (channel *Channel) updateConfiguration(daily DailyLimitEdit, audit *AuditChanges, creatorUserID ...int) error {
+	if err := daily.Validate(); err != nil {
+		return err
+	}
+	ratio := channel.CostRatio
+	var auditBefore *Channel
+	var costAudit *AuditChanges
+	if audit != nil && ratio != nil && *ratio >= 0 {
+		costAudit = NewAuditChanges()
+	}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		owner := 0
+		if len(creatorUserID) > 0 {
+			owner = creatorUserID[0]
+		}
+		lockQuery := tx.Model(&Channel{}).Where("id = ?", channel.Id)
+		if owner > 0 {
+			lockQuery = ChannelsCreatedBy(tx, owner).Where("channels.id = ?", channel.Id)
+		}
+		var locked Channel
+		if audit == nil {
+			lockQuery = lockQuery.Select("id")
 		} else {
-			// If key is not provided, read the existing key from the database
-			if existing, err := GetChannelById(channel.Id, true); err == nil {
+			lockQuery = lockQuery.Select(ChannelAuditColumns)
+		}
+		if err := lockForUpdate(lockQuery).Take(&locked).Error; err != nil {
+			if owner > 0 && errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrChannelNotAccessible
+			}
+			return err
+		}
+		if audit != nil {
+			auditBefore = &locked
+		}
+
+		// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
+		if channel.ChannelInfo.IsMultiKey {
+			var keyStr string
+			if channel.Key != "" {
+				keyStr = channel.Key
+			} else {
+				var existing Channel
+				if err := tx.First(&existing, channel.Id).Error; err != nil {
+					return err
+				}
 				keyStr = existing.Key
 			}
-		}
-		// Parse the key list (supports newline separation or JSON array)
-		keys := []string{}
-		if keyStr != "" {
-			trimmed := strings.TrimSpace(keyStr)
-			if strings.HasPrefix(trimmed, "[") {
-				var arr []json.RawMessage
-				if err := common.Unmarshal([]byte(trimmed), &arr); err == nil {
-					keys = make([]string, len(arr))
-					for i, v := range arr {
-						keys[i] = string(v)
+			keys := []string{}
+			if keyStr != "" {
+				trimmed := strings.TrimSpace(keyStr)
+				if strings.HasPrefix(trimmed, "[") {
+					var arr []json.RawMessage
+					if err := common.Unmarshal([]byte(trimmed), &arr); err == nil {
+						keys = make([]string, len(arr))
+						for i, v := range arr {
+							keys[i] = string(v)
+						}
+					}
+				}
+				if len(keys) == 0 {
+					keys = strings.Split(strings.Trim(keyStr, "\n"), "\n")
+				}
+			}
+			channel.ChannelInfo.MultiKeySize = len(keys)
+			if channel.ChannelInfo.MultiKeyStatusList != nil {
+				for idx := range channel.ChannelInfo.MultiKeyStatusList {
+					if idx >= channel.ChannelInfo.MultiKeySize {
+						delete(channel.ChannelInfo.MultiKeyStatusList, idx)
 					}
 				}
 			}
-			if len(keys) == 0 { // fallback to newline split
-				keys = strings.Split(strings.Trim(keyStr, "\n"), "\n")
-			}
 		}
-		channel.ChannelInfo.MultiKeySize = len(keys)
-		// Clean up status data that exceeds the new key count to prevent index out of range
-		if channel.ChannelInfo.MultiKeyStatusList != nil {
-			for idx := range channel.ChannelInfo.MultiKeyStatusList {
-				if idx >= channel.ChannelInfo.MultiKeySize {
-					delete(channel.ChannelInfo.MultiKeyStatusList, idx)
-				}
-			}
+
+		// Recovery timing is written only through DailyLimitEdit so its transition
+		// expression still sees the previous interval and period.
+		query := tx.Model(channel)
+		if owner > 0 {
+			query = ChannelsCreatedBy(tx, owner).Where("channels.id = ?", channel.Id)
 		}
-	}
-	var err error
-	// 限时恢复的两列只经 DailyLimitEdit 写入：恢复间隔变化时要在同一条 UPDATE 里据旧值
-	// 判断是否开启新一轮，这里若先把新间隔写进去，那次判断就读不到旧值了；period_start 则是
-	// 服务端维护的只读列。
-	err = DB.Model(channel).Omit("daily_limit_recover_minutes", "daily_limit_period_start").Updates(channel).Error
+		if err := query.Omit("daily_limit_recover_minutes", "daily_limit_period_start").Updates(channel).Error; err != nil {
+			return err
+		}
+		dailyScope := tx.Model(&Channel{}).Where("id = ?", channel.Id)
+		if owner > 0 {
+			dailyScope = ChannelsCreatedBy(tx, owner).Where("channels.id = ?", channel.Id)
+		}
+		if _, err := applyDailyLimitEdit(dailyScope, daily); err != nil {
+			return err
+		}
+		readQuery := tx.Model(&Channel{})
+		if owner > 0 {
+			readQuery = ChannelsCreatedBy(tx, owner)
+		}
+		if err := readQuery.First(channel, "id = ?", channel.Id).Error; err != nil {
+			return err
+		}
+		channel.CostRatio = ratio
+		if err := channel.UpdateAbilities(tx); err != nil {
+			return err
+		}
+		if ratio != nil && *ratio >= 0 {
+			return upsertChannelCostConfig(tx, channel.Id, *ratio, "", costAudit)
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	DB.Model(channel).First(channel, "id = ?", channel.Id)
-	err = channel.UpdateAbilities(nil)
-	return err
+	if ratio != nil && *ratio >= 0 {
+		invalidateChannelCostCache(channel.Id)
+	}
+	if audit != nil {
+		before, after := ChannelAuditSnapshot(auditBefore), ChannelAuditSnapshot(channel)
+		target := AuditTarget("channel", channel.Id, channel.Name)
+		target.Consistency = "atomic"
+		audit.Add(target, before, after)
+		audit.Merge(costAudit)
+	}
+	return nil
 }
 
 func (channel *Channel) UpdateResponseTime(responseTime int64) {
@@ -764,10 +892,22 @@ func (channel *Channel) UpdateBalance(balance float64) {
 	}
 }
 
-func (channel *Channel) Delete() error {
+func (channel *Channel) Delete(creatorUserID ...int) error {
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return tx.Error
+	}
+	query := tx.Model(&Channel{})
+	if len(creatorUserID) > 0 && creatorUserID[0] > 0 {
+		var owned Channel
+		query = ChannelsCreatedBy(tx, creatorUserID[0]).Where("channels.id = ?", channel.Id)
+		if err := lockForUpdate(query).Select("id").Take(&owned).Error; err != nil {
+			tx.Rollback()
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrChannelNotAccessible
+			}
+			return err
+		}
 	}
 	// 删除前捕获渠道名（删后 channels 表已无），名称快照移到删除后异步处理。
 	if err := enqueueUserChannelExclusionCleanup(tx, []int{channel.Id}); err != nil {
@@ -775,7 +915,7 @@ func (channel *Channel) Delete() error {
 		return err
 	}
 	names := captureChannelNamesForSnapshot(tx, []int{channel.Id})
-	if err := tx.Delete(channel).Error; err != nil {
+	if err := query.Delete(channel).Error; err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -1067,7 +1207,9 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	return true
 }
 
-func EnableChannelByTag(tag string) error {
+func EnableChannelByTag(tag string, audit ...*AuditChanges) error {
+	changes := optionalAudit(audit)
+	before := changes.ObserveChannels(DB.Model(&Channel{}).Where("tag = ?", tag))
 	// 同一条 UPDATE 里顺带清零限额禁用标记，见 UpdateChannelStatus 中的同名说明。
 	// 只给「原本未启用」的限时渠道开启新一轮，已在运行的渠道保持当前一轮——否则按 Tag 点一次
 	// 启用，就会让本轮快跑满的渠道凭空多出一整轮额度。CASE 必须读到旧状态：GORM 按列名排序
@@ -1082,22 +1224,31 @@ func EnableChannelByTag(tag string) error {
 	if err != nil {
 		return err
 	}
+	changes.ChannelWrites(before, AuditFields{"status": common.ChannelStatusEnabled})
 	err = UpdateAbilityStatusByTag(tag, true)
 	return err
 }
 
-func DisableChannelByTag(tag string) error {
+func DisableChannelByTag(tag string, audit ...*AuditChanges) error {
+	changes := optionalAudit(audit)
 	// Explicit tag-level disable also cancels automatic restoration for
 	// channels that were already disabled because all keys were unavailable.
 	var channels []Channel
 	if err := DB.Where("tag = ?", tag).Find(&channels).Error; err != nil {
 		return err
 	}
-	for _, channel := range channels {
+	if changes != nil && len(channels) > 100 {
+		changes.Truncated = true
+	}
+	for i, channel := range channels {
 		if channel.ChannelInfo.IsMultiKey && channel.GetOtherInfo()["status_reason"] == ChannelStatusReasonAllKeysDisabled {
 			if !UpdateChannelStatus(channel.Id, "", common.ChannelStatusManuallyDisabled, "manual tag operation") {
 				return fmt.Errorf("failed to disable channel #%d by tag", channel.Id)
 			}
+			if i < 100 {
+				changes.ChannelWrites([]Channel{channel}, AuditFields{"status": common.ChannelStatusManuallyDisabled})
+			}
+			channels[i].Status = common.ChannelStatusManuallyDisabled
 		}
 	}
 	err := DB.Model(&Channel{}).Where("tag = ?", tag).Updates(map[string]any{
@@ -1108,11 +1259,14 @@ func DisableChannelByTag(tag string) error {
 	if err != nil {
 		return err
 	}
+	changes.ChannelWrites(channels[:min(len(channels), 100)], AuditFields{"status": common.ChannelStatusManuallyDisabled})
 	err = UpdateAbilityStatusByTag(tag, false)
 	return err
 }
 
-func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
+func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string, audit ...*AuditChanges) error {
+	changes := optionalAudit(audit)
+	before := changes.ObserveChannels(DB.Model(&Channel{}).Where("tag = ?", tag))
 	updateData := Channel{}
 	shouldReCreateAbilities := false
 	updatedTag := tag
@@ -1148,6 +1302,34 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 	err := DB.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error
 	if err != nil {
 		return err
+	}
+	if changes != nil {
+		updates := AuditFields{}
+		if updateData.Tag != nil {
+			updates["tag"] = updateData.Tag
+		}
+		if updateData.ModelMapping != nil {
+			updates["model_mapping"] = updateData.ModelMapping
+		}
+		if updateData.Models != "" {
+			updates["models"] = updateData.Models
+		}
+		if updateData.Group != "" {
+			updates["group"] = updateData.Group
+		}
+		if updateData.Priority != nil {
+			updates["priority"] = updateData.Priority
+		}
+		if updateData.Weight != nil {
+			updates["weight"] = updateData.Weight
+		}
+		if updateData.ParamOverride != nil {
+			updates["param_override"] = updateData.ParamOverride
+		}
+		if updateData.HeaderOverride != nil {
+			updates["header_override"] = updateData.HeaderOverride
+		}
+		changes.ChannelWrites(before, updates)
 	}
 	if shouldReCreateAbilities {
 		channels, err := GetChannelsByTag(updatedTag, false, false)
@@ -1188,8 +1370,8 @@ func DeleteChannelByStatus(status int64) (int64, error) {
 	return deleteChannelsByStatus(int(status))
 }
 
-func DeleteDisabledChannel() (int64, error) {
-	return deleteChannelsByStatus(common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled)
+func DeleteDisabledChannel(audit ...*AuditChanges) (int64, error) {
+	return deleteChannelsByStatusWithAudit(optionalAudit(audit), common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled)
 }
 
 // deleteChannelsByStatus deletes every channel whose status is one of statuses,
@@ -1200,6 +1382,10 @@ func DeleteDisabledChannel() (int64, error) {
 // under PostgreSQL READ COMMITTED) can therefore neither delete a surviving
 // channel's cost config nor leave a deleted channel's behind.
 func deleteChannelsByStatus(statuses ...int) (int64, error) {
+	return deleteChannelsByStatusWithAudit(nil, statuses...)
+}
+
+func deleteChannelsByStatusWithAudit(audit *AuditChanges, statuses ...int) (int64, error) {
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return 0, tx.Error
@@ -1214,6 +1400,7 @@ func deleteChannelsByStatus(statuses ...int) (int64, error) {
 		return 0, nil
 	}
 	// 删除前捕获渠道名，名称快照移到删除后异步处理。
+	before := audit.ObserveChannels(tx.Model(&Channel{}).Where("id IN ?", ids))
 	names := captureChannelNamesForSnapshot(tx, ids)
 	var deletedCount int64
 	for _, chunk := range lo.Chunk(ids, 200) {
@@ -1240,6 +1427,7 @@ func deleteChannelsByStatus(statuses ...int) (int64, error) {
 		return 0, err
 	}
 	finalizeChannelDeletionAsync(names, ids)
+	audit.ChannelWrites(before, nil)
 	return deletedCount, nil
 }
 
@@ -1260,39 +1448,25 @@ func GetPaginatedChannelTags(query *gorm.DB, offset int, limit int) ([]*string, 
 }
 
 func SearchTags(keyword string, group string, model string, idSort bool) ([]*string, error) {
+	return searchTags(DB, keyword, group, model, idSort)
+}
+
+func searchTags(db *gorm.DB, keyword string, group string, model string, idSort bool) ([]*string, error) {
 	var tags []*string
-	modelsCol := "`models`"
-
-	// 如果是 PostgreSQL，使用双引号
-	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
-		modelsCol = `"models"`
-	}
-
-	baseURLCol := "`base_url`"
-	// 如果是 PostgreSQL，使用双引号
-	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
-		baseURLCol = `"base_url"`
-	}
 
 	order := "priority desc"
 	if idSort {
 		order = "id desc"
 	}
 
-	// 构造基础查询
-	baseQuery := DB.Model(&Channel{}).Omit("key")
-
-	// 构造WHERE子句
-	whereClause := "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
-	args := []any{common.String2Int(keyword), "%" + keyword + "%", keyword, "%" + keyword + "%", "%" + model + "%"}
-	baseQuery = ApplyChannelGroupFilter(baseQuery.Where(whereClause, args...), group)
+	baseQuery := channelSearchQuery(db, keyword, group, model)
 
 	subQuery := baseQuery.
 		Select("tag").
 		Where("tag != ''").
 		Order(order)
 
-	err := DB.Table("(?) as sub", subQuery).
+	err := db.Table("(?) as sub", subQuery).
 		Select("DISTINCT tag").
 		Find(&tags).Error
 
@@ -1371,6 +1545,8 @@ func (channel *Channel) GetSetting() dto.ChannelSettings {
 	if channel.Setting != nil && *channel.Setting != "" {
 		err := common.Unmarshal([]byte(*channel.Setting), &setting)
 		if err != nil {
+			setting.ClaudeStreamValidation = nil
+			setting.StreamProtocolValidation = nil
 			common.SysLog(common.LogText("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
 			channel.Setting = nil // 清空设置以避免后续错误
 			_ = channel.Save()    // 保存修改

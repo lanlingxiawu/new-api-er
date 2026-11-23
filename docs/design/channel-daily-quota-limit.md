@@ -1275,6 +1275,8 @@ tick goroutine 写它，但 `RecoverExpiredDailyLimitChannels` 是导出函数�
 
 ### 15.4 已知限制（非缺陷）
 
+2026-11-15 审计告警计数修正：日限额配置更新在原 ID 作用域的同一条 UPDATE 中增加配置差异条件，使 SQLite/PostgreSQL 的“匹配行数”与 MySQL 的“变化行数”一致。原样保存返回 0，重复 ID 不放大数量，未选择渠道不受影响；不新增查询、不改限额禁用/恢复时机。限时恢复的隐式 auto_recover 和 period_start 更新规则保持不变。见 `TestDailyLimitEdit_CountsOnlyConfigurationChanges` 和安全监控设计文档。
+
 - **`-race` 未在本机执行**：环境缺少 gcc，`CGO_ENABLED=1 go test -race` 无法构建。并发用例
   （20/100 goroutine 累计、10 goroutine 并发禁用与启用）本身仍然运行并通过，但没有竞态检测器
   背书。有 CI 或本机装了 gcc 时应补跑 `go test ./model/ ./service/ -race`。

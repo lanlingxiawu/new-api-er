@@ -92,6 +92,32 @@ export const commissionLogSchema = z.object({
 })
 export type CommissionLog = z.infer<typeof commissionLogSchema>
 
+export interface CommissionLogFilters {
+  employee_user_id?: number
+  customer_user_id?: number
+  model_name?: string
+  channel_id?: number
+  loss_status?: 'loss' | 'normal'
+  start_time: number
+  end_time: number
+}
+
+export interface CommissionLogCursor {
+  created_at: number
+  id: number
+}
+
+export interface CommissionLogPageParams extends CommissionLogFilters {
+  page_size: number
+  cursor?: CommissionLogCursor | null
+}
+
+export interface CommissionLogPage {
+  items: CommissionLog[]
+  has_more: boolean
+  next_cursor: CommissionLogCursor | null
+}
+
 export interface CommissionCalendarDayStat {
   stat_date: number
   date: string

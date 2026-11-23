@@ -81,6 +81,10 @@ func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
+	LoginProtection          *UserLoginProtection `json:"login_protection,omitempty" gorm:"-:all"`
+	ClaudeStreamValidation   *bool                `json:"claude_stream_validation" gorm:"-:all"`
+	StreamProtocolValidation *bool                `json:"stream_protocol_validation" gorm:"-:all"`
+
 	Id                   int            `json:"id" gorm:"index:idx_users_security_assignees,priority:4;index:idx_users_customer_audit,priority:3"`
 	Username             string         `json:"username" gorm:"unique;index" validate:"max=32"`
 	Password             string         `json:"password" gorm:"not null;" validate:"min=8,max=128"`
@@ -215,6 +219,8 @@ func (user *User) GetSetting() dto.UserSetting {
 	if user.Setting != "" {
 		err := common.Unmarshal([]byte(user.Setting), &setting)
 		if err != nil {
+			setting.ClaudeStreamValidation = nil
+			setting.StreamProtocolValidation = nil
 			common.SysLog(common.LogText("failed to unmarshal setting: %s", err.Error()))
 		}
 	}
@@ -230,7 +236,7 @@ func (user *User) SetSetting(setting dto.UserSetting) {
 	user.Setting = string(settingBytes)
 }
 
-func UpdateUserSetting(userId int, setting dto.UserSetting) error {
+func UpdateUserSetting(userId int, setting dto.UserSetting, audit ...*AuditChanges) error {
 	if userId == 0 {
 		return common.NewMessage("ID is empty!")
 	}
@@ -241,11 +247,27 @@ func UpdateUserSetting(userId int, setting dto.UserSetting) error {
 	// setting is a cached field: bump profile_version and publish the whole row
 	// like EditWithTx, so a cache fill that read the row before this write
 	// cannot land afterwards and restore the old setting.
-	if err = DB.Model(&User{}).Where("id = ?", userId).Updates(map[string]interface{}{
-		"setting":         string(settingBytes),
-		"profile_version": gorm.Expr("profile_version + ?", 1),
-	}).Error; err != nil {
+	var beforeSetting, afterSetting string
+	if err = DB.Transaction(func(tx *gorm.DB) error {
+		var current User
+		if err := lockForUpdate(tx).Select("id", "setting").First(&current, userId).Error; err != nil {
+			return err
+		}
+		merged, err := preserveUserStreamValidation(string(settingBytes), current.Setting)
+		if err != nil {
+			return err
+		}
+		beforeSetting, afterSetting = current.Setting, merged
+		return tx.Model(&User{}).Where("id = ?", userId).Updates(map[string]any{
+			"setting": merged, "profile_version": gorm.Expr("profile_version + ?", 1),
+		}).Error
+	}); err != nil {
 		return err
+	}
+	if changes := optionalAudit(audit); changes != nil {
+		target := SelfAuditTarget("user", userId, userId, "")
+		target.Consistency = "atomic"
+		changes.Add(target, AuditFields{"setting": beforeSetting}, AuditFields{"setting": afterSetting})
 	}
 	return PublishUserAuthCache(userId)
 }
@@ -581,8 +603,9 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 }
 
 type UserSearchOptions struct {
-	Sort              UserSortOptions
-	HasExclusiveRatio *bool
+	Sort                UserSortOptions
+	HasExclusiveRatio   *bool
+	ExclusiveRatioGroup string
 }
 
 func SearchUsers(keyword string, group string, role *int, status *int, excludeEmployees bool, excludeAdmins bool, excludeAssignedCustomers bool, startIdx int, num int, options ...UserSearchOptions) ([]*User, int64, error) {
@@ -607,8 +630,12 @@ func SearchUsers(keyword string, group string, role *int, status *int, excludeEm
 	if len(options) > 0 {
 		searchOptions = options[0]
 	}
-	if searchOptions.HasExclusiveRatio != nil {
-		query = filterUsersByExclusiveRatio(query, *searchOptions.HasExclusiveRatio)
+	if searchOptions.HasExclusiveRatio != nil || searchOptions.ExclusiveRatioGroup != "" {
+		present := true
+		if searchOptions.HasExclusiveRatio != nil {
+			present = *searchOptions.HasExclusiveRatio
+		}
+		query = filterUsersByExclusiveRatio(query, present, searchOptions.ExclusiveRatioGroup)
 	}
 
 	// 构建搜索条件
@@ -1030,15 +1057,22 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 	}
 }
 
-func (user *User) Update(updatePassword bool) error {
+func (user *User) Update(updatePassword bool, audit ...*AuditChanges) error {
+	var receipt *AuditChanges
+	if optionalAudit(audit) != nil {
+		receipt = NewAuditChanges()
+	}
 	var previousAuthVersion int64
 	if err := DB.Model(&User{}).Where("id = ?", user.Id).Select("auth_version").Find(&previousAuthVersion).Error; err != nil {
 		return err
 	}
 	if err := DB.Transaction(func(tx *gorm.DB) error {
-		return user.UpdateWithTx(tx, updatePassword)
+		return user.UpdateWithTx(tx, updatePassword, receipt)
 	}); err != nil {
 		return err
+	}
+	if receipt != nil {
+		audit[0].Merge(receipt)
 	}
 	if err := updateUserCache(*user); err != nil {
 		return err
@@ -1050,7 +1084,7 @@ func (user *User) Update(updatePassword bool) error {
 	return nil
 }
 
-func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
+func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool, audit ...*AuditChanges) error {
 	var err error
 	if updatePassword {
 		user.Password, err = common.HashAccountPassword(user.Password)
@@ -1060,8 +1094,14 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 	}
 	newUser := *user
 	current := User{}
-	if err = tx.First(&current, user.Id).Error; err != nil {
+	if err = lockForUpdate(tx).First(&current, user.Id).Error; err != nil {
 		return err
+	}
+	if newUser.Setting != "" {
+		newUser.Setting, err = preserveUserStreamValidation(newUser.Setting, current.Setting)
+		if err != nil {
+			return err
+		}
 	}
 	// Updates(struct) ignores zero values. Match that behavior when deciding
 	// whether this request actually changes authentication-sensitive state;
@@ -1095,13 +1135,36 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 		"auth_version",
 		"profile_version",
 	}, adminOwnedUserColumns...)
+	var auditBefore, auditAfter AuditFields
+	if optionalAudit(audit) != nil {
+		auditBefore, auditAfter = AuditFields{}, AuditFields{}
+		old, next := UserAuditSnapshot(&current), UserAuditSnapshot(&newUser)
+		for _, key := range []string{"username", "display_name", "email", "role", "status", "group", "remark", "setting"} {
+			data, _ := common.Marshal(next[key])
+			if string(data) == `""` || string(data) == "0" || string(data) == "null" {
+				continue
+			}
+			auditBefore[key], auditAfter[key] = old[key], next[key]
+		}
+		if updatePassword && current.Password != newUser.Password {
+			auditBefore["password"], auditAfter["password"] = false, true
+		}
+	}
 	if err = tx.Model(&current).Omit(omit...).Updates(newUser).Error; err != nil {
 		return err
 	}
 	if err = tx.Model(&User{}).Where("id = ?", user.Id).Update("profile_version", gorm.Expr("profile_version + ?", 1)).Error; err != nil {
 		return err
 	}
-	return tx.First(user, user.Id).Error
+	if err := tx.First(user, user.Id).Error; err != nil {
+		return err
+	}
+	if optionalAudit(audit) != nil {
+		target := AuditTarget("user", user.Id, user.Username)
+		target.Consistency = "atomic"
+		audit[0].Add(target, auditBefore, auditAfter)
+	}
+	return nil
 }
 
 func (user *User) Edit(updatePassword bool) error {
@@ -1182,7 +1245,13 @@ func (user *User) EditWithTxGroupRatios(tx *gorm.DB, updatePassword bool, writeG
 	}
 
 	current := User{}
-	if err = tx.First(&current, user.Id).Error; err != nil {
+	currentQuery := tx
+	if user.AdminPermissions != nil {
+		// Only permission edits serialize with role changes; ordinary profile
+		// updates keep the existing compare-and-swap behavior.
+		currentQuery = lockForUpdate(tx)
+	}
+	if err = currentQuery.First(&current, user.Id).Error; err != nil {
 		return err
 	}
 	authChanged := (updatePassword && current.Password != newUser.Password) || current.Group != newUser.Group
@@ -1345,6 +1414,7 @@ func deleteUserAuthenticationData(tx *gorm.DB, userId int) error {
 		&TwoFABackupCode{},
 		&TwoFA{},
 		&UserSession{},
+		&UserLoginProtection{},
 		&AuthFlow{},
 		&PasskeyCredential{},
 		&Token{},
@@ -1352,6 +1422,12 @@ func deleteUserAuthenticationData(tx *gorm.DB, userId int) error {
 		if err := tx.Unscoped().Where("user_id = ?", userId).Delete(authenticationData).Error; err != nil {
 			return err
 		}
+	}
+	if err := tx.Unscoped().Where("ptype = ? AND v0 = ?", "p", fmt.Sprintf("user:%d", userId)).Delete(&CasbinRule{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Unscoped().Where("creator_user_id = ?", userId).Delete(&ChannelCreator{}).Error; err != nil {
+		return err
 	}
 	return deleteUserOAuthBindingsByUserId(tx, userId)
 }
@@ -1378,8 +1454,11 @@ func (user *User) ValidateAndFill() (err error) {
 		return ErrInvalidCredentials
 	}
 	okay := common.ValidatePasswordAndHash(password, user.Password)
-	if !okay || user.Status != common.UserStatusEnabled {
+	if user.Status != common.UserStatusEnabled {
 		return ErrInvalidCredentials
+	}
+	if !okay {
+		return ErrPasswordMismatch
 	}
 	return nil
 }
@@ -1488,30 +1567,53 @@ func IsTelegramIdAlreadyTaken(telegramId string) bool {
 }
 
 func ResetUserPasswordByEmail(email string, password string) error {
+	_, err := ResetUserPasswordByEmailWithOutcome(email, password)
+	return err
+}
+
+// The outcome records a committed password change even if cache/session
+// cleanup later fails. Existing callers retain their original error semantics.
+func ResetUserPasswordByEmailWithOutcome(email, password string) (bool, error) {
+	identity, err := ResetUserPasswordByEmailWithIdentity(email, password)
+	return identity != nil, err
+}
+
+func ResetUserPasswordByEmailWithIdentity(email string, password string) (*AuditIdentity, error) {
+	var identity AuditIdentity
+	email = NormalizeEmail(email)
 	if email == "" || password == "" {
-		return common.NewMessage("Email or password is empty!")
+		return nil, common.NewMessage("Email or password is empty!")
 	}
 	user, err := GetUniqueUserByEmail(email)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	hashedPassword, err := common.HashAccountPassword(password)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err = DB.Transaction(func(tx *gorm.DB) error {
-		if _, err := IncrementUserAuthVersionWithTx(tx, user.Id); err != nil {
+		var current User
+		if err := lockForUpdate(tx).Select("id", "role", "auth_version", "email").Where("id = ?", user.Id).Take(&current).Error; err != nil {
+			return err
+		}
+		if NormalizeEmail(current.Email) != email {
+			return ErrEmailNotFound
+		}
+		identity = AuditIdentity{ActorID: current.Id, Role: current.Role, AuthVersion: current.AuthVersion, AuthMethod: "recovery"}
+		var err error
+		if identity.EffectiveVersion, err = IncrementUserAuthVersionWithTx(tx, user.Id); err != nil {
 			return err
 		}
 		return tx.Model(&User{}).Where("id = ?", user.Id).Update("password", hashedPassword).Error
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	if err := PublishUserAuthCache(user.Id); err != nil {
-		return err
+		return &identity, err
 	}
 	_, err = RevokeAllUserSessions(user.Id, "password_reset")
-	return err
+	return &identity, err
 }
 
 func IsAdmin(userId int) bool {

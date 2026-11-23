@@ -304,6 +304,7 @@ describe('access tokens card', () => {
           category: 'access_token',
           token_ref: 'b'.repeat(64),
         }),
+        signal: expect.any(AbortSignal),
       })
     )
   })
@@ -592,6 +593,62 @@ describe('access tokens card', () => {
     ])
   })
 
+  it('removes unavailable scopes only after an explicit choice and preserves them on rename', async () => {
+    const storedScopes = ['tokens:read', 'retired:write']
+    list = { items: [tokenItem({ id: 7, scopes: storedScopes })], legacy: null }
+    const patch = mockPatch(
+      tokenItem({ id: 7, name: 'renamed', scopes: storedScopes })
+    )
+    renderCard()
+    const user = userEvent.setup()
+    const renameDialog = await openEdit(user)
+    const input = within(renameDialog).getByLabelText('Token name')
+    await user.clear(input)
+    await user.type(input, 'renamed')
+    list = {
+      items: [tokenItem({ id: 7, name: 'renamed', scopes: storedScopes })],
+      legacy: null,
+    }
+    await user.click(within(renameDialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith(
+        '/api/user/access_tokens/7',
+        { name: 'renamed' },
+        expect.anything()
+      )
+    )
+    expect(verifyCalls()).toHaveLength(0)
+
+    const editDialog = await openEdit(user)
+    expect(
+      within(editDialog).getByText('1 permissions are no longer available')
+    ).toBeVisible()
+    await user.click(
+      within(editDialog).getByRole('checkbox', {
+        name: 'Remove unavailable permissions',
+      })
+    )
+    patch.mockResolvedValue({
+      data: { success: true, data: tokenItem({ id: 7, name: 'renamed' }) },
+    })
+    list = { items: [tokenItem({ id: 7, name: 'renamed' })], legacy: null }
+    await user.click(within(editDialog).getByRole('button', { name: 'Save' }))
+    await verifyPassword(user)
+    await waitFor(() =>
+      expect(patch).toHaveBeenLastCalledWith(
+        '/api/user/access_tokens/7',
+        { name: 'renamed', scopes: ['tokens:read'] },
+        expect.objectContaining({ singleUseAuthorization: true })
+      )
+    )
+    expect(verifyCalls()).toEqual([
+      expect.objectContaining({
+        scope: 'access_token.update',
+        context: { token_id: 7, scopes: ['tokens:read'] },
+      }),
+    ])
+  })
+
   it('does not save a change that removes every permission', async () => {
     list = { items: [tokenItem({ id: 7 })], legacy: null }
     const patch = mockPatch(tokenItem({ id: 7 }))
@@ -624,11 +681,15 @@ describe('access tokens card', () => {
     await waitFor(() =>
       expect(api.get).toHaveBeenCalledWith('/api/audit/self', {
         params: expect.objectContaining({ category: 'access_token' }),
+        signal: expect.any(AbortSignal),
       })
     )
-    expect(api.get).not.toHaveBeenCalledWith('/api/audit/self', {
-      params: expect.objectContaining({ token_ref: expect.anything() }),
-    })
+    expect(api.get).not.toHaveBeenCalledWith(
+      '/api/audit/self',
+      expect.objectContaining({
+        params: expect.objectContaining({ token_ref: expect.anything() }),
+      })
+    )
     expect(api.get).not.toHaveBeenCalledWith('/api/audit', expect.anything())
     await user.keyboard('{Escape}')
     await waitFor(() =>
@@ -652,6 +713,7 @@ describe('access tokens card', () => {
           category: 'access_token',
           token_ref: 'c'.repeat(64),
         }),
+        signal: expect.any(AbortSignal),
       })
     )
   })

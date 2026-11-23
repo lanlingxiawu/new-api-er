@@ -162,7 +162,7 @@ func TestAccessTokenCatalogCoversEveryPermission(t *testing.T) {
 		}
 	}
 	for _, permission := range authz.AllPermissions() {
-		assert.True(t, scopes[service.AccessTokenScopeOf(permission)], "root catalog lacks %s", service.AccessTokenScopeOf(permission))
+		assert.False(t, scopes[service.AccessTokenScopeOf(permission)], "root must not grant management scope %s", service.AccessTokenScopeOf(permission))
 	}
 	for resource, count := range resources {
 		assert.Equal(t, 1, count, "resource %s appears in more than one catalog entry", resource)

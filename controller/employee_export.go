@@ -292,14 +292,20 @@ func EmployeeCreateExport(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgLogExportBusy)
 		return
 	}
-	if model.CheckAndSetLogExportCooldown(job.UserID) {
+	cooldownSec := setting.GetUserCooldownSec()
+	if c.GetInt("role") >= common.RoleAdminUser {
+		cooldownSec = setting.GetAdminCooldownSec()
+	}
+	if model.CheckAndSetLogExportCooldown(job.UserID, cooldownSec) {
 		model.ReleaseLogExportSlot(job.JobID)
-		common.ApiErrorI18n(c, i18n.MsgLogExportCooldown, map[string]any{"Minutes": (setting.GetUserCooldownSec() + 59) / 60})
+		common.ApiErrorI18n(c, i18n.MsgLogExportCooldown, map[string]any{"Minutes": (cooldownSec + 59) / 60})
 		return
 	}
 	if err := model.CreateLogExportJob(job); err != nil {
 		model.ReleaseLogExportSlot(job.JobID)
-		model.ClearLogExportCooldown(job.UserID)
+		if cooldownSec > 0 {
+			model.ClearLogExportCooldown(job.UserID)
+		}
 		employeeExportError(c, err)
 		return
 	}

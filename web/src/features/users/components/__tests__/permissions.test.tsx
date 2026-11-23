@@ -48,7 +48,8 @@ const description =
 function renderPermissions(
   viewerRole: number,
   allowed?: boolean,
-  timeoutBilling: 'refund' | 'charge' | 'input' = 'refund'
+  timeoutBilling: 'refund' | 'charge' | 'input' = 'refund',
+  tokenPermissions = false
 ) {
   useAuthStore
     .getState()
@@ -68,6 +69,56 @@ function renderPermissions(
           success: true,
           data: {
             resources: [
+              ...(tokenPermissions
+                ? [
+                    {
+                      resource: 'admin_access_token',
+                      label_key: 'Administrator token access',
+                      actions: [
+                        {
+                          action: 'use',
+                          label_key: 'Allow management token access',
+                        },
+                        {
+                          action: 'users_list',
+                          label_key: 'Allow exact user lookup',
+                        },
+                        {
+                          action: 'users_quota',
+                          label_key: 'Allow balance changes',
+                        },
+                        {
+                          action: 'users_group_ratios',
+                          label_key: 'Allow exclusive ratio changes',
+                        },
+                        {
+                          action: 'users_employee',
+                          label_key: 'Allow employee assignment',
+                        },
+                        {
+                          action: 'groups_read',
+                          label_key: 'Allow group names',
+                        },
+                        {
+                          action: 'employees_read',
+                          label_key: 'Allow employee selection',
+                        },
+                        {
+                          action: 'users_stats',
+                          label_key: 'Allow usage statistics',
+                        },
+                        {
+                          action: 'topups_reconcile',
+                          label_key: 'Allow verified top-up reconciliation',
+                        },
+                        {
+                          action: 'channels_owned',
+                          label_key: 'Allow access to own channels',
+                        },
+                      ],
+                    },
+                  ]
+                : []),
               {
                 resource: 'audit',
                 label_key: 'Audit Logs',
@@ -136,31 +187,50 @@ afterEach(() => {
   useAuthStore.getState().auth.reset()
 })
 
-it('navigates directly to channel exclusions without submitting the form', async () => {
+it('groups request settings in one tab and preserves edits without submitting', async () => {
   const put = vi.spyOn(api, 'put')
   renderPermissions(100)
-  const menu = await screen.findByRole('button', {
-    name: 'Excluded channels',
-  })
-  const section = document.querySelector<HTMLElement>(
-    '#user-channel-exclusions'
+  const name = await screen.findByDisplayValue('Managed admin')
+  await userEvent.clear(name)
+  await userEvent.type(name, 'Edited admin')
+  await userEvent.click(screen.getByRole('tab', { name: 'Request settings' }))
+  expect(screen.getByRole('tab', { name: 'Request settings' })).toHaveAttribute(
+    'aria-selected',
+    'true'
   )
-  if (!section) throw new Error('Channel exclusion section is missing')
-  const scroll = vi.fn()
-  Object.defineProperty(section, 'scrollIntoView', {
-    value: scroll,
-    configurable: true,
-  })
-  await userEvent.click(menu)
-  expect(scroll).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' })
-  expect(scroll.mock.instances.at(-1)).toBe(section)
-  expect(section.querySelector('#user-excluded-channels')).toBeInTheDocument()
+  expect(screen.getByLabelText('Retry attempts')).toBeVisible()
+  expect(screen.getByText('AI Request Timeout')).toBeVisible()
+  expect(screen.getByText('Excluded channels')).toBeVisible()
+  expect(screen.getByText('Stream protocol strict validation')).toBeVisible()
+  expect(name).not.toBeVisible()
+  await userEvent.click(screen.getByRole('tab', { name: 'Basic Information' }))
+  expect(screen.getByDisplayValue('Edited admin')).toBeVisible()
+  expect(screen.getByLabelText('Remark')).toBeVisible()
+  expect(put).not.toHaveBeenCalled()
+})
+
+it('opens the tab containing an invalid field before focusing it', async () => {
+  const put = vi.spyOn(api, 'put')
+  renderPermissions(100)
+  await screen.findByDisplayValue('Managed admin')
+  await userEvent.click(screen.getByRole('tab', { name: 'Request settings' }))
+  const retries = screen.getByLabelText('Retry attempts')
+  await userEvent.clear(retries)
+  await userEvent.type(retries, '21')
+  await userEvent.click(screen.getByRole('tab', { name: 'Basic Information' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  await waitFor(() => expect(retries).toHaveFocus())
+  expect(screen.getByRole('tab', { name: 'Request settings' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+  expect(retries).toHaveAttribute('aria-invalid', 'true')
   expect(put).not.toHaveBeenCalled()
 })
 
 it('hides the channel exclusion navigation when channel access is unavailable', async () => {
   renderPermissions(1)
-  await screen.findByRole('button', { name: 'Group & Quota' })
+  await screen.findByRole('tab', { name: 'Group & Quota' })
   expect(
     screen.queryByRole('button', { name: 'Excluded channels' })
   ).not.toBeInTheDocument()
@@ -187,6 +257,7 @@ it.each([
       .spyOn(api, 'put')
       .mockResolvedValue({ data: { success: true } })
     renderPermissions(100, true, testCase.mode)
+    await userEvent.click(screen.getByRole('tab', { name: 'Request settings' }))
     expect(await screen.findByText(testCase.description)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() =>
@@ -294,6 +365,9 @@ it.each([undefined, true])(
     renderPermissions(100, allowed)
     await screen.findByDisplayValue('Managed admin')
     await userEvent.click(
+      screen.getByRole('tab', { name: 'Administrator permissions' })
+    )
+    await userEvent.click(
       screen.getByRole('button', { name: /Other permissions/ })
     )
     const toggle = await screen.findByRole('checkbox', { name: label })
@@ -346,10 +420,113 @@ it('root saving an administrator without changing permissions or password does n
   expect(get).not.toHaveBeenCalledWith('/api/verify/methods', expect.anything())
 })
 
+it('reloads saved values when a committed change reports a synchronization failure', async () => {
+  vi.spyOn(api, 'put').mockResolvedValue({
+    data: {
+      success: false,
+      committed: true,
+      message: 'The changes were saved, but synchronization failed.',
+    },
+  })
+  const get = renderPermissions(100, false)
+  const displayName = await screen.findByDisplayValue('Managed admin')
+  await userEvent.clear(displayName)
+  await userEvent.type(displayName, 'Changed admin')
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  await waitFor(() =>
+    expect(
+      get.mock.calls.filter(([url]) => url === '/api/user/2')
+    ).toHaveLength(2)
+  )
+  await waitFor(() =>
+    expect(screen.getByDisplayValue('Managed admin')).toBeVisible()
+  )
+})
+
 it('admin cannot edit the audit permission even when the catalog is available', async () => {
   renderPermissions(10)
   await screen.findByDisplayValue('Managed admin')
   expect(
+    screen.queryByRole('tab', { name: 'Administrator permissions' })
+  ).not.toBeInTheDocument()
+  expect(
     screen.queryByRole('checkbox', { name: label })
   ).not.toBeInTheDocument()
+})
+
+it('root can select token modules independently and preserve them when disabling the master switch', async () => {
+  const put = vi.spyOn(api, 'put').mockResolvedValue({
+    data: { success: true },
+  })
+  vi.spyOn(api, 'post').mockResolvedValue({
+    data: {
+      success: true,
+      data: {
+        proof_token: 'update-proof',
+        method: '2fa',
+        scope: 'admin.user.update',
+        expires_at: Math.floor(Date.now() / 1000) + 60,
+      },
+    },
+  })
+  renderPermissions(100, false, 'refund', true)
+  await screen.findByDisplayValue('Managed admin')
+  await userEvent.click(
+    screen.getByRole('tab', { name: 'Administrator permissions' })
+  )
+  const master = await screen.findByRole('switch', {
+    name: 'Allow management token access',
+  })
+  const users = screen.getByRole('checkbox', {
+    name: 'Allow exact user lookup',
+  })
+  const channels = screen.getByRole('checkbox', {
+    name: 'Allow access to own channels',
+  })
+  await userEvent.click(master)
+  await userEvent.click(users)
+  for (const name of [
+    'Allow balance changes',
+    'Allow exclusive ratio changes',
+    'Allow employee assignment',
+    'Allow group names',
+    'Allow employee selection',
+    'Allow usage statistics',
+    'Allow verified top-up reconciliation',
+  ]) {
+    const capability = screen.getByRole('checkbox', { name })
+    expect(capability).toHaveAttribute('aria-checked', 'false')
+    await userEvent.click(capability)
+    expect(capability).toHaveAttribute('aria-checked', 'true')
+  }
+  expect(channels).toHaveAttribute('aria-checked', 'false')
+  await userEvent.click(master)
+  expect(master).toHaveAttribute('aria-checked', 'false')
+  expect(users).toHaveAttribute('aria-checked', 'true')
+  expect(channels).toHaveAttribute('aria-checked', 'false')
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  expect(put).not.toHaveBeenCalled()
+  await userEvent.type(
+    await screen.findByLabelText('Authenticator code or backup code'),
+    '123456'
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Verify' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/user/',
+      expect.objectContaining({
+        admin_permissions: expect.objectContaining({
+          admin_access_token: expect.objectContaining({
+            use: false,
+            groups_read: true,
+            employees_read: true,
+            users_stats: true,
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        headers: { 'X-Security-Proof': 'update-proof' },
+      })
+    )
+  )
 })

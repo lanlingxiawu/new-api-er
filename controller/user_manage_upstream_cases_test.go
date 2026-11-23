@@ -521,6 +521,17 @@ func TestManageUserQuotaMiddlewareKeepsOneOperationPerRequest(t *testing.T) {
 	router := gin.New()
 	router.Use(middleware.RequestId(), middleware.AccessTokenAudit())
 	router.POST("/api/user/manage", middleware.AdminAuth(), ManageUser)
+	blocked := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/user/manage", strings.NewReader(`{"id":9999,"action":"add_quota","mode":"add","value":100}`))
+	request.Header.Set("Authorization", "Bearer "+pat)
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(blocked, request)
+	require.Equal(t, http.StatusForbidden, blocked.Code)
+	var blockedAudits []model.AuditLog
+	require.NoError(t, model.LOG_DB.Where("request_id = ?", blocked.Header().Get(common.RequestIdKey)).Find(&blockedAudits).Error)
+	require.Len(t, blockedAudits, 1, "denial produces only a PAT request audit")
+	require.False(t, blockedAudits[0].Success)
+	_, browser := createAccessTokenTestSession(t, operator.Id, "quota-browser-session")
 	for _, tc := range []struct {
 		body, action string
 		success      bool
@@ -532,7 +543,7 @@ func TestManageUserQuotaMiddlewareKeepsOneOperationPerRequest(t *testing.T) {
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/api/user/manage", strings.NewReader(tc.body))
-		request.Header.Set("Authorization", "Bearer "+pat)
+		request.Header.Set("Authorization", "Bearer "+browser)
 		request.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(recorder, request)
 		assert.Equal(t, http.StatusOK, recorder.Code)
@@ -541,7 +552,7 @@ func TestManageUserQuotaMiddlewareKeepsOneOperationPerRequest(t *testing.T) {
 		require.NotEmpty(t, requestID)
 		var audits []model.AuditLog
 		require.NoError(t, model.LOG_DB.Where("request_id = ?", requestID).Find(&audits).Error)
-		require.Len(t, audits, 2, "one operation audit and one PAT request audit")
+		require.Len(t, audits, 1, "browser operation produces one operation audit")
 		for _, audit := range audits {
 			assert.Equal(t, tc.success, audit.Success)
 			if audit.Category != model.AuditCategoryOperation {

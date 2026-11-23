@@ -212,6 +212,7 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.GET("/topup/export", controller.ExportAllTopUps)
 				adminRoute.POST("/topup/platform-status", middleware.UserCriticalRateLimit(), controller.AdminQueryTopUpPlatformStatus)
 				adminRoute.POST("/topup/complete", controller.AdminCompleteTopUp)
+				adminRoute.POST("/topup/reconcile", middleware.UserCriticalRateLimit(), controller.AdminReconcileTopUp)
 				adminRoute.GET("/search", controller.SearchUsers)
 				adminRoute.GET("/:id/oauth/bindings", controller.GetUserOAuthBindingsByAdmin)
 				adminRoute.DELETE("/:id/oauth/bindings/:provider_id", controller.UnbindCustomOAuthByAdmin)
@@ -221,6 +222,8 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.POST("/manage", controller.ManageUser)
 				adminRoute.PUT("/", controller.UpdateUser)
 				adminRoute.DELETE("/:id", controller.DeleteUser)
+				adminRoute.DELETE("/:id/tokens", middleware.DisableCache(), middleware.UserCriticalRateLimit(), controller.AdminClearUserAPIKeys)
+				adminRoute.DELETE("/:id/access_tokens", middleware.DisableCache(), middleware.UserCriticalRateLimit(), controller.AdminClearUserAccessTokens)
 				adminRoute.DELETE("/:id/reset_passkey", controller.AdminResetPasskey)
 
 				// Admin 2FA routes

@@ -87,8 +87,8 @@ export function UsersTable() {
       { columnId: 'role', searchKey: 'role', type: 'array' },
       { columnId: 'group', searchKey: 'group', type: 'array' },
       {
-        columnId: 'has_exclusive_ratio',
-        searchKey: 'has_exclusive_ratio',
+        columnId: 'exclusive_ratio_group',
+        searchKey: 'exclusive_ratio_group',
         type: 'array',
       },
     ],
@@ -113,9 +113,28 @@ export function UsersTable() {
   })
 
   const exclusiveRatioFilter = (
-    columnFilters.find((filter) => filter.id === 'has_exclusive_ratio')
+    columnFilters.find((filter) => filter.id === 'exclusive_ratio_group')
       ?.value as string[] | undefined
   )?.[0]
+
+  const groupOptions = (groupsData?.data ?? []).map((group) => ({
+    label: group,
+    value: group,
+    translateLabel: false,
+  }))
+  const exclusiveRatioOptions = [...groupOptions]
+  if (
+    exclusiveRatioFilter &&
+    !exclusiveRatioOptions.some(
+      (option) => option.value === exclusiveRatioFilter
+    )
+  ) {
+    exclusiveRatioOptions.push({
+      label: exclusiveRatioFilter,
+      value: exclusiveRatioFilter,
+      translateLabel: false,
+    })
+  }
 
   const sortParams = useMemo(() => {
     const activeSort = sorting[0]
@@ -174,10 +193,7 @@ export function UsersTable() {
               status: statusFilter[0] ?? '',
               role: roleFilter[0] ?? '',
               group: groupFilter[0] ?? '',
-              has_exclusive_ratio:
-                exclusiveRatioFilter === undefined
-                  ? undefined
-                  : exclusiveRatioFilter === 'true',
+              exclusive_ratio_group: exclusiveRatioFilter,
             })
           : await getUsers(params)
 
@@ -202,7 +218,7 @@ export function UsersTable() {
     data: users,
     columns,
     enableRowSelection: true,
-    initialColumnVisibility: { has_exclusive_ratio: false },
+    initialColumnVisibility: { exclusive_ratio_group: false },
     columnFilters,
     globalFilter,
     pagination,
@@ -262,19 +278,13 @@ export function UsersTable() {
           {
             columnId: 'group',
             title: t('User Group'),
-            options: (groupsData?.data ?? []).map((group) => ({
-              label: group,
-              value: group,
-            })),
+            options: groupOptions,
             singleSelect: true,
           },
           {
-            columnId: 'has_exclusive_ratio',
+            columnId: 'exclusive_ratio_group',
             title: t('Exclusive Ratio'),
-            options: [
-              { label: t('Configured'), value: 'true' },
-              { label: t('Not configured'), value: 'false' },
-            ],
+            options: exclusiveRatioOptions,
             singleSelect: true,
           },
         ],

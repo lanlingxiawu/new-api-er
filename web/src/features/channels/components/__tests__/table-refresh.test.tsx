@@ -30,6 +30,7 @@ import { createInstance } from 'i18next'
 import { I18nextProvider } from 'react-i18next'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import zh from '@/i18n/locales/zh.json'
 import { api } from '@/lib/api'
 
 import type { Channel } from '../../types'
@@ -39,7 +40,7 @@ import { ChannelsTable } from '../channels-table'
 const i18n = createInstance()
 await i18n.init({
   lng: 'en',
-  resources: { en: { translation: {} } },
+  resources: { en: { translation: {} }, zh },
   initAsync: false,
 })
 const clients: QueryClient[] = []
@@ -79,7 +80,8 @@ function channel(name: string): Channel {
   }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await i18n.changeLanguage('en')
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   localStorage.clear()
 })
@@ -91,7 +93,10 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function renderChannelsPage(searchGate: () => Promise<void>) {
+async function renderChannelsPage(
+  searchGate: () => Promise<void>,
+  groups = ['vip']
+) {
   const get = vi.spyOn(api, 'get').mockImplementation(async (url) => {
     if (url === '/api/channel/search') {
       await searchGate()
@@ -102,7 +107,7 @@ async function renderChannelsPage(searchGate: () => Promise<void>) {
         },
       }
     }
-    return { data: { success: true, data: ['vip'] } }
+    return { data: { success: true, data: groups } }
   })
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -158,4 +163,72 @@ it('refetches the channel list with the current filters and marks Refresh busy w
   expect(refresh).toHaveAttribute('aria-busy', 'true')
   release()
   await waitFor(() => expect(refresh).toHaveAttribute('aria-busy', 'false'))
+})
+
+it.each(['en', 'zh'])(
+  'searches group names literally and sends the original value in %s',
+  async (language) => {
+    await i18n.changeLanguage(language)
+    const get = await renderChannelsPage(
+      () => Promise.resolve(),
+      ['vip', 'Test', '测试']
+    )
+    const user = userEvent.setup()
+    const groupTitle = i18n.t('Group')
+    await user.click(
+      screen.getByRole('button', { name: new RegExp(`^${groupTitle}`) })
+    )
+    const search = screen.getByPlaceholderText(groupTitle)
+    await user.type(search, 'test')
+
+    const option = screen.getByRole('option', { name: 'Test' })
+    expect(option).toBeVisible()
+    expect(
+      screen.queryByRole('option', { name: '测试' })
+    ).not.toBeInTheDocument()
+    await user.click(option)
+
+    await waitFor(() =>
+      expect(get).toHaveBeenCalledWith(
+        '/api/channel/search',
+        expect.objectContaining({
+          params: expect.objectContaining({ group: 'Test' }),
+        })
+      )
+    )
+    expect(
+      screen.getByRole('button', { name: new RegExp(`^${groupTitle}`) })
+    ).toHaveTextContent('Test')
+
+    await user.clear(search)
+    expect(
+      screen.getByRole('option', { name: i18n.t('All Groups') })
+    ).toBeVisible()
+    expect(screen.getByRole('option', { name: '测试' })).toBeVisible()
+    await user.type(search, 'missing-group')
+    expect(screen.getByText(i18n.t('No results found.'))).toBeVisible()
+  }
+)
+
+it('keeps built-in status labels translated and searchable in Chinese', async () => {
+  await i18n.changeLanguage('zh')
+  const get = await renderChannelsPage(() => Promise.resolve())
+  const user = userEvent.setup()
+  await user.click(
+    screen.getByRole('button', { name: new RegExp(`^${i18n.t('Status')}`) })
+  )
+  await user.type(
+    screen.getByPlaceholderText(i18n.t('Status')),
+    i18n.t('Disabled')
+  )
+  await user.click(screen.getByRole('option', { name: i18n.t('Disabled') }))
+
+  await waitFor(() =>
+    expect(get).toHaveBeenCalledWith(
+      '/api/channel/search',
+      expect.objectContaining({
+        params: expect.objectContaining({ status: 'disabled' }),
+      })
+    )
+  )
 })

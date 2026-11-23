@@ -38,7 +38,7 @@ func setupChannelCreateTest(t *testing.T) int {
 	model.LOG_DB = database
 	common.SetLogDatabaseType(common.MainDatabaseType())
 	require.NoError(t, database.AutoMigrate(
-		&model.Channel{}, &model.Ability{}, &model.ChannelCostConfig{},
+		&model.Channel{}, &model.ChannelCreator{}, &model.Ability{}, &model.ChannelCostConfig{},
 		&model.User{}, &model.Log{}, &model.AuditLog{},
 		&model.UserChannelExclusion{}, &model.UserChannelExclusionCleanup{},
 	))
@@ -198,6 +198,8 @@ func TestAddChannelInvalidVertexBatchDoesNotReturnResults(t *testing.T) {
 
 func TestAddChannelRollbackDoesNotReturnIDs(t *testing.T) {
 	rootID := setupChannelCreateTest(t)
+	testModel := fmt.Sprintf("rollback-model-%d", rootID)
+	unrelated := seedUnrelatedChannelAbility(t, testModel)
 	// Force a real database error in the second chunk, after the first 50 rows
 	// received IDs. This constraint exists only in the isolated test database.
 	column := `"key"`
@@ -213,7 +215,7 @@ func TestAddChannelRollbackDoesNotReturnIDs(t *testing.T) {
 	}
 	keys[50] = keys[0]
 	request, err := common.Marshal(AddChannelRequest{Mode: "batch", Channel: &model.Channel{
-		Name: "created-id-rollback", Type: 1, Key: strings.Join(keys, "\n"), Models: "test-model", Group: "default",
+		Name: "created-id-rollback", Type: 1, Key: strings.Join(keys, "\n"), Models: testModel, Group: "default",
 	}})
 	require.NoError(t, err)
 	response := postAddChannel(t, rootID, common.RoleRootUser, string(request))
@@ -223,15 +225,18 @@ func TestAddChannelRollbackDoesNotReturnIDs(t *testing.T) {
 	assert.Equal(t, false, result["success"])
 	assert.NotEmpty(t, result["message"])
 	assert.NotContains(t, result, "data")
-	var channels, abilities int64
+	var channels int64
 	require.NoError(t, model.DB.Model(&model.Channel{}).Where("name = ?", "created-id-rollback").Count(&channels).Error)
-	require.NoError(t, model.DB.Model(&model.Ability{}).Count(&abilities).Error)
 	assert.Zero(t, channels)
-	assert.Zero(t, abilities)
+	var abilities []model.Ability
+	require.NoError(t, model.DB.Where("model = ?", testModel).Find(&abilities).Error)
+	assert.Equal(t, []model.Ability{unrelated}, abilities, "rollback must remove new abilities and preserve existing ones")
 }
 
 func TestAddChannelPanicRollsBackWithoutSuccess(t *testing.T) {
 	rootID := setupChannelCreateTest(t)
+	testModel := fmt.Sprintf("panic-model-%d", rootID)
+	unrelated := seedUnrelatedChannelAbility(t, testModel)
 	database := model.DB
 	channelCreates := 0
 	const callback = "test:channel-create-panic"
@@ -249,16 +254,26 @@ func TestAddChannelPanicRollsBackWithoutSuccess(t *testing.T) {
 		keys[i] = fmt.Sprintf("sk-create-panic-%02d", i)
 	}
 	request, err := common.Marshal(AddChannelRequest{Mode: "batch", Channel: &model.Channel{
-		Name: "created-id-panic", Type: 1, Key: strings.Join(keys, "\n"), Models: "test-model", Group: "default",
+		Name: "created-id-panic", Type: 1, Key: strings.Join(keys, "\n"), Models: testModel, Group: "default",
 	}})
 	require.NoError(t, err)
 	require.PanicsWithValue(t, "second channel chunk failed", func() {
 		postAddChannel(t, rootID, common.RoleRootUser, string(request))
 	}, "a rolled-back transaction must not reach the success response")
 	assert.Equal(t, 2, channelCreates)
-	var channels, abilities int64
+	var channels int64
 	require.NoError(t, database.Model(&model.Channel{}).Where("name = ?", "created-id-panic").Count(&channels).Error)
-	require.NoError(t, database.Model(&model.Ability{}).Count(&abilities).Error)
 	assert.Zero(t, channels)
-	assert.Zero(t, abilities)
+	var abilities []model.Ability
+	require.NoError(t, database.Where("model = ?", testModel).Find(&abilities).Error)
+	assert.Equal(t, []model.Ability{unrelated}, abilities, "rollback must remove new abilities and preserve existing ones")
+}
+
+func seedUnrelatedChannelAbility(t *testing.T, modelName string) model.Ability {
+	t.Helper()
+	database := model.DB
+	ability := model.Ability{Group: "channel-create-fixture", Model: modelName, ChannelId: -1, Enabled: true}
+	require.NoError(t, database.Create(&ability).Error)
+	t.Cleanup(func() { require.NoError(t, database.Delete(&ability).Error) })
+	return ability
 }

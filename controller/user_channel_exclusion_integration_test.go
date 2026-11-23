@@ -43,7 +43,7 @@ func newExclusionHTTPFixture(t *testing.T) *exclusionHTTPFixture {
 	t.Cleanup(func() { constant.ErrorLogEnabled = previousErrors })
 	f := &exclusionHTTPFixture{billing: newResponsesWSBillingTest(t, `tier("request", fixed(0.000002))`, func(*websocket.Conn, *http.Request) {})}
 	require.NoError(t, model.DB.AutoMigrate(&model.UserChannelExclusion{}, &model.UserChannelExclusionCleanup{}, &model.SystemTaskLock{}, &model.CasbinRule{}, &model.AuthzRole{}))
-	require.NoError(t, model.DB.AutoMigrate(&model.ChannelCostConfig{}, &model.ChannelDailyUsage{}, &model.ChannelLimitPeriodUsage{}, &model.PlatformChannelDailyStat{}))
+	require.NoError(t, model.DB.AutoMigrate(&model.ChannelCostConfig{}, &model.ChannelCreator{}, &model.ChannelDailyUsage{}, &model.ChannelLimitPeriodUsage{}, &model.PlatformChannelDailyStat{}))
 	require.NoError(t, model.LOG_DB.AutoMigrate(&model.AuditLog{}))
 	require.NoError(t, authz.Init(model.DB))
 	require.NoError(t, model.DB.Model(f.billing.user).Update("quota", 1000000000).Error)
@@ -76,9 +76,9 @@ func newExclusionHTTPFixture(t *testing.T) *exclusionHTTPFixture {
 			require.NoError(t, model.DB.Model(f.billing.channel).Updates(map[string]any{"base_url": upstream.URL, "priority": target.priority}).Error)
 			require.NoError(t, model.DB.Model(&model.Ability{}).Where("channel_id = ?", f.billing.channel.Id).Update("priority", target.priority).Error)
 		} else {
-			f.low = &model.Channel{Name: "exclusion-low", Key: "mock-only", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Group: "default", Models: "ws-billing", BaseURL: &upstream.URL, Priority: common.GetPointer(target.priority)}
+			f.low = &model.Channel{Name: "exclusion-low", Key: "mock-only", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Group: f.billing.user.Group, Models: "ws-billing", BaseURL: &upstream.URL, Priority: common.GetPointer(target.priority)}
 			require.NoError(t, model.DB.Create(f.low).Error)
-			require.NoError(t, model.DB.Create(&model.Ability{ChannelId: f.low.Id, Group: "default", Model: "ws-billing", Enabled: true, Priority: f.low.Priority}).Error)
+			require.NoError(t, model.DB.Create(&model.Ability{ChannelId: f.low.Id, Group: f.billing.user.Group, Model: "ws-billing", Enabled: true, Priority: f.low.Priority}).Error)
 			t.Cleanup(func() { model.DB.Where("channel_id = ?", f.low.Id).Delete(&model.Ability{}); model.DB.Delete(f.low) })
 		}
 	}
@@ -105,7 +105,7 @@ func newExclusionHTTPFixture(t *testing.T) *exclusionHTTPFixture {
 
 func (f *exclusionHTTPFixture) save(t *testing.T, ids []int) {
 	t.Helper()
-	c, rec := newCtx(t, http.MethodPut, "/api/user/", map[string]any{"id": f.billing.user.Id, "username": f.billing.user.Username, "group": "default", "excluded_channel_ids": ids})
+	c, rec := newCtx(t, http.MethodPut, "/api/user/", map[string]any{"id": f.billing.user.Id, "username": f.billing.user.Username, "group": f.billing.user.Group, "excluded_channel_ids": ids})
 	asAdmin(c, nextTestID())
 	c.Set("role", common.RoleRootUser)
 	UpdateUser(c)
@@ -206,8 +206,11 @@ func TestUserChannelExclusionLoad(t *testing.T) {
 	}
 	require.Contains(t, os.Getenv("TEST_RESPONSES_SQL_DSN"), "/exclusion_http?")
 	require.Contains(t, os.Getenv("TEST_RESPONSES_LOG_SQL_DSN"), "/exclusion_http?")
+	// Batch recovery files belong to this disposable process, never the checkout.
+	t.Chdir(t.TempDir())
 	responsesWSTestUserSequence.Store(time.Now().UnixNano() % 1000000000)
 	f := newExclusionHTTPFixture(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.BusinessStatsAppliedBatch{}))
 	options, err := redis.ParseURL(os.Getenv("TEST_EXCLUSION_REDIS_URL"))
 	require.NoError(t, err)
 	require.Contains(t, options.Addr, "127.0.0.1:")

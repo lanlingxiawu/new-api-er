@@ -158,23 +158,30 @@ export function useUsersColumns(): ColumnDef<User>[] {
           }
 
           return (
-            <Tooltip>
-              <TooltipTrigger render={<div className='-ml-1.5 cursor-help' />}>
-                <StatusBadge
-                  label={t(statusConfig.labelKey)}
-                  variant={
-                    isUserDeleted(user) ? 'neutral' : statusConfig.variant
-                  }
-                  copyable={false}
-                  className='font-normal'
-                />
-              </TooltipTrigger>
-              <TooltipContent>
-                <p className='text-xs'>
-                  {t('Requests:')} {requestCount.toLocaleString()}
-                </p>
-              </TooltipContent>
-            </Tooltip>
+            <BadgeCell>
+              <Tooltip>
+                <TooltipTrigger
+                  render={<div className='-ml-1.5 cursor-help' />}
+                >
+                  <StatusBadge
+                    label={t(statusConfig.labelKey)}
+                    variant={
+                      isUserDeleted(user) ? 'neutral' : statusConfig.variant
+                    }
+                    copyable={false}
+                    className='font-normal'
+                  />
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className='text-xs'>
+                    {t('Requests:')} {requestCount.toLocaleString()}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+              {user.login_protection?.locked && (
+                <Badge variant='secondary'>{t('Sign-in restricted')}</Badge>
+              )}
+            </BadgeCell>
           )
         },
         filterFn: (row, id, value) => {
@@ -224,8 +231,8 @@ export function useUsersColumns(): ColumnDef<User>[] {
         meta: { mobileOrder: 30 },
       },
       {
-        id: 'has_exclusive_ratio',
-        accessorFn: (user) => hasExclusiveGroupRatios(user.group_ratios),
+        id: 'exclusive_ratio_group',
+        accessorKey: 'group_ratios',
         enableSorting: false,
         enableHiding: false,
       },

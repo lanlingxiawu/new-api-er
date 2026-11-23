@@ -12,7 +12,6 @@ import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -556,13 +555,6 @@ export function EmployeeFormDialog({
           <DialogTitle>
             {isUpdate ? t('Edit Employee') : t('Create Employee')}
           </DialogTitle>
-          <DialogDescription>
-            {isUpdate
-              ? t('Adjust tier, status, and internal remark for this employee.')
-              : t(
-                  'Pick an existing user, choose a starting tier, then create the employee profile.'
-                )}
-          </DialogDescription>
         </DialogHeader>
 
         {!isUpdate ? (

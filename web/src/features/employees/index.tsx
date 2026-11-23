@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import {
   useInfiniteQuery,
   useQuery,
@@ -14,6 +32,7 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import {
+  AlertTriangle,
   ChevronDown,
   CirclePlus,
   Download,
@@ -61,6 +80,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
+import { ComboboxInput } from '@/components/ui/combobox-input'
 import {
   Dialog,
   DialogContent,
@@ -96,6 +116,8 @@ import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/com
 import { searchUsers } from '@/features/users/api'
 import type { User } from '@/features/users/types'
 import { getCurrencyDisplay } from '@/lib/currency'
+import { requireServerSuccess } from '@/lib/server-error-message'
+import { getRollingDateRange } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
 import {
@@ -123,6 +145,8 @@ import { EmployeeFormDialog } from './components/employee-form-dialog'
 import { PerformanceAdjustDialog } from './components/performance-adjust-dialog'
 import { TierResetSettingsCard } from './components/tier-reset-settings-card'
 import { UsageLogIdHover } from './components/usage-log-id-hover'
+import { useCommissionLogPage } from './hooks/use-commission-log-page'
+import { COMMISSION_LOG_MAX_RANGE_SECONDS } from './lib/commission-log-query'
 import {
   getEmployeeTierGroupBadgeClass,
   getEmployeeTierGroupDotClass,
@@ -130,6 +154,7 @@ import {
 } from './lib/tiers'
 import type {
   CommissionLog,
+  CommissionLogFilters,
   EmployeeCustomer,
   EmployeeProfile,
   EmployeeTier,
@@ -496,11 +521,6 @@ function RemoveCustomersDialog({
         >
           <DialogHeader className='shrink-0'>
             <DialogTitle>{t('Employee Customer List')}</DialogTitle>
-            <DialogDescription>
-              {t(
-                'View customers assigned to this employee. You can remove a customer from this list when needed.'
-              )}
-            </DialogDescription>
           </DialogHeader>
           <div className='flex min-h-0 flex-1 flex-col gap-4'>
             <div className='bg-muted/30 rounded-lg border px-3 py-2'>
@@ -2170,38 +2190,26 @@ function CommissionLogsTab() {
     if (typeof window === 'undefined') return false
     return localStorage.getItem('employee-commission-logs-compact') === 'true'
   })
-  const [filterForm, setFilterForm] = useState({
+  const [filterForm, setFilterForm] = useState(() => ({
     employeeUserId: '',
     customerUserId: '',
     modelName: '',
     channelId: '',
     lossStatus: 'all' as 'all' | 'loss' | 'normal',
-    start: undefined as Date | undefined,
-    end: undefined as Date | undefined,
-  })
-  const [filters, setFilters] = useState<{
-    employee_user_id?: number
-    customer_user_id?: number
-    model_name?: string
-    channel_id?: number
-    loss_status?: 'loss' | 'normal'
-    start_time?: number
-    end_time?: number
-  }>({})
-  const [pagination, setPagination] = useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: 10,
-  })
-
-  const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['admin-commission-logs', pagination, filters],
-    queryFn: () =>
-      getCommissionLogs({
-        page: pagination.pageIndex + 1,
-        page_size: pagination.pageSize,
-        ...filters,
-      }),
-  })
+    ...getRollingDateRange(1),
+  }))
+  const [filters, setFilters] = useState<CommissionLogFilters>(() => ({
+    start_time: Math.floor(filterForm.start.getTime() / 1000),
+    end_time: Math.floor(filterForm.end.getTime() / 1000),
+  }))
+  const {
+    query,
+    pagination,
+    onPaginationChange,
+    resetPagination,
+    hasNextPage,
+  } = useCommissionLogPage('admin-commission-logs', filters, getCommissionLogs)
+  const { data, isLoading, isFetching, isError, refetch } = query
 
   // 渠道下拉选项（含已删除渠道的历史名称）
   const {
@@ -2272,36 +2280,35 @@ function CommissionLogsTab() {
       ...(filterForm.lossStatus !== 'all'
         ? { loss_status: filterForm.lossStatus }
         : {}),
-      ...(filterForm.start
-        ? { start_time: Math.floor(filterForm.start.getTime() / 1000) }
-        : {}),
-      ...(filterForm.end
-        ? { end_time: Math.floor(filterForm.end.getTime() / 1000) }
-        : {}),
+      start_time: Math.floor(filterForm.start.getTime() / 1000),
+      end_time: Math.floor(filterForm.end.getTime() / 1000),
     })
-    setPagination((current) => ({ ...current, pageIndex: 0 }))
+    resetPagination()
   }
 
   const resetFilters = () => {
+    const range = getRollingDateRange(1)
     setFilterForm({
       employeeUserId: '',
       customerUserId: '',
       modelName: '',
       channelId: '',
       lossStatus: 'all',
-      start: undefined,
-      end: undefined,
+      ...range,
     })
-    setFilters({})
-    setPagination((current) => ({ ...current, pageIndex: 0 }))
+    setFilters({
+      start_time: Math.floor(range.start.getTime() / 1000),
+      end_time: Math.floor(range.end.getTime() / 1000),
+    })
+    resetPagination()
   }
 
   const table = useReactTable({
-    data: data?.data?.items ?? [],
+    data: isError ? [] : (data?.data?.items ?? []),
     columns,
-    rowCount: data?.data?.total ?? 0,
+    pageCount: -1,
     state: { pagination },
-    onPaginationChange: setPagination,
+    onPaginationChange,
     manualPagination: true,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
@@ -2328,7 +2335,28 @@ function CommissionLogsTab() {
       columns={columns}
       isLoading={isLoading}
       isFetching={isFetching}
-      emptyTitle={t('No records')}
+      showPagination={!isError}
+      cursorPagination={{ hasNextPage, isFetching, allowPageSizeChange: true }}
+      scrollResetKey={JSON.stringify([filters, pagination])}
+      emptyTitle={
+        isError ? t('Failed to load commission records') : t('No records')
+      }
+      emptyDescription={
+        isError ? t('Retry or narrow the time range.') : undefined
+      }
+      emptyIcon={isError ? <AlertTriangle /> : undefined}
+      emptyAction={
+        isError ? (
+          <Button
+            size='sm'
+            variant='outline'
+            disabled={isFetching}
+            onClick={() => void refetch()}
+          >
+            {t('Retry')}
+          </Button>
+        ) : undefined
+      }
       toolbar={
         <div className='space-y-2'>
           <p className='text-muted-foreground text-xs'>
@@ -2466,8 +2494,12 @@ function CommissionLogsTab() {
               <CompactDateTimeRangePicker
                 start={filterForm.start}
                 end={filterForm.end}
+                maxRangeSec={COMMISSION_LOG_MAX_RANGE_SECONDS}
                 onChange={({ start, end }) =>
-                  setFilterForm((form) => ({ ...form, start, end }))
+                  setFilterForm((form) => ({
+                    ...form,
+                    ...(start && end ? { start, end } : getRollingDateRange(1)),
+                  }))
                 }
               />
             </div>
@@ -2504,46 +2536,43 @@ function EmployeeMonthlySelector({
   const [open, setOpen] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [debounced, setDebounced] = useState('')
-  const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(keyword.trim()), 300)
     return () => clearTimeout(timer)
   }, [keyword])
 
-  useEffect(() => {
-    if (!open) return
-    const handler = (event: MouseEvent) => {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(event.target as Node)
-      ) {
-        setOpen(false)
-        setKeyword('')
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [open])
-
-  const { data, fetchNextPage, hasNextPage, isFetching, isFetchingNextPage } =
-    useInfiniteQuery({
-      queryKey: ['commission-monthly-employee-selector', debounced],
-      queryFn: ({ pageParam }) =>
-        getEmployees(Number(pageParam), EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE, {
-          keyword: debounced,
-          status: 1,
-        }),
-      initialPageParam: 1,
-      getNextPageParam: (lastPage) => {
-        const page = lastPage.data?.page ?? 1
-        const pageSize =
-          lastPage.data?.page_size ?? EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE
-        const total = lastPage.data?.total ?? 0
-        return page * pageSize < total ? page + 1 : undefined
-      },
-      enabled: open,
-    })
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetching,
+    isFetchingNextPage,
+    isError,
+    refetch,
+  } = useInfiniteQuery({
+    queryKey: ['commission-monthly-employee-selector', debounced],
+    queryFn: async ({ pageParam }) =>
+      requireServerSuccess(
+        await getEmployees(
+          Number(pageParam),
+          EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE,
+          {
+            keyword: debounced,
+            status: 1,
+          }
+        )
+      ),
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => {
+      const page = lastPage.data?.page ?? 1
+      const pageSize =
+        lastPage.data?.page_size ?? EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE
+      const total = lastPage.data?.total ?? 0
+      return page * pageSize < total ? page + 1 : undefined
+    },
+    enabled: open,
+  })
 
   const employees = useMemo(() => {
     const all = data?.pages.flatMap((page) => page.data?.items ?? []) ?? []
@@ -2554,15 +2583,6 @@ function EmployeeMonthlySelector({
       return true
     })
   }, [data])
-  const isInitialFetching = isFetching && !data
-  const allEmployeesLabel = t('All employees')
-  let displayValue = ''
-  if (open) {
-    displayValue = keyword
-  } else if (value) {
-    displayValue = getEmployeeMonthlyOptionLabel(value)
-  }
-
   const handleListScroll = (event: UIEvent<HTMLUListElement>) => {
     const list = event.currentTarget
     const distanceToBottom =
@@ -2571,110 +2591,75 @@ function EmployeeMonthlySelector({
     void fetchNextPage()
   }
 
-  const clearSelection = () => {
-    setKeyword('')
-    setDebounced('')
-    onChange(undefined)
-    setOpen(true)
+  const options = [
+    { value: '', label: t('All employees') },
+    ...(value && !employees.some((employee) => employee.id === value.id)
+      ? [value]
+      : []),
+    ...employees,
+  ].map((employee) =>
+    'value' in employee
+      ? employee
+      : {
+          value: String(employee.id),
+          label: getEmployeeMonthlyOptionLabel(employee),
+          description: employee.remark
+            ? getEmployeeMonthlyAccountLabel(employee)
+            : undefined,
+        }
+  )
+  let dropdownFooter: ReactNode
+  if (isError) {
+    dropdownFooter = (
+      <Button
+        type='button'
+        variant='ghost'
+        size='sm'
+        onClick={() => void refetch()}
+      >
+        {t('Retry')}
+      </Button>
+    )
+  } else if (isFetching) {
+    dropdownFooter = (
+      <p className='text-muted-foreground p-2 text-xs' role='status'>
+        {t('Loading...')}
+      </p>
+    )
+  } else if (hasNextPage) {
+    dropdownFooter = (
+      <Button
+        type='button'
+        variant='ghost'
+        size='sm'
+        onClick={() => void fetchNextPage()}
+      >
+        {t('Load more')}
+      </Button>
+    )
   }
-
   return (
-    <div ref={containerRef} className='relative w-full sm:w-[280px]'>
-      <Input
-        type='text'
-        autoComplete='off'
-        placeholder={allEmployeesLabel}
-        value={displayValue}
-        onChange={(event) => {
-          setKeyword(event.target.value)
-          if (!open) setOpen(true)
+    <div className='w-full sm:w-[280px]'>
+      <ComboboxInput
+        options={options}
+        value={value ? String(value.id) : ''}
+        aria-label={t('Employee')}
+        placeholder={t('All employees')}
+        onOpenChange={setOpen}
+        onSearchValueChange={setKeyword}
+        filterOptions={false}
+        onListScroll={handleListScroll}
+        onValueChange={(id) => {
+          onChange(
+            id
+              ? (employees.find((employee) => String(employee.id) === id) ??
+                  value)
+              : undefined
+          )
         }}
-        onFocus={() => {
-          setKeyword('')
-          setOpen(true)
-        }}
-        className={value && !open ? 'pr-9' : undefined}
+        emptyText={isFetching ? t('Loading...') : t('No users found')}
+        dropdownFooter={dropdownFooter}
       />
-      {value && !open ? (
-        <Button
-          type='button'
-          size='icon'
-          variant='ghost'
-          className='absolute top-1/2 right-1 size-7 -translate-y-1/2'
-          title={t('Clear selection')}
-          aria-label={t('Clear selection')}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={clearSelection}
-        >
-          <X className='size-4' />
-        </Button>
-      ) : null}
-      {open ? (
-        <div className='bg-popover text-popover-foreground absolute top-full right-0 left-0 z-[120] mt-2 overflow-hidden rounded-lg border shadow-lg'>
-          <button
-            type='button'
-            className={cn(
-              'hover:bg-accent flex w-full items-center justify-between px-3 py-2 text-left text-sm',
-              !value && 'bg-accent/70'
-            )}
-            onMouseDown={(event) => {
-              event.preventDefault()
-              clearSelection()
-              setOpen(false)
-            }}
-          >
-            <span className='font-medium'>{allEmployeesLabel}</span>
-            <span className='text-muted-foreground text-xs'>{t('All')}</span>
-          </button>
-          <ul
-            onScroll={handleListScroll}
-            className='max-h-64 overflow-y-auto border-t p-1'
-          >
-            {isInitialFetching || employees.length === 0 ? (
-              <li className='text-muted-foreground px-3 py-8 text-center text-sm'>
-                {isInitialFetching ? t('Loading...') : t('No users found')}
-              </li>
-            ) : (
-              <>
-                {employees.map((employee) => {
-                  const isSelected = value?.id === employee.id
-                  return (
-                    <li
-                      key={employee.id}
-                      role='option'
-                      aria-selected={isSelected}
-                      className='hover:bg-accent aria-selected:bg-accent/80 cursor-pointer rounded-md px-3 py-2 text-sm transition-colors'
-                      onMouseDown={(event) => {
-                        event.preventDefault()
-                        onChange(employee)
-                        setKeyword('')
-                        setOpen(false)
-                      }}
-                    >
-                      <div className='flex min-w-0 items-center justify-between gap-3'>
-                        <span className='truncate font-medium'>
-                          {employee.remark ||
-                            getEmployeeMonthlyAccountLabel(employee)}
-                        </span>
-                        {employee.remark ? (
-                          <span className='text-muted-foreground shrink-0 truncate text-xs'>
-                            {getEmployeeMonthlyAccountLabel(employee)}
-                          </span>
-                        ) : null}
-                      </div>
-                    </li>
-                  )
-                })}
-                {isFetchingNextPage ? (
-                  <li className='text-muted-foreground px-3 py-3 text-center text-sm'>
-                    {t('Loading...')}
-                  </li>
-                ) : null}
-              </>
-            )}
-          </ul>
-        </div>
-      ) : null}
     </div>
   )
 }
@@ -2937,11 +2922,6 @@ function TierDialog({
           <DialogTitle>
             {currentRow ? t('Edit Tier') : t('Create Tier')}
           </DialogTitle>
-          <DialogDescription>
-            {t(
-              'Set the promotion threshold and commission rate employees receive after reaching this tier.'
-            )}
-          </DialogDescription>
         </DialogHeader>
         <div className='space-y-4'>
           <div className='space-y-2'>

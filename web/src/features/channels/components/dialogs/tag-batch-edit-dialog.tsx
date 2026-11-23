@@ -135,7 +135,7 @@ export function TagBatchEditDialog({
       }
 
       if (newTag !== currentTag) {
-        params.new_tag = newTag || undefined
+        params.new_tag = newTag
       }
 
       if (models.trim()) {

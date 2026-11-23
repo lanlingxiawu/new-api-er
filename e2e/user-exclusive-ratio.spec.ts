@@ -55,15 +55,16 @@ test('desktop: real rows, total, server pagination, combined filter, refresh and
   page.on('pageerror', (error) => errors.push(error.message))
   await signIn(page)
   // The entire original first page has no ratios. A client-only current-page
-  // filter would incorrectly show no users when Configured is selected.
+  // filter would incorrectly show no users when default is selected.
   await expectPage(page, 49, 'exr-plain-', 20, 23)
 
   const filteredResponse = page.waitForResponse(
     (response) =>
       response.url().includes('/api/user/search?') &&
-      new URL(response.url()).searchParams.get('has_exclusive_ratio') === 'true'
+      new URL(response.url()).searchParams.get('exclusive_ratio_group') ===
+        'default'
   )
-  await selectRatio(page, 'Configured')
+  await selectRatio(page, 'default')
   const payload = await (await filteredResponse).json()
   expect(payload.success).toBe(true)
   expect(payload.data.total).toBe(25)
@@ -93,22 +94,22 @@ test('desktop: real rows, total, server pagination, combined filter, refresh and
   await expectPage(page, 23, 'exr-ratio-', 20, 22)
   await expect(
     page.getByRole('button', { name: /^Exclusive Ratio/ })
-  ).toContainText('Configured')
+  ).toContainText('default')
   await page.screenshot({
-    path: path.resolve('results/user-exclusive-ratio/desktop-configured.png'),
+    path: path.resolve('results/user-exclusive-ratio/desktop-default.png'),
     fullPage: true,
   })
 
-  await selectRatio(page, 'Not configured')
-  await expectPage(page, 22, 'exr-plain-', 20, 21)
+  await selectRatio(page, 'vip')
+  await expectPage(page, 3, 'exr-ratio-', 3, 22)
   await expect(
     page.locator('tbody').getByText('Exclusive Ratio', { exact: true })
-  ).toHaveCount(0)
+  ).toHaveCount(3)
   await page.getByRole('button', { name: /^Exclusive Ratio/ }).click()
   await page.getByRole('option', { name: 'Clear filters', exact: true }).click()
   await page.keyboard.press('Escape')
   await expect(page.getByText(/^Total:\s*45$/)).toBeVisible()
-  expect(new URL(page.url()).searchParams.has('has_exclusive_ratio')).toBe(
+  expect(new URL(page.url()).searchParams.has('exclusive_ratio_group')).toBe(
     false
   )
   expect(errors).toEqual([])
@@ -120,17 +121,17 @@ test('mobile: filter operates on cards and survives a page reload', async ({
   await page.setViewportSize({ width: 390, height: 844 })
   await signIn(page)
   await expectPage(page, 49, 'exr-plain-', 10, 23)
-  await selectRatio(page, 'Configured')
+  await selectRatio(page, 'default')
   await expectPage(page, 25, 'exr-ratio-', 10, 24)
   await page.reload()
   await expectPage(page, 25, 'exr-ratio-', 10, 24)
   await expect(
     page.getByRole('button', { name: /^Exclusive Ratio/ })
-  ).toContainText('Configured')
+  ).toContainText('default')
   await page.screenshot({
-    path: path.resolve('results/user-exclusive-ratio/mobile-configured.png'),
+    path: path.resolve('results/user-exclusive-ratio/mobile-default.png'),
     fullPage: true,
   })
-  await selectRatio(page, 'Not configured')
-  await expectPage(page, 24, 'exr-plain-', 10, 23)
+  await selectRatio(page, 'vip')
+  await expectPage(page, 5, 'exr-ratio-', 5, 24)
 })

@@ -17,12 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useId, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
 import { Dialog } from '@/components/dialog'
 import { PermissionMatrix } from '@/components/permission-matrix'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Form,
   FormControl,
@@ -32,6 +34,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   permissionMatrixToScopes,
   scopesToPermissionMatrix,
@@ -75,6 +78,11 @@ export function AccessTokenEditDialog(props: AccessTokenEditDialogProps) {
   const initialScopes = props.token.scopes
     .filter((scope) => offered.has(scope))
     .sort()
+  const unavailableScopes = props.token.scopes.filter(
+    (scope) => !offered.has(scope)
+  )
+  const [removeUnavailable, setRemoveUnavailable] = useState(false)
+  const removeUnavailableId = useId()
   const form = useForm<AccessTokenEditFormValues>({
     resolver: zodResolver(accessTokenEditFormSchema),
     defaultValues: {
@@ -88,7 +96,8 @@ export function AccessTokenEditDialog(props: AccessTokenEditDialogProps) {
   }
   const submit = async (values: AccessTokenEditFormValues) => {
     const scopes = permissionMatrixToScopes(values.permissions)
-    const changed = scopes.join(' ') !== initialScopes.join(' ')
+    const changed =
+      removeUnavailable || scopes.join(' ') !== initialScopes.join(' ')
     if (changed && scopes.length === 0) {
       form.setError('permissions', {
         message: 'Select at least one permission',
@@ -165,6 +174,31 @@ export function AccessTokenEditDialog(props: AccessTokenEditDialogProps) {
                   disabled={props.pending}
                   onChange={field.onChange}
                 />
+                {unavailableScopes.length > 0 && (
+                  <div className='space-y-2'>
+                    <p className='text-muted-foreground text-xs'>
+                      {t('{{count}} permissions are no longer available', {
+                        count: unavailableScopes.length,
+                      })}
+                    </p>
+                    <div className='flex items-start gap-2'>
+                      <Checkbox
+                        id={removeUnavailableId}
+                        checked={removeUnavailable}
+                        disabled={props.pending}
+                        onCheckedChange={(checked) =>
+                          setRemoveUnavailable(checked === true)
+                        }
+                      />
+                      <Label
+                        htmlFor={removeUnavailableId}
+                        className='text-sm leading-tight font-normal'
+                      >
+                        {t('Remove unavailable permissions')}
+                      </Label>
+                    </div>
+                  </div>
+                )}
                 <FormMessage />
               </FormItem>
             )}

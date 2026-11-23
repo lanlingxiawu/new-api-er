@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import axios from 'axios'
 import { Download, List, Loader2, RefreshCw, Search } from 'lucide-react'
 import {
@@ -389,8 +407,6 @@ export function ConsumptionCostLedgerDetail() {
   const [statsStatus, setStatsStatus] = useState<
     'ready' | 'pending' | 'unsupported' | ''
   >('')
-  const [statsRunningCount, setStatsRunningCount] = useState(0)
-  const [statsRunningLimit, setStatsRunningLimit] = useState(2)
   const [searchKey, setSearchKey] = useState(0)
   const [compactMode, setCompactMode] = useTableCompactMode(
     'consumption-cost-ledger'
@@ -535,8 +551,6 @@ export function ConsumptionCostLedgerDetail() {
         }
         setFilterStats(res.data?.stats ?? null)
         setStatsStatus(res.data?.stats_status ?? '')
-        setStatsRunningCount(res.data?.stats_running_count ?? 0)
-        setStatsRunningLimit(res.data?.stats_running_limit ?? 2)
         if (res.data?.stats_status !== 'pending') {
           statsRefreshCountRef.current = 0
         }
@@ -576,7 +590,6 @@ export function ConsumptionCostLedgerDetail() {
     setHasMore(false)
     setFilterStats(null)
     setStatsStatus('')
-    setStatsRunningCount(0)
     if (tableScrollRef.current) {
       tableScrollRef.current.scrollTop = 0
     }
@@ -606,7 +619,6 @@ export function ConsumptionCostLedgerDetail() {
     setHasMore(false)
     setFilterStats(null)
     setStatsStatus('')
-    setStatsRunningCount(0)
     setFallbackHint(null)
     statsRefreshCountRef.current = 0
     setSearchKey((value) => value + 1)
@@ -620,7 +632,6 @@ export function ConsumptionCostLedgerDetail() {
     setHasMore(false)
     setFilterStats(null)
     setStatsStatus('')
-    setStatsRunningCount(0)
     setFallbackHint(null)
     statsRefreshCountRef.current = 0
     setSearchKey((value) => value + 1)
@@ -913,22 +924,9 @@ export function ConsumptionCostLedgerDetail() {
         {statsStatus === 'pending' ? (
           <div className='text-muted-foreground flex gap-2 rounded-lg border px-3 py-2 text-xs'>
             <Loader2 className='mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin' />
-            <div className='flex flex-col gap-0.5'>
-              <span>
-                {t('Preparing statistics. They will update automatically.')}
-              </span>
-              <span>
-                {t('Statistics tasks running: {{count}}/{{limit}}', {
-                  count: statsRunningCount,
-                  limit: statsRunningLimit,
-                })}
-              </span>
-              <span>
-                {t(
-                  'Tag filters check each row and may take longer; historical stats are cached for 5 minutes and can be viewed later with the same filters.'
-                )}
-              </span>
-            </div>
+            <span>
+              {t('Preparing statistics. They will update automatically.')}
+            </span>
           </div>
         ) : null}
         <StatStrip

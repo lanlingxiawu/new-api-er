@@ -116,11 +116,9 @@ func DeleteChannelLimitPeriodUsageByChannelIds(channelIds []int) (int64, error) 
 	return res.RowsAffected, res.Error
 }
 
-// DeleteOrphanChannelLimitPeriodUsage 删除所有指向已不存在渠道的轮次行，由 master 清理任务兜底调用。
+// DeleteOrphanChannelLimitPeriodUsage checks one bounded page per master tick.
 func DeleteOrphanChannelLimitPeriodUsage() (int64, error) {
-	res := DB.Where("channel_id NOT IN (?)", DB.Model(&Channel{}).Select("id")).
-		Delete(&ChannelLimitPeriodUsage{})
-	return res.RowsAffected, res.Error
+	return periodUsageOrphanSweep.run(&ChannelLimitPeriodUsage{})
 }
 
 // currentPeriodExists 排除「仍是渠道当前一轮」的行：一个很久没触顶的限时渠道，当前一轮可能早于

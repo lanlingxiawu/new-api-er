@@ -12,6 +12,10 @@ import (
 )
 
 func GetGroups(c *gin.Context) {
+	if c.GetBool("use_access_token") {
+		adminTokenReadRequest(c)
+		return
+	}
 	groupNames := make([]string, 0)
 	for groupName := range ratio_setting.GetGroupRatioCopy() {
 		groupNames = append(groupNames, groupName)

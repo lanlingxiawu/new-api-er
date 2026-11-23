@@ -6,6 +6,16 @@ const (
 	MsgLoginProtectionTarget      = "login_protection.target_invalid"
 )
 
+const (
+	MsgUserAccessTokensDenied        = "user_access_tokens.denied"
+	MsgUserAccessTokensTargetInvalid = "user_access_tokens.target_invalid"
+	MsgUserAccessTokensFailed        = "user_access_tokens.failed"
+	MsgUserAPIKeysDenied             = "user_api_keys.denied"
+	MsgUserAPIKeysTargetInvalid      = "user_api_keys.target_invalid"
+	MsgUserAPIKeysFailed             = "user_api_keys.failed"
+	MsgUserAPIKeysIncomplete         = "user_api_keys.incomplete"
+)
+
 const MsgBodyCacheCapacity = "relay.body_cache_capacity"
 const MsgStreamValidationLegacyConflict = "setting.stream_validation_legacy_conflict"
 const MsgGroupRetryGuardInvalid = "setting.group_retry_guard_invalid"
@@ -17,6 +27,24 @@ const MsgPaymentInfiniV2CredentialsInvalid = "payment.infini_v2_credentials_inva
 const MsgPaymentInfiniV2Unavailable = "payment.infini_v2_unavailable"
 
 const (
+	MsgAdminTokenDenied               = "admin_token.denied"
+	MsgAdminTokenChannelDenied        = "admin_token.channel_denied"
+	MsgAdminTokenOperationFailed      = "admin_token.operation_failed"
+	MsgAdminTokenExpiryInvalid        = "admin_token.expiry_invalid"
+	MsgAdminTokenPermissionsCommitted = "admin_token.permissions_committed"
+	MsgAdminTokenExactUserRequired    = "admin_token.exact_user_required"
+	MsgAdminTokenUsageQueryRequired   = "admin_token.usage_query_required"
+	MsgAdminTokenTargetMissing        = "admin_token.target_missing"
+	MsgAdminTokenUserChanged          = "admin_token.user_changed"
+	MsgAdminTokenUserCommitted        = "admin_token.user_committed"
+	MsgAdminTokenAssignmentInvalid    = "admin_token.assignment_invalid"
+	MsgAdminTokenAssignmentMissing    = "admin_token.assignment_missing"
+	MsgAdminTokenEmployeeDisabled     = "admin_token.employee_disabled"
+	MsgAdminTokenQuotaLimit           = "admin_token.quota_limit"
+	MsgAdminTokenTopupUnsupported     = "admin_token.topup_unsupported"
+	MsgAdminTokenTopupUnpaid          = "admin_token.topup_unpaid"
+	MsgAdminTokenTopupQueryFailed     = "admin_token.topup_query_failed"
+	MsgAdminTokenTopupChanged         = "admin_token.topup_changed"
 	MsgAuditSecurityUnavailable       = "audit_security.unavailable"
 	MsgAuditSecurityNotFound          = "audit_security.not_found"
 	MsgAuditSecurityConflict          = "audit_security.conflict"
@@ -172,6 +200,9 @@ const (
 	MsgEmailVerificationSubject                     = "email.verification.subject"
 	MsgEmailVerificationValidity                    = "email.verification.validity"
 	MsgEmployeeExportConflict                       = "employee_export.conflict"
+	MsgEmployeeCommissionQueryFailed                = "employee.commission_query_failed"
+	MsgEmployeeCommissionQueryInvalid               = "employee.commission_query_invalid"
+	MsgEmployeeCommissionQueryTimeout               = "employee.commission_query_timeout"
 	MsgEmployeeExportInvalid                        = "employee_export.invalid"
 	MsgEmployeeExportNameTaken                      = "employee_export.name_taken"
 	MsgEmployeeExportNoCustomers                    = "employee_export.no_customers"

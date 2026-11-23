@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
@@ -502,71 +503,12 @@ func SearchChannels(c *gin.Context) {
 	if !enableTagMode {
 		sortOptions.StatDate = statDate
 	}
-	channelData := make([]*model.Channel, 0)
-	if enableTagMode {
-		tags, err := model.SearchTags(keyword, group, modelKeyword, idSort)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		for _, tag := range tags {
-			if tag != nil && *tag != "" {
-				var tagChannels []*model.Channel
-				err := sortOptions.Apply(buildChannelListQuery(group, -1, -1, limitFilter, statDate).Where("tag = ?", *tag)).
-					Omit("key").
-					Find(&tagChannels).Error
-				if err != nil {
-					common.ApiError(c, err)
-					return
-				}
-				channelData = append(channelData, tagChannels...)
-			}
-		}
-	} else {
-		channels, err := model.SearchChannels(keyword, group, modelKeyword, idSort, limitFilter, statDate, sortOptions)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		channelData = channels
-	}
-
-	if statusFilter == common.ChannelStatusEnabled || statusFilter == 0 {
-		filtered := make([]*model.Channel, 0, len(channelData))
-		for _, ch := range channelData {
-			if statusFilter == common.ChannelStatusEnabled && ch.Status != common.ChannelStatusEnabled {
-				continue
-			}
-			if statusFilter == 0 && ch.Status == common.ChannelStatusEnabled {
-				continue
-			}
-			filtered = append(filtered, ch)
-		}
-		channelData = filtered
-	}
-
-	// calculate type counts for search results
-	typeCounts := make(map[int64]int64)
-	for _, channel := range channelData {
-		typeCounts[int64(channel.Type)]++
-	}
-
 	typeParam := c.Query("type")
 	typeFilter := -1
 	if typeParam != "" {
 		if tp, err := strconv.Atoi(typeParam); err == nil {
 			typeFilter = tp
 		}
-	}
-
-	if typeFilter >= 0 {
-		filtered := make([]*model.Channel, 0, len(channelData))
-		for _, ch := range channelData {
-			if ch.Type == typeFilter {
-				filtered = append(filtered, ch)
-			}
-		}
-		channelData = filtered
 	}
 
 	page, _ := strconv.Atoi(c.DefaultQuery("p", "1"))
@@ -578,11 +520,16 @@ func SearchChannels(c *gin.Context) {
 		pageSize = 20
 	}
 
-	total := len(channelData)
-	startIdx := min((page-1)*pageSize, total)
-	endIdx := min(startIdx+pageSize, total)
-
-	pagedData := channelData[startIdx:endIdx]
+	pagedData, total, typeCounts, err := model.SearchChannelPage(c.Request.Context(), model.ChannelSearchOptions{
+		Keyword: keyword, Group: group, Model: modelKeyword, LimitFilter: limitFilter,
+		Status: statusFilter, Type: typeFilter, Page: page, PageSize: pageSize,
+		TagMode: enableTagMode, StatDate: statDate, Sort: sortOptions,
+	})
+	if err != nil {
+		logger.LogError(c, "channel search failed: "+err.Error())
+		common.ApiErrorI18n(c, "channel.get_list_failed")
+		return
+	}
 
 	for _, datum := range pagedData {
 		clearChannelInfo(datum)
@@ -841,6 +788,7 @@ func RefreshCodexChannelCredential(c *gin.Context) {
 		return
 	}
 
+	model.RequestAuditChanges(c).Add(model.AuditTarget("channel", ch.Id, ch.Name), model.AuditFields{"key": false}, model.AuditFields{"key": true})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "refreshed",
@@ -897,21 +845,6 @@ func getVertexArrayKeys(keys string) ([]string, []int, error) {
 	return cleanKeys, inputIndices, nil
 }
 
-// syncChannelCostRatio 根据透传的成本系数同步 ChannelCostConfig（成本配置独立存表）。
-// 成本系数为必填项，始终写入配置（不再因等于默认值而删除）：
-//   - nil：请求未携带该字段（非渠道表单的旧客户端），保持现状不动；
-//   - <0：非法值，忽略；
-//   - >=0（含 0=零成本/免费渠道，含 1.0=全额成本）：写入/更新配置。
-func syncChannelCostRatio(channelId int, ratio *float64) {
-	if ratio == nil {
-		return
-	}
-	if *ratio < 0 {
-		return
-	}
-	_ = model.UpsertChannelCostConfig(channelId, *ratio, "")
-}
-
 func AddChannel(c *gin.Context) {
 	addChannelRequest := AddChannelRequest{}
 	err := c.ShouldBindJSON(&addChannelRequest)
@@ -921,6 +854,11 @@ func AddChannel(c *gin.Context) {
 	}
 
 	if addChannelRequest.Channel != nil {
+		if err := addChannelRequest.Channel.PreserveStreamValidationSetting(&model.Channel{}); err != nil {
+			logger.LogError(c, "invalid channel stream validation setting: "+err.Error())
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
 		if err := addChannelRequest.Channel.PreserveProbeSetting(nil); err != nil {
 			logger.LogError(c, "invalid channel probe setting: "+err.Error())
 			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
@@ -936,7 +874,7 @@ func AddChannel(c *gin.Context) {
 	// type-62 channel dedicated to it.
 	if addChannelRequest.Channel != nil &&
 		(addChannelRequest.Channel.Type == constant.ChannelTypeTaskPlugin || len(addChannelRequest.Channel.GetSetting().TaskPluginBindings()) > 0) &&
-		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.TaskPluginBind) {
+		!middleware.RequirePATPermission(c, authz.TaskPluginBind) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "task plugin channels require the task_plugin.bind permission",
@@ -1031,16 +969,14 @@ func AddChannel(c *gin.Context) {
 			channelInputIndices = append(channelInputIndices, []int{inputIndices[i]})
 		}
 	}
-	err = model.BatchInsertChannels(channels)
+	if c.GetBool("use_access_token") && (len(channels) > 100 || addChannelRequest.BatchAddSetKeyPrefix2Name) {
+		common.ApiErrorT(c, "Invalid parameters")
+		return
+	}
+	err = model.BatchInsertChannels(channels, c.GetInt("id"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
-	}
-	// 同步成本系数（透传字段，存于 ChannelCostConfig）
-	if addChannelRequest.Channel.CostRatio != nil {
-		for i := range channels {
-			syncChannelCostRatio(channels[i].Id, addChannelRequest.Channel.CostRatio)
-		}
 	}
 	model.InitChannelCache()
 	// 新渠道可能带着每日上限，本节点立即刷新快照，不等下一个 flush 周期。
@@ -1053,6 +989,21 @@ func AddChannel(c *gin.Context) {
 	}
 	if baseURLFromPluginDefault {
 		createAudit["base_url_source"] = "plugin_default"
+	}
+	changes := model.RequestAuditChanges(c)
+	for i := range channels[:min(len(channels), 100)] {
+		snapshot := model.ChannelAuditSnapshot(&channels[i])
+		name := channels[i].Name
+		if addChannelRequest.BatchAddSetKeyPrefix2Name {
+			// This name contains a key prefix. Keep only the credential-change
+			// marker in history, never the derived name or key fragment.
+			delete(snapshot, "name")
+			name = ""
+		}
+		changes.Add(model.AuditTarget("channel", channels[i].Id, name), nil, snapshot)
+	}
+	if len(channels) > 100 {
+		changes.Truncated = true
 	}
 	recordManageAudit(c, "channel.create", createAudit)
 	ids := make([]int, len(channels))
@@ -1080,14 +1031,17 @@ func DeleteChannel(c *gin.Context) {
 	channelName := ""
 	channelProxy := ""
 	channelLookupFailed := false
+	var auditBefore model.AuditFields
 	if existing, err := model.GetChannelById(id, false); err == nil && existing != nil {
+		auditBefore = model.ChannelAuditSnapshot(existing)
+		delete(auditBefore, "key")
 		channelName = existing.Name
 		channelProxy = existing.GetSetting().Proxy
 	} else {
 		channelLookupFailed = true
 	}
 	channel := model.Channel{Id: id}
-	err := channel.Delete()
+	err := channel.Delete(c.GetInt("admin_token_creator_id"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1097,6 +1051,11 @@ func DeleteChannel(c *gin.Context) {
 		service.ResetProxyClientCache()
 	} else {
 		service.InvalidateProxyClient(channelProxy)
+	}
+	if auditBefore != nil {
+		model.RequestAuditChanges(c).Add(model.AuditTarget("channel", id, channelName), auditBefore, nil)
+	} else {
+		model.RequestAuditChanges(c).Outcome = "unavailable"
 	}
 	recordManageAudit(c, "channel.delete", map[string]any{
 		"id":   id,
@@ -1118,7 +1077,7 @@ func DeleteDisabledChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	rows, err := model.DeleteDisabledChannel()
+	rows, err := model.DeleteDisabledChannel(model.RequestAuditChanges(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1176,7 +1135,7 @@ func DisableTagChannels(c *gin.Context) {
 		return
 	}
 	ids := channelIDsFromChannels(channels)
-	err = model.DisableChannelByTag(channelTag.Tag)
+	err = model.DisableChannelByTag(channelTag.Tag, model.RequestAuditChanges(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1200,7 +1159,7 @@ func EnableTagChannels(c *gin.Context) {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
-	err = model.EnableChannelByTag(channelTag.Tag)
+	err = model.EnableChannelByTag(channelTag.Tag, model.RequestAuditChanges(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1229,7 +1188,7 @@ func EditTagChannels(c *gin.Context) {
 	}
 	// 每日金额上限与 param/header override 同属敏感字段，权限门槛一致。
 	if (channelTag.ParamOverride != nil || channelTag.HeaderOverride != nil || !channelTag.dailyLimitEdit().IsEmpty()) &&
-		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
+		!middleware.RequirePATPermission(c, authz.ChannelSensitiveWrite) {
 		common.ApiErrorT(c, "Unauthorized, insufficient privileges")
 		return
 	}
@@ -1266,7 +1225,7 @@ func EditTagChannels(c *gin.Context) {
 		}
 		taggedChannelIds = ids
 	}
-	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride)
+	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride, model.RequestAuditChanges(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1277,15 +1236,35 @@ func EditTagChannels(c *gin.Context) {
 	// 按**改名前锁定的渠道 ID**更新，不能按新标签名更新：把 A 改名成一个已存在的 B
 	// 之后，按 B 更新会把原本就属于 B 的渠道一起改掉，作用域凭空放大。
 	if edit := channelTag.dailyLimitEdit(); !edit.IsEmpty() {
-		if _, err := model.UpdateChannelDailyLimitByIds(taggedChannelIds, edit); err != nil {
+		if _, err := model.UpdateChannelDailyLimitByIds(taggedChannelIds, edit, model.RequestAuditChanges(c)); err != nil {
 			common.ApiError(c, err)
 			return
 		}
 		service.RefreshChannelDailyLimitConfigs()
 	}
 	model.InitChannelCache()
+	// Record submitted field names without scanning the tagged channels or
+	// claiming that every matched row changed. Never retain configuration values.
+	submittedFields := make([]string, 0, 9)
+	for field, submitted := range map[string]bool{
+		"tag":             channelTag.NewTag != nil && *channelTag.NewTag != channelTag.Tag,
+		"model_mapping":   channelTag.ModelMapping != nil,
+		"models":          channelTag.Models != nil && *channelTag.Models != "",
+		"group":           channelTag.Groups != nil && *channelTag.Groups != "",
+		"priority":        channelTag.Priority != nil,
+		"weight":          channelTag.Weight != nil,
+		"param_override":  channelTag.ParamOverride != nil,
+		"header_override": channelTag.HeaderOverride != nil,
+		"daily_limit":     !channelTag.dailyLimitEdit().IsEmpty(),
+	} {
+		if submitted {
+			submittedFields = append(submittedFields, field)
+		}
+	}
+	slices.Sort(submittedFields)
 	recordManageAudit(c, "channel.tag_edit", map[string]any{
-		"tag": channelTag.Tag,
+		"tag":              channelTag.Tag,
+		"submitted_fields": submittedFields,
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -1306,7 +1285,9 @@ func DeleteChannelBatch(c *gin.Context) {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
-	deletedCount, err := model.BatchDeleteChannels(channelBatch.Ids)
+	audit := model.RequestAuditChanges(c)
+	before := audit.ObserveChannels(model.DB.Model(&model.Channel{}).Where("id IN ?", channelBatch.Ids))
+	deletedCount, err := model.BatchDeleteChannels(channelBatch.Ids, c.GetInt("admin_token_creator_id"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1315,6 +1296,7 @@ func DeleteChannelBatch(c *gin.Context) {
 	if deletedCount > 0 {
 		service.ResetProxyClientCache()
 	}
+	audit.ChannelWrites(before, nil)
 	recordManageAudit(c, "channel.delete_batch", map[string]any{
 		"count": deletedCount,
 	})
@@ -1374,7 +1356,7 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 	if channel.Type == constant.ChannelTypeTaskPlugin &&
-		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.TaskPluginBind) {
+		!middleware.RequirePATPermission(c, authz.TaskPluginBind) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "task plugin channels require the task_plugin.bind permission",
@@ -1408,7 +1390,7 @@ func UpdateChannel(c *gin.Context) {
 	// administrators without it can still edit the rest of a gateway channel.
 	if settingProvided &&
 		!slices.Equal(channel.GetSetting().TaskPluginBindings(), originChannel.GetSetting().TaskPluginBindings()) &&
-		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.TaskPluginBind) {
+		!middleware.RequirePATPermission(c, authz.TaskPluginBind) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "task plugin channels require the task_plugin.bind permission",
@@ -1417,6 +1399,15 @@ func UpdateChannel(c *gin.Context) {
 	}
 
 	preserveSensitiveChannelSettingsForUpdate(&channel.Channel, originChannel)
+	if err := channel.Channel.PreserveStreamValidationSetting(originChannel); err != nil {
+		logger.LogError(c, "invalid channel stream validation setting: "+err.Error())
+		if errors.Is(err, model.ErrLegacyStreamValidationConflict) {
+			common.ApiErrorI18n(c, i18n.MsgStreamValidationLegacyConflict)
+			return
+		}
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
 	if err := channel.Channel.PreserveProbeSetting(originChannel); err != nil {
 		logger.LogError(c, "invalid channel probe setting: "+err.Error())
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
@@ -1427,7 +1418,7 @@ func UpdateChannel(c *gin.Context) {
 	channel.ChannelInfo = originChannel.ChannelInfo
 
 	if channelHasSensitiveChanges(&channel, originChannel, requestData) &&
-		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
+		!middleware.RequirePATPermission(c, authz.ChannelSensitiveWrite) {
 		common.ApiErrorT(c, "Unauthorized, insufficient privileges")
 		return
 	}
@@ -1514,56 +1505,30 @@ func UpdateChannel(c *gin.Context) {
 			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
 		}
 	}
-	// 每日上限必须补一次 map 更新：Channel.Update() 走 Updates(struct)，GORM 会跳过
-	// 结构体零值，而 daily_quota_limit = 0 恰恰是「清除上限」这个有意义的值。批量与
-	// 按 Tag 两条路径早就为此改用了 map 更新（model.DailyLimitEdit），单渠道这条也要
-	// 一致，否则管理员在编辑抽屉里清空金额保存后上限依旧生效。
-	//
-	// 摘字段要赶在 Update() 之前：Update() 末尾会把整行重新读回 channel，之后再读就
-	// 只能拿到库里的旧值。
 	dailyLimitEdit := buildChannelDailyLimitEdit(&channel, requestData)
-	err = channel.Update()
+	err = channel.UpdateConfigurationWithAudit(dailyLimitEdit, model.RequestAuditChanges(c), c.GetInt("admin_token_creator_id"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if err := applyChannelDailyLimitEdit(channel.Id, dailyLimitEdit); err != nil {
-		common.ApiError(c, err)
-		return
+	changedFields := ChannelSecurityChanges(originChannel, &channel.Channel)
+	updateAudit := map[string]any{"id": channel.Id, "name": channel.Name, "changed_fields": changedFields, "followup_failed": true}
+	if baseURLFromPluginDefault {
+		updateAudit["base_url_source"] = "plugin_default"
 	}
-	// 同步成本系数（透传字段，存于 ChannelCostConfig）
-	syncChannelCostRatio(channel.Id, channel.CostRatio)
+	defer recordManageAudit(c, "channel.update", updateAudit)
+	if dailyLimitEdit.QuotaLimit != nil && *dailyLimitEdit.QuotaLimit != originChannel.DailyQuotaLimit || dailyLimitEdit.AutoRecover != nil && (*dailyLimitEdit.AutoRecover == 1) != originChannel.GetDailyLimitAutoRecover() || dailyLimitEdit.RecoverMinutes != nil && *dailyLimitEdit.RecoverMinutes != originChannel.DailyLimitRecoverMinutes {
+		if !slices.Contains(changedFields, "daily_limit") {
+			changedFields = append(changedFields, "daily_limit")
+		}
+		updateAudit["changed_fields"] = changedFields
+	}
 	model.InitChannelCache()
 	service.RefreshChannelDailyLimitConfigs()
 	if proxyChanged {
 		service.InvalidateProxyClient(originProxy)
 	}
-	// 记录变更的字段名（语言无关的字段标识），密钥仅记录"已更换"绝不记录内容。
-	changedFields := make([]string, 0)
-	if channel.Models != originChannel.Models {
-		changedFields = append(changedFields, "models")
-	}
-	if channel.Group != originChannel.Group {
-		changedFields = append(changedFields, "group")
-	}
-	if channel.Type != originChannel.Type {
-		changedFields = append(changedFields, "type")
-	}
-	if !equalStringPtr(channel.BaseURL, originChannel.BaseURL) {
-		changedFields = append(changedFields, "base_url")
-	}
-	if channel.Key != "" && channel.Key != originChannel.Key {
-		changedFields = append(changedFields, "key")
-	}
-	updateAudit := map[string]any{
-		"id":             channel.Id,
-		"name":           channel.Name,
-		"changed_fields": changedFields,
-	}
-	if baseURLFromPluginDefault {
-		updateAudit["base_url_source"] = "plugin_default"
-	}
-	recordManageAudit(c, "channel.update", updateAudit)
+	updateAudit["followup_failed"] = false
 	channel.Key = ""
 	clearChannelInfo(&channel.Channel)
 	c.JSON(http.StatusOK, gin.H{
@@ -1585,8 +1550,11 @@ func UpdateChannelStatus(c *gin.Context) {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
+	audit := model.RequestAuditChanges(c)
+	before := audit.ObserveChannels(model.DB.Model(&model.Channel{}).Where("id = ?", id))
 	changed := model.UpdateChannelStatus(id, "", req.Status, "manual operation")
 	if changed {
+		audit.ChannelWrites(before, model.AuditFields{"status": req.Status})
 		model.InitChannelCache()
 		if req.Status != common.ChannelStatusEnabled {
 			closeActiveChannelWebSockets([]int{id})
@@ -1611,9 +1579,17 @@ func BatchUpdateChannelStatus(c *gin.Context) {
 		return
 	}
 	changedCount := 0
+	audit := model.RequestAuditChanges(c)
+	before := audit.ObserveChannels(model.DB.Model(&model.Channel{}).Where("id IN ?", req.Ids))
 	var disabledIDs []int
 	for _, id := range req.Ids {
 		if model.UpdateChannelStatus(id, "", req.Status, "manual batch operation") {
+			for _, row := range before {
+				if row.Id == id {
+					audit.ChannelWrites([]model.Channel{row}, model.AuditFields{"status": req.Status})
+					break
+				}
+			}
 			changedCount++
 			if req.Status != common.ChannelStatusEnabled {
 				disabledIDs = append(disabledIDs, id)
@@ -1789,12 +1765,15 @@ func BatchSetChannelTag(c *gin.Context) {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
+	audit := model.RequestAuditChanges(c)
+	before := audit.ObserveChannels(model.DB.Model(&model.Channel{}).Where("id IN ?", channelBatch.Ids))
 	err = model.BatchSetChannelTag(channelBatch.Ids, channelBatch.Tag)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	model.InitChannelCache()
+	audit.ChannelWrites(before, model.AuditFields{"tag": channelBatch.Tag})
 	recordManageAudit(c, "channel.tag_batch_set", map[string]any{
 		"count": len(channelBatch.Ids),
 	})
@@ -1873,7 +1852,7 @@ func CopyChannel(c *gin.Context) {
 		return
 	}
 	if (origin.Type == constant.ChannelTypeTaskPlugin || len(origin.GetSetting().TaskPluginBindings()) > 0) &&
-		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.TaskPluginBind) {
+		!middleware.RequirePATPermission(c, authz.TaskPluginBind) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "task plugin channels require the task_plugin.bind permission"})
 		return
 	}
@@ -1905,12 +1884,13 @@ func CopyChannel(c *gin.Context) {
 	}
 
 	// insert
-	if err := clone.Insert(); err != nil {
+	if err := clone.Insert(c.GetInt("id")); err != nil {
 		common.SysError(common.LogText("failed to clone channel: %s", err.Error()))
 		common.ApiErrorT(c, "Failed to copy channel. Please try again later")
 		return
 	}
 	model.InitChannelCache()
+	model.RequestAuditChanges(c).Add(model.AuditTarget("channel", clone.Id, clone.Name), nil, model.ChannelAuditSnapshot(&clone))
 	recordManageAudit(c, "channel.copy", map[string]any{
 		"sourceId": id,
 		"id":       clone.Id,
@@ -1971,19 +1951,23 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 	}
 	if multiKeyActionRequiresSensitiveWrite(request.Action) &&
-		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
+		!middleware.RequirePATPermission(c, authz.ChannelSensitiveWrite) {
 		common.ApiErrorT(c, "Unauthorized, insufficient privileges")
 		return
 	}
 
-	// get_key_status 为只读查询，不记录审计；其余为修改操作，记录审计并跳过中间件兜底。
+	auditCommitted := false
+	auditBefore := model.ChannelAuditSnapshot(channel)
 	if request.Action == "get_key_status" {
 		markAuditLogged(c)
 	} else {
-		recordManageAudit(c, "channel.multi_key_manage", map[string]any{
-			"action": request.Action,
-			"id":     channel.Id,
-		})
+		// Registered before Unlock: audit executes only after the shared lock is released.
+		defer func() {
+			if auditCommitted {
+				model.RequestAuditChanges(c).Add(model.AuditTarget("channel", channel.Id, channel.Name), auditBefore, model.ChannelAuditSnapshot(channel))
+			}
+			recordManageAudit(c, "channel.multi_key_manage", map[string]any{"id": channel.Id, "action": request.Action, "success": auditCommitted})
+		}()
 	}
 
 	lock := model.GetChannelPollingLock(channel.Id)
@@ -2043,6 +2027,10 @@ func ManageMultiKeys(c *gin.Context) {
 			keyPreview := key
 			if len(key) > 10 {
 				keyPreview = key[:10] + "..."
+			}
+			if c.GetBool("use_access_token") {
+				keyPreview = ""
+				reason = ""
 			}
 
 			allKeyStatusList = append(allKeyStatusList, KeyStatus{
@@ -2127,11 +2115,12 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyStatusList[keyIndex] = 2 // disabled
 
 		shouldCloseWebSocket := disableMultiKeyChannelIfUnavailable(channel)
-		err = channel.Update()
+		err = channel.Update(c.GetInt("admin_token_creator_id"))
 		if err != nil {
 			common.ApiError(c, err)
 			return
 		}
+		auditCommitted = true
 		model.InitChannelCache()
 		if shouldCloseWebSocket {
 			closeActiveChannelWebSockets([]int{channel.Id})
@@ -2163,12 +2152,13 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 		restoreMultiKeyChannelIfAvailable(channel)
 
-		err = channel.Update()
+		err = channel.Update(c.GetInt("admin_token_creator_id"))
 		if err != nil {
 			common.ApiError(c, err)
 			return
 		}
 
+		auditCommitted = true
 		model.InitChannelCache()
 		common.ApiSuccessT(c, "Key enabled", nil)
 		return
@@ -2185,12 +2175,13 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
 		restoreMultiKeyChannelIfAvailable(channel)
 
-		err = channel.Update()
+		err = channel.Update(c.GetInt("admin_token_creator_id"))
 		if err != nil {
 			common.ApiError(c, err)
 			return
 		}
 
+		auditCommitted = true
 		model.InitChannelCache()
 		common.ApiSuccessT(c, "Enabled {{count}} keys", nil, map[string]any{"count": enabledCount})
 		return
@@ -2227,11 +2218,12 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		shouldCloseWebSocket := disableMultiKeyChannelIfUnavailable(channel)
-		err = channel.Update()
+		err = channel.Update(c.GetInt("admin_token_creator_id"))
 		if err != nil {
 			common.ApiError(c, err)
 			return
 		}
+		auditCommitted = true
 		model.InitChannelCache()
 		if shouldCloseWebSocket {
 			closeActiveChannelWebSockets([]int{channel.Id})
@@ -2298,11 +2290,12 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
 
 		shouldCloseWebSocket := disableMultiKeyChannelIfUnavailable(channel)
-		err = channel.Update()
+		err = channel.Update(c.GetInt("admin_token_creator_id"))
 		if err != nil {
 			common.ApiError(c, err)
 			return
 		}
+		auditCommitted = true
 		model.InitChannelCache()
 		if shouldCloseWebSocket {
 			closeActiveChannelWebSockets([]int{channel.Id})
@@ -2363,11 +2356,12 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
 
 		shouldCloseWebSocket := disableMultiKeyChannelIfUnavailable(channel)
-		err = channel.Update()
+		err = channel.Update(c.GetInt("admin_token_creator_id"))
 		if err != nil {
 			common.ApiError(c, err)
 			return
 		}
+		auditCommitted = true
 		model.InitChannelCache()
 		if shouldCloseWebSocket {
 			closeActiveChannelWebSockets([]int{channel.Id})

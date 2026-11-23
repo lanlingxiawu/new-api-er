@@ -33,6 +33,13 @@ export const userRoleSchema = z.number()
 export type UserRole = z.infer<typeof userRoleSchema>
 
 export const userSchema = z.object({
+  login_protection: z
+    .object({
+      locked: z.boolean(),
+      failed_attempts: z.number(),
+      locked_at: z.number(),
+    })
+    .optional(),
   id: z.number(),
   username: z.string(),
   display_name: z.string(),
@@ -47,6 +54,8 @@ export const userSchema = z.object({
   request_count: z.number(),
   group: z.string(),
   group_ratios: z.string().optional(),
+  stream_protocol_validation: z.boolean().nullable().optional(),
+  claude_stream_validation: z.boolean().nullable().optional(),
   excluded_channel_ids: z.array(z.number().int().positive()).optional(),
   stream_response_timeout: z.number().optional(),
   stream_response_timeout_mode: z.enum(['first_output', 'idle']).optional(),
@@ -121,6 +130,7 @@ export interface GetUsersResponse {
 
 export interface SearchUsersParams {
   has_exclusive_ratio?: boolean
+  exclusive_ratio_group?: string
   keyword?: string
   group?: string
   role?: string
@@ -142,6 +152,8 @@ export interface UserFormData {
   quota?: number // Only used when updating user
   group?: string // Only used when updating user
   group_ratios?: string // JSON {group: ratio}; only used when updating user
+  stream_protocol_validation?: boolean | null
+  claude_stream_validation?: boolean | null
   excluded_channel_ids?: number[]
   stream_response_timeout?: number // 0 inherits the current global response limit, -1 disables
   stream_response_timeout_mode?: 'first_output' | 'idle' // first output or continuous stream silence timeout
@@ -157,6 +169,7 @@ export interface UserFormData {
 export type ManageUserAction =
   | 'promote'
   | 'demote'
+  | 'unlock_login'
   | 'enable'
   | 'disable'
   | 'delete'
@@ -175,4 +188,9 @@ export interface ManageUserQuotaPayload {
 // Dialog Types
 // ============================================================================
 
-export type UsersDialogType = 'create' | 'update' | 'delete'
+export type UsersDialogType =
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'clear-api-keys'
+  | 'clear-access-tokens'

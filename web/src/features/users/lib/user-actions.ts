@@ -24,6 +24,7 @@ import type { ManageUserAction } from '../types'
 
 const ACTION_MESSAGES: Record<ManageUserAction, string> = {
   enable: 'User enabled successfully',
+  unlock_login: 'Login restriction removed',
   disable: 'User disabled successfully',
   promote: 'User promoted to admin successfully',
   demote: 'User demoted to regular user successfully',

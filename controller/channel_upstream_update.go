@@ -914,6 +914,7 @@ func ApplyChannelUpstreamModelUpdates(c *gin.Context) {
 		req.AddModels,
 		req.IgnoreModels,
 		req.RemoveModels,
+		model.RequestAuditChanges(c),
 	)
 	if err != nil {
 		common.ApiError(c, err)
@@ -992,6 +993,7 @@ func applyChannelUpstreamModelUpdates(
 	addModelsInput []string,
 	ignoreModelsInput []string,
 	removeModelsInput []string,
+	audit ...*model.AuditChanges,
 ) (
 	addedModels []string,
 	removedModels []string,
@@ -1000,6 +1002,7 @@ func applyChannelUpstreamModelUpdates(
 	modelsChanged bool,
 	err error,
 ) {
+	before := model.AuditFields{"models": channel.Models, "settings": channel.OtherSettings}
 	settings := channel.GetOtherSettings()
 	pendingAddModels := normalizeModelNames(settings.UpstreamModelUpdateLastDetectedModels)
 	pendingRemoveModels := normalizeModelNames(settings.UpstreamModelUpdateLastRemovedModels)
@@ -1027,6 +1030,10 @@ func applyChannelUpstreamModelUpdates(
 
 	if err := updateChannelUpstreamModelSettings(channel, settings, modelsChanged); err != nil {
 		return nil, nil, nil, nil, false, err
+	}
+
+	if len(audit) > 0 {
+		audit[0].Add(model.AuditTarget("channel", channel.Id, channel.Name), before, model.AuditFields{"models": channel.Models, "settings": channel.OtherSettings})
 	}
 
 	if modelsChanged {
@@ -1093,6 +1100,7 @@ func ApplyAllChannelUpstreamModelUpdates(c *gin.Context) {
 				pendingAddModels,
 				nil,
 				pendingRemoveModels,
+				model.RequestAuditChanges(c),
 			)
 			if err != nil {
 				failed = append(failed, channel.Id)
@@ -1122,6 +1130,9 @@ func ApplyAllChannelUpstreamModelUpdates(c *gin.Context) {
 		refreshChannelRuntimeCache()
 	}
 
+	if len(failed) > 0 {
+		model.RequestAuditChanges(c).Outcome = "partial"
+	}
 	recordManageAudit(c, "channel.upstream_apply_all", map[string]any{
 		"count": len(results),
 	})

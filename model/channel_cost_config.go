@@ -31,5 +31,8 @@ func deleteChannelCostConfigsTx(tx *gorm.DB, channelIds []int) error {
 	if len(channelIds) == 0 {
 		return nil
 	}
+	if err := tx.Where("channel_id IN ?", channelIds).Delete(&ChannelCreator{}).Error; err != nil {
+		return err
+	}
 	return tx.Where("channel_id IN ?", channelIds).Delete(&ChannelCostConfig{}).Error
 }

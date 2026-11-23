@@ -119,7 +119,6 @@ export function ChannelConfiguration(props: ChannelConfigurationProps) {
       <div className='-mt-1 shrink-0 overflow-x-auto py-1'>
         <TabsList
           aria-label={t('Channel configuration')}
-          variant='line'
           className='min-w-full justify-start'
         >
           {sections.map((section) => {

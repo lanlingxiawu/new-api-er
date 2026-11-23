@@ -157,19 +157,21 @@ it('filters exclusive ratios on the server and clears the filter', async () => {
   const user = userEvent.setup()
   const { get, router } = await renderUsers()
   await user.click(screen.getByRole('button', { name: /^Exclusive Ratio/ }))
-  await user.click(await screen.findByRole('option', { name: /^Configured/ }))
+  expect(screen.queryByRole('option', { name: 'Configured' })).toBeNull()
+  expect(screen.queryByRole('option', { name: 'Not configured' })).toBeNull()
+  await user.click(await screen.findByRole('option', { name: 'default' }))
   await waitFor(() =>
     expect(get).toHaveBeenLastCalledWith(
-      '/api/user/search?keyword=&group=&has_exclusive_ratio=true&p=1&page_size=20'
+      '/api/user/search?keyword=&group=&exclusive_ratio_group=default&p=1&page_size=20'
     )
   )
   expect(router.state.location.search).toMatchObject({
-    has_exclusive_ratio: ['true'],
+    exclusive_ratio_group: ['default'],
   })
-  await user.click(screen.getByRole('option', { name: 'Not configured' }))
+  await user.click(screen.getByRole('option', { name: 'premium' }))
   await waitFor(() =>
     expect(get).toHaveBeenLastCalledWith(
-      '/api/user/search?keyword=&group=&has_exclusive_ratio=false&p=1&page_size=20'
+      '/api/user/search?keyword=&group=&exclusive_ratio_group=premium&p=1&page_size=20'
     )
   )
   await user.click(screen.getByRole('option', { name: 'Clear filters' }))
@@ -178,19 +180,21 @@ it('filters exclusive ratios on the server and clears the filter', async () => {
       params: { p: 1, page_size: 20 },
     })
   )
-  expect(router.state.location.search).not.toHaveProperty('has_exclusive_ratio')
+  expect(router.state.location.search).not.toHaveProperty(
+    'exclusive_ratio_group'
+  )
 })
 
 it('restores exclusive ratio and account group filters together', async () => {
   const { get } = await renderUsers(
-    '/users/?group=%5B%22premium%22%5D&has_exclusive_ratio=%5B%22false%22%5D'
+    '/users/?group=%5B%22premium%22%5D&exclusive_ratio_group=%5B%22default%22%5D'
   )
   expect(get).toHaveBeenCalledWith(
-    '/api/user/search?keyword=&group=premium&has_exclusive_ratio=false&p=1&page_size=20'
+    '/api/user/search?keyword=&group=premium&exclusive_ratio_group=default&p=1&page_size=20'
   )
   expect(
     screen.getByRole('button', { name: /^Exclusive Ratio/ })
-  ).toHaveTextContent('Not configured')
+  ).toHaveTextContent('default')
 })
 
 it('returns to the first page when an exclusive ratio filter changes', async () => {
@@ -200,11 +204,49 @@ it('returns to the first page when an exclusive ratio filter changes', async () 
     params: { p: 3, page_size: 20 },
   })
   await user.click(screen.getByRole('button', { name: /^Exclusive Ratio/ }))
-  await user.click(await screen.findByRole('option', { name: /^Configured/ }))
+  await user.click(await screen.findByRole('option', { name: 'default' }))
   await waitFor(() =>
     expect(get).toHaveBeenLastCalledWith(
-      '/api/user/search?keyword=&group=&has_exclusive_ratio=true&p=1&page_size=20'
+      '/api/user/search?keyword=&group=&exclusive_ratio_group=default&p=1&page_size=20'
     )
   )
   expect(router.state.location.search.page ?? 1).toBe(1)
+})
+
+it('does not retain a hidden boolean filter from an old URL', async () => {
+  const { get } = await renderUsers(
+    '/users/?has_exclusive_ratio=%5B%22true%22%5D'
+  )
+  expect(get).toHaveBeenCalledWith('/api/user/', {
+    params: { p: 1, page_size: 20 },
+  })
+  expect(
+    get.mock.calls.some(([url]) => String(url).includes('has_exclusive_ratio'))
+  ).toBe(false)
+})
+
+it('keeps a removed group visible and clearable and encodes its name', async () => {
+  const user = userEvent.setup()
+  const name = 'old / 专属&vip'
+  const { get } = await renderUsers(
+    `/users/?exclusive_ratio_group=${encodeURIComponent(JSON.stringify([name]))}`
+  )
+  const request = get.mock.calls.find(([url]) =>
+    String(url).includes('/api/user/search?')
+  )
+  expect(request).toBeDefined()
+  expect(
+    new URL(String(request?.[0]), 'http://localhost').searchParams.get(
+      'exclusive_ratio_group'
+    )
+  ).toBe(name)
+  const trigger = screen.getByRole('button', { name: /^Exclusive Ratio/ })
+  expect(trigger).toHaveTextContent(name)
+  await user.click(trigger)
+  await user.click(screen.getByRole('option', { name: 'Clear filters' }))
+  await waitFor(() =>
+    expect(get).toHaveBeenLastCalledWith('/api/user/', {
+      params: { p: 1, page_size: 20 },
+    })
+  )
 })

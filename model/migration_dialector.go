@@ -22,6 +22,7 @@ func (d mysqlMigrationDialector) Migrator(db *gorm.DB) gorm.Migrator {
 type mysqlSchemaMigrator struct{ mysql.Migrator }
 
 func (m mysqlSchemaMigrator) MigrateColumn(value any, field *schema.Field, column gorm.ColumnType) error {
+	column = preserveUserSessionRefreshHashType(field, column)
 	if !field.HasDefaultValue || !strings.EqualFold(column.DatabaseTypeName(), "decimal") {
 		return m.Migrator.MigrateColumn(value, field, column)
 	}
@@ -59,6 +60,7 @@ func (d postgresMigrationDialector) Migrator(db *gorm.DB) gorm.Migrator {
 type postgresSchemaMigrator struct{ postgres.Migrator }
 
 func (m postgresSchemaMigrator) MigrateColumn(value any, field *schema.Field, column gorm.ColumnType) error {
+	column = preserveUserSessionRefreshHashType(field, column)
 	if column.DatabaseTypeName() == "bpchar" && strings.HasPrefix(strings.ToLower(string(field.DataType)), "char(") {
 		// PostgreSQL reports CHAR(n) as bpchar. Normalize the name, retaining
 		// Length() so a real CHAR length change still triggers migration.
@@ -110,3 +112,17 @@ ORDER BY constraint_meta.conname`, schemaName, tableName, field.DBName).Scan(&co
 type charColumnType struct{ migrationColumnType }
 
 func (charColumnType) DatabaseTypeName() string { return "char" }
+
+// Refresh digests are always 64 hex characters. Retain VARCHAR(64) left by an
+// intermediate build when restoring the original CHAR(64) model, avoiding a
+// reverse type migration. Other columns, lengths and constraints still reconcile.
+func preserveUserSessionRefreshHashType(field *schema.Field, column gorm.ColumnType) gorm.ColumnType {
+	if field.Schema == nil || field.Schema.Table != "user_sessions" || field.DBName != "refresh_hash" ||
+		!strings.EqualFold(string(field.DataType), "char(64)") || !strings.EqualFold(column.DatabaseTypeName(), "varchar") {
+		return column
+	}
+	if length, ok := column.Length(); !ok || length != 64 {
+		return column
+	}
+	return charColumnType{column}
+}

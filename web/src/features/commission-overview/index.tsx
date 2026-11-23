@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   TrendingUp,
@@ -12,6 +30,7 @@ import {
   ArrowUpDown,
   RefreshCw,
   CalendarDays,
+  Info,
 } from 'lucide-react'
 import {
   useCallback,
@@ -42,6 +61,12 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { BusinessAmount } from '@/features/business/amount-display'
 import { formatBusinessUsd } from '@/features/business/format'
 import dayjs from '@/lib/dayjs'
@@ -255,7 +280,7 @@ function AmountStatCard({
   sub,
   icon: Icon,
 }: {
-  title: string
+  title: ReactNode
   value: number | null | undefined
   sub?: string
   icon: ComponentType<{ className?: string }>
@@ -728,11 +753,7 @@ export function CommissionOverview() {
                   <>
                     {/* Platform consumption (whole platform) */}
                     <div className='space-y-2'>
-                      <SectionTitle
-                        description={t(
-                          'Cost is recorded precisely per transaction. Data generated before this feature was enabled has no cost record.'
-                        )}
-                      >
+                      <SectionTitle>
                         {t('Platform-wide (all users)')}
                       </SectionTitle>
                       <StatPanel columnsClassName='grid-cols-1 sm:grid-cols-3'>
@@ -745,7 +766,24 @@ export function CommissionOverview() {
                           icon={Wallet}
                         />
                         <AmountStatCard
-                          title={t('Cost')}
+                          title={
+                            <TooltipProvider delay={0}>
+                              <Tooltip>
+                                <TooltipTrigger className='inline-flex items-center gap-1'>
+                                  {t('Cost')}
+                                  <Info
+                                    className='size-3.5 shrink-0'
+                                    aria-hidden='true'
+                                  />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {t(
+                                    'Cost totals include only transactions with recorded costs.'
+                                  )}
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          }
                           value={platform?.est_cost_quota ?? 0}
                           sub={formatBusinessUsd(platform?.est_cost_usd)}
                           icon={Wallet}

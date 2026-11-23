@@ -213,8 +213,8 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
     try {
       const params: Record<string, string | null> = { tag: currentTag }
 
-      if (newTag && newTag !== currentTag) {
-        params.new_tag = newTag || null
+      if (newTag !== currentTag) {
+        params.new_tag = newTag
       }
 
       if (modelMapping.trim()) {

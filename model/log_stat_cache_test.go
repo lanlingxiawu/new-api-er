@@ -536,3 +536,38 @@ func TestQueryLogHourStatRange_RespectsContextCancellation(t *testing.T) {
 	_, err := queryLogHourStatRange(ctx, logStatTestAnchor, logStatTestAnchor+3600)
 	assert.Error(t, err, "已取消的 context 必须让查询立刻失败，而不是继续占住连接")
 }
+
+func TestLogFilterUserIDIsolatedFromGlobalStatCache(t *testing.T) {
+	requireLogDB(t)
+	isolateLogStatCache(t)
+	enableLogStatCache(t, 15)
+	base := logStatTestWindow(t)
+	userLog := mkLogAt(t, base+10, LogTypeConsume, 73, 0, 0)
+	mkLogAt(t, base+20, LogTypeConsume, 9000, 0, 0)
+	filter := LogFilter{StartTimestamp: base, EndTimestamp: base + 3600 - 1}
+	global, err := SumUsedQuotaWithFilter(context.Background(), filter)
+	require.NoError(t, err)
+	require.Equal(t, 9073, global.Quota)
+	_, total, err := GetAllLogsWithContext(context.Background(), filter, 0, 10)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, total)
+
+	filter.UserID = userLog.UserId
+	stat, err := SumUsedQuotaWithFilter(context.Background(), filter)
+	require.NoError(t, err)
+	require.Equal(t, 73, stat.Quota)
+	logs, total, err := GetAllLogsWithContext(context.Background(), filter, 0, 10)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, logs, 1)
+	require.Equal(t, userLog.Id, logs[0].Id)
+
+	filter.UserID = logStatNextID()
+	stat, err = SumUsedQuotaWithFilter(context.Background(), filter)
+	require.NoError(t, err)
+	require.Zero(t, stat.Quota)
+	logs, total, err = GetAllLogsWithContext(context.Background(), filter, 0, 10)
+	require.NoError(t, err)
+	require.Zero(t, total)
+	require.Empty(t, logs)
+}

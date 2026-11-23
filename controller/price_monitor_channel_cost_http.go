@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"math"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // maxPriceMonitorCostRatio 只拦明显的误输入（多打一个 0），不是业务上限。
@@ -56,22 +58,26 @@ func UpdatePriceMonitorChannelCostRatio(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgPriceMonitorChannelUnavailable)
 		return
 	}
-	previous := model.GetChannelCostRatio(channelId)
-	remark, err := priceMonitorCostRemark(channelId)
+	config := model.ChannelCostConfig{}
+	err = model.DB.Select("cost_ratio", "remark").Where("channel_id = ?", channelId).Take(&config).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		config.CostRatio = 1
+		err = nil
+	}
 	if err != nil {
 		// 读不到现有备注就不写：写入会用空备注覆盖它。
 		logger.LogError(c, "price monitor failed to read channel cost config: "+err.Error())
 		common.ApiErrorI18n(c, i18n.MsgRetryLater)
 		return
 	}
-	if err := model.UpsertChannelCostConfig(channelId, costRatio, remark); err != nil {
+	if err := model.UpsertChannelCostConfig(channelId, costRatio, config.Remark, model.RequestAuditChanges(c)); err != nil {
 		logger.LogError(c, "price monitor failed to update channel cost ratio: "+err.Error())
 		common.ApiErrorI18n(c, i18n.MsgRetryLater)
 		return
 	}
 	recordManageAudit(c, "price_monitor.cost_ratio.update", map[string]interface{}{
 		"channel_id": channelId,
-		"from":       previous,
+		"from":       config.CostRatio,
 		"to":         costRatio,
 	})
 	refreshed := refreshPriceMonitorAfterChange(c)
@@ -84,20 +90,6 @@ func UpdatePriceMonitorChannelCostRatio(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"refreshed": refreshed, "item": item}})
-}
-
-// priceMonitorCostRemark 返回已有配置的备注：这里只改系数，不应顺手清掉别处写下的备注。
-func priceMonitorCostRemark(channelId int) (string, error) {
-	configs, err := model.GetAllChannelCostConfigs()
-	if err != nil {
-		return "", err
-	}
-	for _, config := range configs {
-		if config.ChannelId == channelId {
-			return config.Remark, nil
-		}
-	}
-	return "", nil
 }
 
 // refreshPriceMonitorAfterChange 在一次修改成功后就地重算快照。重算失败不影响已经成功的修改，

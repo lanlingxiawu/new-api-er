@@ -2,6 +2,7 @@ package controller
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 	"testing"
 
@@ -67,6 +68,52 @@ func TestSearchUsersExclusiveRatioParameter(t *testing.T) {
 			require.Equal(t, id, data.Items[i].Id)
 		}
 	}
+}
+
+func TestSearchUsersExclusiveRatioGroupParameter(t *testing.T) {
+	requireDB(t)
+	group := uniq("exclusive_group")
+	key := `专属/vip&".0`
+	raw, err := common.Marshal(map[string]float64{key: 0})
+	require.NoError(t, err)
+	configured := mkUser(t, func(u *model.User) {
+		u.Group, u.GroupRatios = group, string(raw)
+	})
+	other := mkUser(t, func(u *model.User) {
+		u.Group, u.GroupRatios = group, `{"vip":1}`
+	})
+	for _, tc := range []struct {
+		filter string
+		ids    []int
+	}{
+		{"", []int{other.Id, configured.Id}},
+		{"&exclusive_ratio_group=", []int{other.Id, configured.Id}},
+		{"&exclusive_ratio_group=" + url.QueryEscape(key), []int{configured.Id}},
+		{"&exclusive_ratio_group=vip", []int{other.Id}},
+		{"&exclusive_ratio_group=missing", nil},
+		{"&exclusive_ratio_group=vip&has_exclusive_ratio=true", []int{other.Id}},
+		{"&exclusive_ratio_group=vip&has_exclusive_ratio=false", nil},
+	} {
+		ctx, rec := newCtx(t, http.MethodGet, "/api/user/search?group="+group+tc.filter, nil)
+		asAdmin(ctx, 1)
+		SearchUsers(ctx)
+		response := decodeResp(t, rec)
+		require.True(t, response.Success, response.Message)
+		var data struct {
+			Total int          `json:"total"`
+			Items []model.User `json:"items"`
+		}
+		require.NoError(t, common.Unmarshal(response.Data, &data))
+		require.Equal(t, len(tc.ids), data.Total)
+		require.Len(t, data.Items, len(tc.ids))
+		for i, id := range tc.ids {
+			require.Equal(t, id, data.Items[i].Id)
+		}
+	}
+	ctx, rec := newCtx(t, http.MethodGet, "/api/user/search?exclusive_ratio_group=vip", nil)
+	ctx.Set("use_access_token", true)
+	SearchUsers(ctx)
+	require.False(t, decodeResp(t, rec).Success)
 }
 
 // canManageTargetRole: root can manage anyone; others only strictly-lower roles.

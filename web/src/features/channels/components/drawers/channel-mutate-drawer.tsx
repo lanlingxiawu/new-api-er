@@ -107,6 +107,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { SecureVerificationDialog } from '@/features/auth/secure-verification'
 import { getScopedSystemOptions } from '@/features/system-settings/api'
+import { StreamProtocolValidationField } from '@/features/system-settings/components/stream-protocol-validation-field'
 import { PluginIcon } from '@/features/task-plugins/components/plugin-icon'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
@@ -2862,13 +2863,6 @@ export function ChannelMutateDrawer({
                 {t(
                   'Enter the upstream cost or proxy station ratio as a multiplier for cost, profit, and employee commission; 0 means zero cost, 0.6 means cost is 0.6x.'
                 )}
-                {!isEditing && (
-                  <span className='text-warning mt-1 block font-medium'>
-                    {t(
-                      'Tip: configure the cost ratio now so employee commission profit is calculated correctly.'
-                    )}
-                  </span>
-                )}
               </FormDescription>
               <FormMessage />
             </FormItem>
@@ -3707,11 +3701,6 @@ export function ChannelMutateDrawer({
             <div className='space-y-3'>
               <div>
                 <p className='text-sm font-medium'>{t('Quick actions')}</p>
-                <p className='text-muted-foreground text-xs'>
-                  {t(
-                    'Use presets or upstream discovery to populate the model list faster.'
-                  )}
-                </p>
               </div>
               <div className='flex flex-wrap gap-2'>
                 <Button
@@ -5310,6 +5299,13 @@ export function ChannelMutateDrawer({
               >
                 <ResponsesWebSocketSetting
                   channelType={currentType}
+                  disabled={sensitiveLocked || isSubmitting}
+                />
+                <StreamProtocolValidationField
+                  control={form.control}
+                  name='stream_protocol_validation'
+                  scope='channel'
+                  legacyValue={form.watch('claude_stream_validation')}
                   disabled={sensitiveLocked || isSubmitting}
                 />
                 {formatFields}

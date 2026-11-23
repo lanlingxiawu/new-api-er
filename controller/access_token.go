@@ -1,13 +1,18 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -97,9 +102,11 @@ func GetAccessTokenCatalog(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, gin.H{
-		"groups":              service.AccessTokenCatalog(identity.UserID, c.GetInt("role")),
-		"max_tokens":          service.AccessTokenMaxPerUser,
-		"default_expiry_days": service.AccessTokenDefaultExpiryDays,
+		"groups":                     service.AccessTokenCatalog(identity.UserID, c.GetInt("role")),
+		"max_tokens":                 service.AccessTokenMaxPerUser,
+		"default_expiry_days":        service.AccessTokenDefaultExpiryDays,
+		"management_max_expiry_days": 30,
+		"management_restricted":      c.GetInt("role") >= common.RoleAdminUser,
 	})
 }
 
@@ -143,6 +150,10 @@ func CreateAccessToken(c *gin.Context) {
 		writeAccessTokenError(c, http.StatusBadRequest, "ACCESS_TOKEN_SCOPE_INVALID", "Select at least one valid permission.")
 		return
 	}
+	if slices.ContainsFunc(scopes, service.IsManagementScope) && (req.ExpiresAt <= now || req.ExpiresAt-now > service.AdminTokenMaxLifetimeSeconds) {
+		common.ApiErrorStatus(c, http.StatusOK, common.NewMessage("Management tokens must expire within 30 days. Sign in to create a replacement token."), gin.H{"code": "ACCESS_TOKEN_EXPIRY_INVALID", "message": i18n.T(c, i18n.MsgAdminTokenExpiryInvalid)})
+		return
+	}
 	proofContext, err := common.Marshal(service.AccessTokenGenerateContext{Scopes: scopes, ExpiresAt: req.ExpiresAt})
 	if err != nil {
 		writeSecurityOperationError(c, err)
@@ -176,6 +187,7 @@ func CreateAccessToken(c *gin.Context) {
 		writeSecurityOperationError(c, err)
 		return
 	}
+	model.RequestAuditChanges(c).Add(model.SelfAuditTarget("access_token", token.Id, identity.UserID, token.Name), nil, model.AccessTokenAuditSnapshot(token))
 	recordUserSecurityAudit(c, identity.UserID, "access_token.generate", map[string]any{
 		"token_id":   token.Id,
 		"name":       token.Name,
@@ -209,24 +221,33 @@ func UpdateAccessToken(c *gin.Context) {
 		return
 	}
 	var scopes []string
-	var previous *model.UserAccessToken
+	previous, err := model.GetUserAccessToken(identity.UserID, id)
+	if errors.Is(err, model.ErrAccessTokenNotFound) {
+		writeAccessTokenError(c, http.StatusNotFound, "ACCESS_TOKEN_NOT_FOUND", model.ErrAccessTokenNotFound.Error())
+		return
+	}
+	if err != nil {
+		writeSecurityOperationError(c, err)
+		return
+	}
 	if req.Scopes != nil {
-		previous, err = model.GetUserAccessToken(identity.UserID, id)
-		if errors.Is(err, model.ErrAccessTokenNotFound) {
-			writeAccessTokenError(c, http.StatusNotFound, "ACCESS_TOKEN_NOT_FOUND", model.ErrAccessTokenNotFound.Error())
-			return
-		}
-		if err != nil {
-			writeSecurityOperationError(c, err)
-			return
-		}
 		scopes, err = service.NormalizeAccessTokenScopes(identity.UserID, c.GetInt("role"), req.Scopes)
+		normalized, valid := service.NormalizeAccessTokenScopeList(req.Scopes)
+		reduction := valid && !slices.ContainsFunc(normalized, func(scope string) bool { return !slices.Contains(previous.GetScopes(), scope) })
+		if reduction {
+			scopes = normalized
+			err = nil
+		}
 		switch {
 		case errors.Is(err, service.ErrAccessTokenScopeForbidden):
 			writeAccessTokenError(c, http.StatusBadRequest, "ACCESS_TOKEN_SCOPE_FORBIDDEN", "You cannot grant one or more of these permissions.")
 			return
 		case err != nil:
 			writeAccessTokenError(c, http.StatusBadRequest, "ACCESS_TOKEN_SCOPE_INVALID", "Select at least one valid permission.")
+			return
+		}
+		if !reduction && slices.ContainsFunc(scopes, service.IsManagementScope) && !service.AdminTokenLifetimeValid(previous) {
+			common.ApiErrorStatus(c, http.StatusOK, common.NewMessage("Management tokens must expire within 30 days. Sign in to create a replacement token."), gin.H{"code": "ACCESS_TOKEN_EXPIRY_INVALID", "message": i18n.T(c, i18n.MsgAdminTokenExpiryInvalid)})
 			return
 		}
 		proofContext, err := common.Marshal(service.AccessTokenUpdateContext{TokenID: id, Scopes: scopes})
@@ -247,7 +268,13 @@ func UpdateAccessToken(c *gin.Context) {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	if previous == nil {
+	after := model.AccessTokenAuditSnapshot(previous)
+	after["name"] = name
+	if req.Scopes != nil {
+		after["scopes"] = scopes
+	}
+	model.RequestAuditChanges(c).Add(model.SelfAuditTarget("access_token", token.Id, identity.UserID, token.Name), model.AccessTokenAuditSnapshot(previous), after)
+	if req.Scopes == nil {
 		recordUserSecurityAudit(c, identity.UserID, "access_token.rename", map[string]any{"token_id": token.Id, "name": token.Name})
 		common.ApiSuccess(c, newAccessTokenItem(token))
 		return
@@ -299,6 +326,9 @@ func DeleteAccessToken(c *gin.Context) {
 		writeSecurityOperationError(c, err)
 		return
 	}
+	target := model.SelfAuditTarget("access_token", token.Id, identity.UserID, token.Name)
+	target.Consistency = "atomic"
+	model.RequestAuditChanges(c).Add(target, model.AccessTokenAuditSnapshot(token), nil)
 	recordUserSecurityAudit(c, identity.UserID, "access_token.revoke", map[string]any{"token_id": token.Id, "name": token.Name, "token_ref": token.TokenHash})
 	common.ApiSuccess(c, nil)
 }
@@ -337,53 +367,39 @@ func RevokeLegacyAccessToken(c *gin.Context) {
 		return
 	}
 	if ref != "" {
+		model.RequestAuditChanges(c).Add(model.SelfAuditTarget("access_token", identity.UserID, identity.UserID, ""), model.AuditFields{"revoked": false}, model.AuditFields{"revoked": true})
 		recordUserSecurityAudit(c, identity.UserID, "access_token.revoke", map[string]any{"legacy": true, "token_ref": ref})
 	}
 	common.ApiSuccess(c, nil)
 }
 
 func GetAuditLogs(c *gin.Context) {
+	startTimestamp, endTimestamp, validRange := parseLogQueryTimeRange(c)
+	if !validRange {
+		return
+	}
 	page := common.GetPageQuery(c)
 	if page.Page < 1 || page.PageSize < 1 || page.Page > 100000000 {
 		common.ApiErrorMsg(c, "Invalid audit pagination")
 		return
 	}
-	filter := model.AuditLogFilter{Username: c.Query("username"), Category: c.Query("category"), TokenRef: c.Query("token_ref"), ExcludeTokenRef: c.Query("exclude_token_ref"), RequestId: c.Query("request_id")}
+	filter, valid := parseAuditFilter(c, false)
+	filter.StartTimestamp, filter.EndTimestamp = startTimestamp, endTimestamp
+	if !valid || c.Query("ip_risk") != "" {
+		common.ApiErrorI18n(c, "audit_filter.invalid")
+		return
+	}
 	viewerRole := c.GetInt("role")
-	if c.FullPath() == "/api/audit/self" {
-		filter.UserId = c.GetInt("id")
-		filter.Username = ""
-		filter.SelfView = true
-	}
-	if !model.ValidAuditCategory(filter.Category) || !model.ValidTokenFingerprint(filter.TokenRef) || !model.ValidTokenFingerprint(filter.ExcludeTokenRef) {
-		common.ApiErrorMsg(c, "Invalid audit filters")
+	db, ok := auditQueryDB(c, true)
+	if !ok {
 		return
 	}
-	for name, target := range map[string]*int64{"start_timestamp": &filter.StartTimestamp, "end_timestamp": &filter.EndTimestamp} {
-		if raw := c.Query(name); raw != "" {
-			parsed, err := strconv.ParseInt(raw, 10, 64)
-			if err != nil || parsed < 0 {
-				common.ApiErrorMsg(c, "Invalid audit time range")
-				return
-			}
-			*target = parsed
-		}
-	}
-	if filter.EndTimestamp > 0 && filter.EndTimestamp < filter.StartTimestamp {
-		common.ApiErrorMsg(c, "Invalid audit time range")
-		return
-	}
-	if raw := c.Query("success"); raw != "" {
-		if raw != "true" && raw != "false" {
-			common.ApiErrorMsg(c, "Invalid audit result")
-			return
-		}
-		success := raw == "true"
-		filter.Success = &success
-	}
-	logs, total, err := model.GetAuditLogs(filter, page.GetStartIdx(), page.GetPageSize(), viewerRole)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+	logs, total, err := model.QueryAuditLogs(db.WithContext(ctx), filter, page.GetStartIdx(), page.GetPageSize(), viewerRole)
 	if err != nil {
-		common.ApiError(c, err)
+		logger.LogError(c, common.LogText("audit list query failed: %v", err))
+		common.ApiErrorI18n(c, "audit_filter.unavailable")
 		return
 	}
 	if filter.SelfView {

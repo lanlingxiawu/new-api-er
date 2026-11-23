@@ -16,18 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
+import { Field, FieldLabel, FieldLegend, FieldSet } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { formatQuota, parseQuotaFromDollars } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
-import { cn } from '@/lib/utils'
 
 import { adjustUserQuota } from '../api'
 import type { QuotaAdjustMode } from '../types'
@@ -42,6 +43,8 @@ interface UserQuotaDialogProps {
 
 export function UserQuotaDialog(props: UserQuotaDialogProps) {
   const { t } = useTranslation()
+  const id = useId()
+  const inFlight = useRef(false)
   const [mode, setMode] = useState<QuotaAdjustMode>('add')
   const [amount, setAmount] = useState('')
   const [loading, setLoading] = useState(false)
@@ -71,9 +74,11 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
   }
 
   const handleConfirm = async () => {
+    if (inFlight.current) return
     if (!amount && mode !== 'override') return
     if (quotaValue <= 0 && mode !== 'override') return
 
+    inFlight.current = true
     setLoading(true)
     try {
       const value =
@@ -96,11 +101,13 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
     } catch (e: unknown) {
       handleServerError(e, t('Failed to adjust quota'))
     } finally {
+      inFlight.current = false
       setLoading(false)
     }
   }
 
   const handleCancel = () => {
+    if (inFlight.current) return
     setAmount('')
     setMode('add')
     props.onOpenChange(false)
@@ -113,14 +120,15 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
   return (
     <Dialog
       open={props.open}
-      onOpenChange={props.onOpenChange}
+      onOpenChange={(open) => {
+        if (!open) handleCancel()
+      }}
       title={t('Adjust Quota')}
-      description={t('Select an operation mode and enter the amount')}
       contentHeight='auto'
       bodyClassName='space-y-4'
       footer={
         <>
-          <Button variant='outline' onClick={handleCancel}>
+          <Button variant='outline' onClick={handleCancel} disabled={loading}>
             {t('Cancel')}
           </Button>
           <Button onClick={handleConfirm} disabled={loading}>
@@ -132,37 +140,36 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
       <div className='space-y-4'>
         <div className='text-muted-foreground text-sm'>{getPreviewText()}</div>
 
-        <div className='space-y-2'>
-          <Label>{t('Mode')}</Label>
-          <div className='flex gap-1'>
-            {(['add', 'subtract', 'override'] as const).map((m) => (
-              <Button
-                key={m}
-                type='button'
-                variant='outline'
-                size='sm'
-                className={cn(
-                  mode === m &&
-                    'bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground'
-                )}
-                onClick={() => {
-                  setMode(m)
-                  setAmount('')
-                }}
-              >
-                {m === 'add' && t('Add')}
-                {!(m === 'add') && m === 'subtract' && t('Subtract')}
-                {!(m === 'add') && !(m === 'subtract') && t('Override')}
-              </Button>
+        <FieldSet disabled={loading}>
+          <FieldLegend variant='label'>{t('Mode')}</FieldLegend>
+          <RadioGroup
+            value={mode}
+            onValueChange={(value) => {
+              setMode(value as QuotaAdjustMode)
+              setAmount('')
+            }}
+            className='grid-cols-1 sm:grid-cols-3'
+          >
+            {(['add', 'subtract', 'override'] as const).map((value) => (
+              <Field key={value} orientation='horizontal'>
+                <RadioGroupItem id={`${id}-${value}`} value={value} />
+                <FieldLabel htmlFor={`${id}-${value}`}>
+                  {value === 'add' && t('Add')}
+                  {value === 'subtract' && t('Subtract')}
+                  {value === 'override' && t('Override')}
+                </FieldLabel>
+              </Field>
             ))}
-          </div>
-        </div>
+          </RadioGroup>
+        </FieldSet>
 
         <div className='space-y-2'>
-          <Label>
+          <Label htmlFor={`${id}-amount`}>
             {t('Amount')} ({currencyLabel})
           </Label>
           <Input
+            id={`${id}-amount`}
+            disabled={loading}
             type='number'
             step={tokensOnly ? 1 : 0.000001}
             min={mode === 'override' ? undefined : 0}
@@ -170,7 +177,10 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') handleConfirm()
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                e.preventDefault()
+                void handleConfirm()
+              }
             }}
           />
         </div>

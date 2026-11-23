@@ -55,7 +55,6 @@ import {
   Sheet,
   SheetClose,
   SheetContent,
-  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -418,11 +417,6 @@ export function ApiKeysMutateDrawer({
           <SheetTitle>
             {isUpdate ? t('Update API Key') : t('Create API Key')}
           </SheetTitle>
-          <SheetDescription>
-            {isUpdate
-              ? t('Update the API key by providing necessary info.')
-              : t('Add a new API key by providing necessary info.')}
-          </SheetDescription>
         </SheetHeader>
         <Form {...form}>
           <form
@@ -435,7 +429,6 @@ export function ApiKeysMutateDrawer({
             <SideDrawerSection>
               <SideDrawerSectionHeader
                 title={t('Basic Information')}
-                description={t('Set API key basic information')}
                 icon={<KeyRound className='size-4' />}
                 iconTone='info'
               />
@@ -646,7 +639,6 @@ export function ApiKeysMutateDrawer({
             <SideDrawerSection>
               <SideDrawerSectionHeader
                 title={t('Quota Settings')}
-                description={t('Set quota amount and limits')}
                 icon={<WalletCards className='size-4' />}
                 iconTone='success'
               />
@@ -720,7 +712,6 @@ export function ApiKeysMutateDrawer({
                   <SideDrawerSectionHeader
                     className='flex-1'
                     title={t('Advanced Settings')}
-                    description={t('Set API key access restrictions')}
                     icon={<Settings2 className='size-4' />}
                   />
                   <ChevronDown

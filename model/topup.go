@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -521,9 +522,9 @@ func FetchTopUpExportBatch(f TopUpListFilter, beforeId int64, limit int) ([]*Top
 // ManualCompleteTopUp 管理员手动完成订单并给用户充值
 // ManualCompleteTopUp 管理员补单。返回被补单的用户 ID 供调用方写审计日志；
 // 订单不存在等错误路径返回 0。幂等命中（订单已成功）也会返回用户 ID。
-func ManualCompleteTopUp(tradeNo string, callerIp string) (int, error) {
+func completeTopUp(ctx context.Context, tradeNo string, callerIp string, checked *TopUp) (TopUpCompletion, error) {
 	if tradeNo == "" {
-		return 0, common.NewMessage("Order number not provided")
+		return TopUpCompletion{}, common.NewMessage("Order number not provided")
 	}
 
 	refCol := "`trade_no`"
@@ -538,11 +539,25 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) (int, error) {
 	// 幂等命中：订单早已入账，本次只解析出目标用户，不再重复记账，也不该再写充值日志。
 	var alreadyCompleted bool
 
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		topUp := &TopUp{}
 		// 行级锁，避免并发补单
 		if err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
 			return common.NewMessage("Top-up order does not exist")
+		}
+		if checked != nil {
+			if topUp.Id != checked.Id || topUp.UserId != checked.UserId || topUp.Amount != checked.Amount || topUp.Money != checked.Money ||
+				topUp.PaymentProvider != checked.PaymentProvider || topUp.PaymentMethod != checked.PaymentMethod ||
+				topUp.ProviderOrderId != checked.ProviderOrderId || topUp.PaymentCurrency != checked.PaymentCurrency {
+				return ErrTopUpVerificationChanged
+			}
+			var user User
+			if err := lockForUpdate(tx).Select("id", "role").First(&user, topUp.UserId).Error; err != nil {
+				return err
+			}
+			if user.Role != common.RoleCommonUser {
+				return ErrUserQuotaPermission
+			}
 		}
 
 		// 目标用户先记下来：幂等命中和后续失败路径都需要它来定位审计对象。
@@ -591,19 +606,19 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) (int, error) {
 	})
 
 	if err != nil {
-		return userId, err
+		return TopUpCompletion{UserID: userId}, err
 	}
 
 	// 幂等命中：本次没有入账（quotaToAdd / payMoney 都是零值），再写一条充值日志就是
 	// 给用户看一笔「充值金额: $0.00」的假记录。目标用户仍然返回，供调用方写审计。
 	if alreadyCompleted {
-		return userId, nil
+		return TopUpCompletion{UserID: userId, AlreadyCompleted: true}, nil
 	}
 
 	// 事务外记录日志，避免阻塞
 	syncCreditUserQuotaCache(userId, quotaToAdd, common.LogText("manual topup"))
 	RecordTopupLog(userId, common.NewMessage("Administrator completed the order, amount added: {{quota}}, payment amount: {{amount}}", map[string]any{"quota": logger.FormatQuota(quotaToAdd), "amount": fmt.Sprintf("%f", payMoney)}), callerIp, paymentMethod, "admin")
-	return userId, nil
+	return TopUpCompletion{UserID: userId, QuotaAdded: quotaToAdd}, nil
 }
 func RechargeCreem(referenceId string, customerEmail string, customerName string, callerIp string) (err error) {
 	if referenceId == "" {

@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -295,6 +297,19 @@ func EmployeeCreateCustomer(c *gin.Context) {
 		Role:        common.RoleCommonUser,
 		Status:      common.UserStatusEnabled,
 		Remark:      req.Remark,
+	}
+	if newUser.Username == "" {
+		common.ApiErrorT(c, "Invalid parameters")
+		return
+	}
+	if err := common.Validate.Struct(newUser); err != nil {
+		writeUserValidationError(c, err)
+		return
+	}
+	if err := common.Validate.Var(newUser.Email, "omitempty,email"); err != nil {
+		logger.LogWarn(c, "Employee customer email validation failed")
+		common.ApiErrorI18n(c, i18n.MsgSettingEmailInvalid)
+		return
 	}
 	if newUser.DisplayName == "" {
 		newUser.DisplayName = newUser.Username

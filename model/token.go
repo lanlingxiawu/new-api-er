@@ -12,8 +12,8 @@ import (
 )
 
 type Token struct {
-	Id                 int            `json:"id"`
-	UserId             int            `json:"user_id" gorm:"index"`
+	Id                 int            `json:"id" gorm:"index:idx_tokens_user_deleted_id,priority:3"`
+	UserId             int            `json:"user_id" gorm:"index;index:idx_tokens_user_deleted_id,priority:1"`
 	Key                string         `json:"key" gorm:"type:varchar(128);uniqueIndex"`
 	Status             int            `json:"status" gorm:"default:1"`
 	Name               string         `json:"name" gorm:"index" `
@@ -29,7 +29,7 @@ type Token struct {
 	Group              string         `json:"group" gorm:"default:''"`
 	CrossGroupRetry    bool           `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
 	AutoGroups         string         `json:"-" gorm:"type:text"`
-	DeletedAt          gorm.DeletedAt `gorm:"index"`
+	DeletedAt          gorm.DeletedAt `gorm:"index;index:idx_tokens_user_deleted_id,priority:2"`
 	// 允许用此令牌查询所属用户的额度；新建令牌默认开启，已有令牌升级后保持关闭
 	AllowUserQuotaQuery bool   `json:"allow_user_quota_query"`
 	CacheExpiresAt      int64  `json:"-" gorm:"-"`
@@ -177,12 +177,16 @@ func SearchUserTokens(userId int, keyword string, token string, offset int, limi
 	maxTokens := operation_setting.GetMaxUserTokens()
 	hasFuzzy := strings.Contains(keyword, "%") || strings.Contains(token, "%")
 	if hasFuzzy {
-		count, err := CountUserTokens(userId)
+		// We only need to know whether one token exists beyond the allowance.
+		// Counting the entire user's history defeats the fuzzy-search guard.
+		var extra []int
+		err := DB.Model(&Token{}).Select("id").Where("user_id = ?", userId).
+			Offset(max(0, maxTokens)).Limit(1).Find(&extra).Error
 		if err != nil {
 			common.SysLog(common.LogText("failed to count user tokens: %s", err.Error()))
 			return nil, 0, common.NewMessage("Failed to get the token count")
 		}
-		if int(count) > maxTokens {
+		if maxTokens < 0 || len(extra) > 0 {
 			return nil, 0, common.NewMessage("Token count exceeds the limit. Only exact search is allowed, do not use the % wildcard")
 		}
 	}
@@ -206,7 +210,8 @@ func SearchUserTokens(userId int, keyword string, token string, offset int, limi
 	}
 
 	// 先查匹配总数（用于分页，受 maxTokens 上限保护，避免全表 COUNT）
-	err = baseQuery.Limit(maxTokens).Count(&total).Error
+	countQuery := baseQuery.Session(&gorm.Session{}).Select("1").Limit(maxTokens)
+	err = DB.Table("(?) AS bounded_tokens", countQuery).Count(&total).Error
 	if err != nil {
 		common.SysError(common.LogText("failed to count search tokens: %s", err.Error()))
 		return nil, 0, common.NewMessage("Failed to search tokens")
@@ -447,7 +452,7 @@ func CountUserTokens(userId int) (int64, error) {
 }
 
 // BatchDeleteTokens 删除指定用户的一组令牌，返回成功删除数量
-func BatchDeleteTokens(ids []int, userId int) (int, error) {
+func BatchDeleteTokens(ids []int, userId int, audit ...*AuditChanges) (int, error) {
 	if len(ids) == 0 {
 		return 0, common.NewMessage("Token IDs cannot be empty")
 	}
@@ -470,6 +475,15 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 
 	if err := tx.Commit().Error; err != nil {
 		return 0, err
+	}
+	if len(audit) > 0 {
+		for i := range tokens[:min(len(tokens), 100)] {
+			token := &tokens[i]
+			audit[0].Add(SelfAuditTarget("token", token.Id, userId, token.Name), TokenAuditSnapshot(token), nil)
+		}
+		if len(tokens) > 100 {
+			audit[0].Truncated = true
+		}
 	}
 
 	return len(tokens), nil

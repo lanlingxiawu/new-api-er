@@ -1,9 +1,11 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -15,10 +17,11 @@ const (
 	AccessTokenGroupAdmin    = "admin"
 	AccessTokenGroupSystem   = "system"
 
-	AccessTokenMaxPerUser        = 20
-	AccessTokenDefaultExpiryDays = 30
-	accessTokenActionReveal      = "reveal"
-	accessTokenScopeSeparator    = ":"
+	AccessTokenMaxPerUser                = 20
+	AccessTokenDefaultExpiryDays         = 30
+	accessTokenActionReveal              = "reveal"
+	accessTokenScopeSeparator            = ":"
+	accessTokenChannelOperateDescription = "Enable or disable your own channels and manage their key status. Channel tests and balance refresh are not available to tokens."
 )
 
 var (
@@ -74,12 +77,17 @@ var accessTokenStaticResources = []AccessTokenResource{
 		accessTokenEdit("Includes changes that require security verification, such as password, two-factor settings, and account deletion."),
 	}},
 	{Resource: "user", LabelKey: "Users", group: AccessTokenGroupAdmin, minRole: common.RoleAdminUser, Actions: []authz.ActionDefinition{
-		accessTokenView("View users, their sign-in bindings, and permission settings."),
+		accessTokenView("Look up one user by ID or full username, including balance, usage, assigned employee, and exclusive ratios. Requires the Users menu."),
 		accessTokenEdit("Create, edit, disable, and delete users, and reset their security settings."),
+		{Action: "quota_write", LabelKey: "Allow balance changes", DescriptionKey: "Add, subtract, or set a user's balance without per-operation verification. Requires the Users menu."},
+		{Action: "group_ratios_write", LabelKey: "Allow exclusive ratio changes", DescriptionKey: "Change only a user's exclusive group ratios without per-operation verification. Requires the Users menu."},
+		{Action: "employee_assign", LabelKey: "Allow employee assignment", DescriptionKey: "Assign, change, or remove a customer's employee without per-operation verification. Requires the Users and Employees menus."},
+		{Action: "employee_read", LabelKey: "Allow employee selection", DescriptionKey: "View employee IDs, names, and status for assignment. Requires the Users and Employees menus."},
 	}},
 	{Resource: "billing", LabelKey: "Billing management", group: AccessTokenGroupAdmin, minRole: common.RoleAdminUser, Actions: []authz.ActionDefinition{
 		accessTokenView("View all top-up records, subscription plans, and user subscriptions."),
 		accessTokenEdit("Complete top-up orders and manage subscription plans and user subscriptions."),
+		{Action: "topup_reconcile", LabelKey: "Allow verified top-up reconciliation", DescriptionKey: "Check one order with the payment provider and credit it only after payment is confirmed. Requires the Users menu."},
 	}},
 	{Resource: "model", LabelKey: "Models", group: AccessTokenGroupAdmin, minRole: common.RoleAdminUser, Actions: []authz.ActionDefinition{
 		accessTokenView("View models and vendors, and preview upstream sync."),
@@ -91,13 +99,14 @@ var accessTokenStaticResources = []AccessTokenResource{
 	}},
 	{Resource: "log", LabelKey: "Logs", group: AccessTokenGroupAdmin, minRole: common.RoleAdminUser, Actions: []authz.ActionDefinition{
 		accessTokenView("View all users' usage logs, statistics, and tasks."),
+		{Action: "stats_read", LabelKey: "Allow usage statistics", DescriptionKey: "View site-wide or individual user usage statistics for up to 30 days. Requires the Users menu."},
 	}},
 	{Resource: "redemption", LabelKey: "Redemption codes", group: AccessTokenGroupAdmin, minRole: common.RoleAdminUser, Actions: []authz.ActionDefinition{
 		accessTokenView("View redemption codes."),
 		accessTokenEdit("Create, edit, and delete redemption codes."),
 	}},
 	{Resource: "group", LabelKey: "Groups", group: AccessTokenGroupAdmin, minRole: common.RoleAdminUser, Actions: []authz.ActionDefinition{
-		accessTokenView("View groups and prefill groups."),
+		accessTokenView("View group names for choosing exclusive ratios. Requires the Users menu."),
 		accessTokenEdit("Create, edit, and delete prefill groups."),
 	}},
 	{Resource: "option", LabelKey: "System settings", group: AccessTokenGroupSystem, minRole: common.RoleRootUser, Actions: []authz.ActionDefinition{
@@ -123,19 +132,81 @@ func AccessTokenScopeOf(permission authz.Permission) string {
 // for display. Resources without a grantable action and empty groups are
 // omitted.
 func AccessTokenCatalog(userID, role int) []AccessTokenCatalogGroup {
+	var current map[authz.Permission]bool
+	if role == common.RoleAdminUser {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		var err error
+		current, err = authz.ReadCurrentPermissions(ctx, userID, role, authz.AllPermissions())
+		cancel()
+		if err != nil {
+			common.SysError("failed to load current management token permissions")
+			current = nil
+		}
+	}
+	use := current[authz.Permission{Resource: authz.ResourceAdminAccessToken, Action: authz.ActionUse}]
+	users := use && current[authz.AdminMenuUsersView]
+	channels := use && current[authz.Permission{Resource: authz.ResourceAdminAccessToken, Action: authz.ActionChannelsOwned}] && current[authz.AdminMenuChannelsView]
 	resources := map[string][]AccessTokenResource{}
 	for _, resource := range accessTokenStaticResources {
 		if role < resource.minRole {
 			continue
 		}
 		resource.Actions = slices.Clone(resource.Actions)
+		if resource.group != AccessTokenGroupPersonal {
+			if !users {
+				continue
+			}
+			resource.Actions = slices.DeleteFunc(resource.Actions, func(action authz.ActionDefinition) bool {
+				var capability string
+				switch resource.Resource + ":" + action.Action {
+				case "user:read":
+					capability = authz.ActionUsersList
+				case "user:quota_write":
+					capability = authz.ActionUsersQuota
+				case "user:group_ratios_write":
+					capability = authz.ActionUsersGroupRatios
+				case "user:employee_assign":
+					if !current[authz.AdminMenuEmployeesView] {
+						return true
+					}
+					capability = authz.ActionUsersEmployee
+				case "user:employee_read":
+					if !current[authz.AdminMenuEmployeesView] {
+						return true
+					}
+					capability = authz.ActionEmployeesRead
+				case "group:read":
+					capability = authz.ActionGroupsRead
+				case "log:stats_read":
+					capability = authz.ActionUsersStats
+				case "billing:topup_reconcile":
+					capability = authz.ActionTopupsReconcile
+				default:
+					return true
+				}
+				return !current[authz.Permission{Resource: authz.ResourceAdminAccessToken, Action: capability}]
+			})
+		} else if role >= common.RoleAdminUser {
+			resource.Actions = slices.DeleteFunc(resource.Actions, func(a authz.ActionDefinition) bool {
+				return AdminTokenPersonalScopeDenied(resource.Resource + ":" + a.Action)
+			})
+		}
+		if len(resource.Actions) == 0 {
+			continue
+		}
 		resources[resource.group] = append(resources[resource.group], resource)
 	}
 	if role >= common.RoleAdminUser {
 		for _, definition := range authz.Catalog() {
+			if definition.Resource != authz.ResourceChannel || !channels {
+				continue
+			}
 			resource := AccessTokenResource{Resource: definition.Resource, LabelKey: definition.LabelKey}
 			for _, action := range definition.Actions {
-				if authz.Can(userID, role, authz.Permission{Resource: definition.Resource, Action: action.Action}) {
+				if action.Action != authz.ActionSecretView && current[authz.Permission{Resource: definition.Resource, Action: action.Action}] {
+					if action.Action == authz.ActionOperate {
+						action.DescriptionKey = accessTokenChannelOperateDescription
+					}
 					resource.Actions = append(resource.Actions, action)
 				}
 			}
@@ -164,7 +235,18 @@ func AccessTokenScopeDictionary() []AccessTokenResource {
 		resources = append(resources, resource)
 	}
 	for _, definition := range definitions {
-		resources = append(resources, AccessTokenResource{Resource: definition.Resource, LabelKey: definition.LabelKey, Actions: definition.Actions})
+		if definition.Resource == authz.ResourceAdminAccessToken {
+			continue
+		}
+		actions := slices.Clone(definition.Actions)
+		if definition.Resource == authz.ResourceChannel {
+			for i := range actions {
+				if actions[i].Action == authz.ActionOperate {
+					actions[i].DescriptionKey = accessTokenChannelOperateDescription
+				}
+			}
+		}
+		resources = append(resources, AccessTokenResource{Resource: definition.Resource, LabelKey: definition.LabelKey, Actions: actions})
 	}
 	return resources
 }
@@ -217,28 +299,36 @@ func AccessTokenScopeGranted(scopes []string, scope string) bool {
 // scope a PAT needs to obtain its proof. An empty value means PATs can never
 // obtain it; scopes missing from this table are denied too.
 var accessTokenVerificationScopes = map[string]string{
-	VerificationScopeChannelKeyRead:        AccessTokenScopeOf(authz.ChannelSecretView),
-	VerificationScopeAdminUserCreate:       "user:write",
-	VerificationScopeAdminUserUpdate:       "user:write",
-	VerificationScopeAdminUserDelete:       "user:write",
-	VerificationScopeAdminUserManage:       "user:write",
-	VerificationScopeAdminUserPasskeyReset: "user:write",
-	VerificationScopeAdminUserTwoFADisable: "user:write",
-	VerificationScopeAdminUserBindingClear: "user:write",
-	VerificationScopePasskeyRegister:       "account_security:write",
-	VerificationScopePasskeyDelete:         "account_security:write",
-	VerificationScopeTwoFASetup:            "account_security:write",
-	VerificationScopeTwoFADisable:          "account_security:write",
-	VerificationScopeTwoFABackupCodes:      "account_security:write",
-	VerificationScopePasswordSet:           "account_security:write",
-	VerificationScopePasswordChange:        "account_security:write",
-	VerificationScopeAccountBind:           "account_security:write",
-	VerificationScopeAccountUnbind:         "account_security:write",
-	VerificationScopeAccountDelete:         "account_security:write",
-	VerificationScopeAccessTokenGenerate:   "",
-	VerificationScopeAccessTokenUpdate:     "",
-	VerificationScopeAccessTokenRevoke:     "",
-	VerificationScopeLogin:                 "",
+	VerificationScopeAuditSecurityResponseStop:      "",
+	VerificationScopeAuditSecuritySettings:          "",
+	VerificationScopeAdminChannelCreate:             AccessTokenScopeOf(authz.ChannelSensitiveWrite),
+	VerificationScopeAdminChannelChange:             AccessTokenScopeOf(authz.ChannelOperate),
+	VerificationScopeAdminChannelCopy:               AccessTokenScopeOf(authz.ChannelSensitiveWrite),
+	VerificationScopeAdminChannelDelete:             AccessTokenScopeOf(authz.ChannelSensitiveWrite),
+	VerificationScopeChannelKeyRead:                 AccessTokenScopeOf(authz.ChannelSecretView),
+	VerificationScopeAdminUserAccessTokensDeleteAll: "", // Access token clearing is session-only.
+	VerificationScopeAdminUserAPIKeysDeleteAll:      "", // Emergency API key revocation is session-only.
+	VerificationScopeAdminUserCreate:                "user:write",
+	VerificationScopeAdminUserUpdate:                "user:write",
+	VerificationScopeAdminUserDelete:                "user:write",
+	VerificationScopeAdminUserManage:                "user:write",
+	VerificationScopeAdminUserPasskeyReset:          "user:write",
+	VerificationScopeAdminUserTwoFADisable:          "user:write",
+	VerificationScopeAdminUserBindingClear:          "user:write",
+	VerificationScopePasskeyRegister:                "account_security:write",
+	VerificationScopePasskeyDelete:                  "account_security:write",
+	VerificationScopeTwoFASetup:                     "account_security:write",
+	VerificationScopeTwoFADisable:                   "account_security:write",
+	VerificationScopeTwoFABackupCodes:               "account_security:write",
+	VerificationScopePasswordSet:                    "account_security:write",
+	VerificationScopePasswordChange:                 "account_security:write",
+	VerificationScopeAccountBind:                    "account_security:write",
+	VerificationScopeAccountUnbind:                  "account_security:write",
+	VerificationScopeAccountDelete:                  "account_security:write",
+	VerificationScopeAccessTokenGenerate:            "",
+	VerificationScopeAccessTokenUpdate:              "",
+	VerificationScopeAccessTokenRevoke:              "",
+	VerificationScopeLogin:                          "",
 }
 
 // AccessTokenVerificationScope returns the token scope a PAT needs for a
@@ -267,6 +357,23 @@ func requireAccessTokenVerificationScope(identity AuthIdentity, verificationScop
 		return err
 	}
 	if !AccessTokenScopeGranted(token.GetScopes(), required) {
+		// Changes use their exact action's permission in the authorized binding.
+		if verificationScope != VerificationScopeAdminChannelChange {
+			return ErrVerificationForbidden
+		}
+	}
+	var user model.User
+	if err := model.DB.Select("id", "role", "status").First(&user, identity.UserID).Error; err != nil {
+		return err
+	}
+	if strings.HasPrefix(verificationScope, "admin.channel.") {
+		if !AdminTokenLifetimeValid(token) {
+			return ErrAdminTokenDenied
+		}
+		if _, _, err := ReadAdminTokenAuthorization(context.Background(), identity.UserID, authz.ActionChannelsOwned); err != nil {
+			return err
+		}
+	} else if IsManagementScope(required) || (user.Role >= common.RoleAdminUser && AdminTokenPersonalScopeDenied(required)) {
 		return ErrVerificationForbidden
 	}
 	return nil

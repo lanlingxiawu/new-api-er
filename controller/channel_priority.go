@@ -34,7 +34,18 @@ func ReorderChannelPriority(c *gin.Context) {
 		return
 	}
 	if !move.Preview && len(order.Changes) > 0 {
+		audit := model.RequestAuditChanges(c)
+		for _, change := range order.Changes {
+			target := model.AuditTarget("channel", change.ID, "")
+			target.Consistency = "atomic"
+			audit.Add(target, model.AuditFields{"priority": change.Previous}, model.AuditFields{"priority": change.Priority})
+		}
 		model.InitChannelCache()
+	}
+	if move.Preview {
+		markAuditLogged(c)
+	} else {
+		recordManageAudit(c, "channel.priority_reorder", map[string]any{"count": len(order.Changes)})
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": order})
 }

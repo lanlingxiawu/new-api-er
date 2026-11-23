@@ -495,41 +495,65 @@ func DisableEmployee(id int) error {
 // ============================================================================
 
 // UpsertChannelCostConfig 创建或更新渠道成本配置。
-func UpsertChannelCostConfig(channelId int, costRatio float64, remark string) error {
-	var cfg ChannelCostConfig
-	err := DB.Where("channel_id = ?", channelId).First(&cfg).Error
-	if err == gorm.ErrRecordNotFound {
-		now := time.Now().Unix()
-		if err := DB.Model(&ChannelCostConfig{}).Create(map[string]interface{}{
-			"channel_id": channelId,
-			"cost_ratio": costRatio,
-			"remark":     remark,
-			"created_at": now,
-			"updated_at": now,
-		}).Error; err != nil {
-			return err
-		}
-	} else if err != nil {
+func UpsertChannelCostConfig(channelId int, costRatio float64, remark string, audit ...*AuditChanges) error {
+	if err := upsertChannelCostConfig(DB, channelId, costRatio, remark, audit...); err != nil {
 		return err
-	} else {
-		if err := DB.Model(&cfg).Updates(map[string]interface{}{
-			"cost_ratio": costRatio,
-			"remark":     remark,
-		}).Error; err != nil {
-			return err
-		}
 	}
 	invalidateChannelCostCache(channelId)
 	return nil
 }
 
+func upsertChannelCostConfig(tx *gorm.DB, channelId int, costRatio float64, remark string, audit ...*AuditChanges) error {
+	var cfg ChannelCostConfig
+	err := tx.Where("channel_id = ?", channelId).First(&cfg).Error
+	if err == gorm.ErrRecordNotFound {
+		now := time.Now().Unix()
+		err = tx.Model(&ChannelCostConfig{}).Create(map[string]any{
+			"channel_id": channelId,
+			"cost_ratio": costRatio,
+			"remark":     remark,
+			"created_at": now,
+			"updated_at": now,
+		}).Error
+		if err == nil && optionalAudit(audit) != nil {
+			audit[0].Add(AuditTarget("channel", channelId, ""), AuditFields{}, AuditFields{"cost_ratio": costRatio, "remark": remark})
+		}
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	before := AuditFields{"cost_ratio": cfg.CostRatio, "remark": cfg.Remark}
+	err = tx.Model(&cfg).Updates(map[string]any{
+		"cost_ratio": costRatio,
+		"remark":     remark,
+	}).Error
+	if err == nil && optionalAudit(audit) != nil {
+		audit[0].Add(AuditTarget("channel", channelId, ""), before, AuditFields{"cost_ratio": costRatio, "remark": remark})
+	}
+	return err
+}
+
 // DeleteChannelCostConfig 删除渠道成本配置（恢复默认 1.0）。
-func DeleteChannelCostConfig(channelId int) error {
+func DeleteChannelCostConfig(channelId int, audit ...*AuditChanges) error {
+	var before AuditFields
+	if optionalAudit(audit) != nil {
+		var cfg ChannelCostConfig
+		if err := DB.Where("channel_id = ?", channelId).Take(&cfg).Error; err == nil {
+			before = AuditFields{"cost_ratio": cfg.CostRatio, "remark": cfg.Remark}
+		} else if err != gorm.ErrRecordNotFound {
+			audit[0].Outcome = "unavailable"
+			common.SysError("audit channel cost snapshot unavailable")
+		}
+	}
 	err := DB.Where("channel_id = ?", channelId).Delete(&ChannelCostConfig{}).Error
 	if err != nil {
 		return err
 	}
 	invalidateChannelCostCache(channelId)
+	if before != nil {
+		audit[0].Add(AuditTarget("channel", channelId, ""), before, AuditFields{})
+	}
 	return nil
 }
 

@@ -10,6 +10,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/auditsecurity"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +22,7 @@ import (
 func setupAdminUserTest(t *testing.T) (*model.User, service.AuthIdentity, *model.User) {
 	t.Helper()
 	operator, identity := setupSecurityEnrollmentTest(t)
-	require.NoError(t, model.DB.AutoMigrate(&model.UserChannelExclusion{}))
+	require.NoError(t, model.DB.AutoMigrate(&model.UserChannelExclusion{}, &model.UserLoginProtection{}))
 	require.NoError(t, model.DB.Model(operator).Update("role", common.RoleRootUser).Error)
 	require.NoError(t, model.PublishUserAuthCache(operator.Id))
 	password, err := common.Password2Hash("managed-password")
@@ -294,6 +296,24 @@ func TestAdminUserProofIsBoundToTargetAndActionAndConsumedOnce(t *testing.T) {
 	assert.Equal(t, "SECURITY_PROOF_CONSUMED", result.Code)
 }
 
+func TestAdminUserRepeatedStatusAuditIsNotAChange(t *testing.T) {
+	_, identity, target := setupAdminUserTest(t)
+	for _, action := range []string{"disable", "enable"} {
+		for attempt := range 2 {
+			operation := service.VerificationOperation{Scope: service.VerificationScopeAdminUserManage, Context: []byte(fmt.Sprintf(`{"user_id":%d,"action":%q}`, target.Id, action))}
+			proof := issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodPassword)
+			response := adminUserRequest(http.MethodPost, "/api/user/manage", fmt.Sprintf(`{"id":%d,"action":%q}`, target.Id, action), proof, identity, common.RoleRootUser, nil, ManageUser)
+			var result securityEnrollmentResponse
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+			require.True(t, result.Success, response.Body.String())
+			var audit model.AuditLog
+			require.NoError(t, model.LOG_DB.Where("action = ? AND user_id = ?", "user.manage", identity.UserID).Last(&audit).Error)
+			require.NotNil(t, audit.Other.Op)
+			require.Len(t, auditsecurity.Evaluate(auditsecurity.Normalize(audit), nil, operation_setting.DefaultAuditSecuritySetting()), 1-attempt)
+		}
+	}
+}
+
 func TestAdminUserBindingProofDistinguishesBuiltInAndCustomBindings(t *testing.T) {
 	_, identity, target := setupAdminUserTest(t)
 	require.NoError(t, model.DB.Create(&model.UserOAuthBinding{UserId: target.Id, ProviderId: 7, ProviderUserId: "provider-user"}).Error)
@@ -348,34 +368,27 @@ func TestAdminUserVerificationPolicy(t *testing.T) {
 		proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeAdminUserDelete, Context: []byte(fmt.Sprintf(`{"user_id":%d}`, target.Id))}, service.VerificationMethodPassword)
 		response := accessTokenRequest(newAccessTokenTestRouter(), http.MethodDelete, fmt.Sprintf("/api/user/%d", target.Id), "legacy-admin-token", proof, "")
 		assert.Equal(t, http.StatusForbidden, response.Code)
-		assert.Equal(t, "SECURITY_PROOF_INVALID", decodeSecurityEnrollmentResponse(t, response).Code)
+		assert.Equal(t, "ADMIN_ACCESS_TOKEN_DISABLED", decodeSecurityEnrollmentResponse(t, response).Code)
 		_, err := model.GetUserById(target.Id, false)
 		assert.NoError(t, err)
 	})
-	t.Run("a user:write token completes the deletion on its own proof", func(t *testing.T) {
+	t.Run("a user:write token cannot obtain a user deletion proof", func(t *testing.T) {
 		operator, _, target := setupAdminUserTest(t)
 		require.NoError(t, model.DB.AutoMigrate(&model.ExternalIdentityClaim{}, &model.Token{}))
 		raw, _ := createScopedAccessToken(t, operator.Id, 0, "user:write")
 		router := newAccessTokenTestRouter()
 		response := accessTokenRequest(router, http.MethodPost, "/api/verify", raw, "", fmt.Sprintf(`{"scope":"admin.user.delete","method":"password","password":"enrollment-password","context":{"user_id":%d}}`, target.Id))
 		body := decodeSecurityEnrollmentResponse(t, response)
-		require.True(t, body.Success, body.Message)
-		var proof service.SecurityProof
-		require.NoError(t, common.Unmarshal(body.Data, &proof))
-
-		response = accessTokenRequest(router, http.MethodDelete, fmt.Sprintf("/api/user/%d", target.Id), raw, proof.ProofToken, "")
+		require.False(t, body.Success)
+		require.Equal(t, http.StatusForbidden, response.Code)
+		response = accessTokenRequest(router, http.MethodDelete, fmt.Sprintf("/api/user/%d", target.Id), raw, "", "")
 		body = decodeSecurityEnrollmentResponse(t, response)
-		require.True(t, body.Success, body.Message)
+		require.False(t, body.Success)
 		_, err := model.GetUserById(target.Id, true)
-		assert.Error(t, err)
-		var audit model.AuditLog
-		require.NoError(t, model.LOG_DB.Where("action = ?", "user.delete").Last(&audit).Error)
-		assert.Equal(t, "access_token", audit.AuthMethod)
-		auditJSON, err := common.Marshal(audit)
-		require.NoError(t, err)
-		for _, secret := range []string{raw, proof.ProofToken, "enrollment-password"} {
-			assert.NotContains(t, string(auditJSON), secret)
-		}
+		assert.NoError(t, err)
+		var deletions int64
+		require.NoError(t, model.LOG_DB.Model(&model.AuditLog{}).Where("action = ?", "user.delete").Count(&deletions).Error)
+		assert.Zero(t, deletions)
 	})
 	t.Run("a user:read token cannot obtain a proof", func(t *testing.T) {
 		operator, _, target := setupAdminUserTest(t)

@@ -1,6 +1,8 @@
 package model
 
 import (
+	"strings"
+
 	"github.com/QuantumNous/new-api/common"
 
 	"gorm.io/gorm"
@@ -90,16 +92,36 @@ func applyDailyLimitEdit(scope *gorm.DB, edit DailyLimitEdit) (int64, error) {
 	if err := edit.Validate(); err != nil {
 		return 0, err
 	}
-	res := scope.Updates(edit.updates(common.GetTimestamp()))
+	updates := edit.updates(common.GetTimestamp())
+	// PostgreSQL/SQLite count matched rows, even when the values are identical.
+	// Compare configuration inside the same scoped UPDATE so audit counts mean
+	// actual changes on every dialect, without reading or locking extra rows.
+	var differences []string
+	var values []any
+	for _, column := range []string{"daily_quota_limit", "daily_limit_auto_recover", "daily_limit_recover_minutes"} {
+		if value, ok := updates[column]; ok {
+			differences = append(differences, "("+column+" IS NULL OR "+column+" <> ?)")
+			values = append(values, value)
+		}
+	}
+	res := scope.Where(strings.Join(differences, " OR "), values...).Updates(updates)
 	return res.RowsAffected, res.Error
 }
 
 // UpdateChannelDailyLimitByIds 批量设置选中渠道的每日上限。
-func UpdateChannelDailyLimitByIds(ids []int, edit DailyLimitEdit) (int64, error) {
+func UpdateChannelDailyLimitByIds(ids []int, edit DailyLimitEdit, audit ...*AuditChanges) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	return applyDailyLimitEdit(DB.Model(&Channel{}).Where("id IN ?", ids), edit)
+	changes := optionalAudit(audit)
+	before := changes.ObserveChannels(DB.Model(&Channel{}).Where("id IN ?", ids))
+	count, err := applyDailyLimitEdit(DB.Model(&Channel{}).Where("id IN ?", ids), edit)
+	if err == nil && changes != nil {
+		updates := edit.updates(common.GetTimestamp())
+		delete(updates, "daily_limit_period_start")
+		changes.ChannelWrites(before, updates)
+	}
+	return count, err
 }
 
 // GetChannelIdsByTag 返回某标签下所有渠道的 ID。

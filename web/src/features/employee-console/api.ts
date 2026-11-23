@@ -1,11 +1,14 @@
-import { api } from '@/lib/api'
-import { appendUnixTimeRangeParams } from '@/lib/query-params'
+import { commissionLogQueryParams } from '@/features/employees/lib/commission-log-query'
 import type {
-  CommissionLog,
+  ApiResponse,
+  CommissionLogPage,
+  CommissionLogPageParams,
   CommissionCalendarStats,
   CommissionResetPeriodStatItem,
   EmployeeProfile,
 } from '@/features/employees/types'
+import { api } from '@/lib/api'
+import { appendUnixTimeRangeParams } from '@/lib/query-params'
 
 export interface EmployeeExtension {
   commission_total_quota: number
@@ -68,16 +71,7 @@ export interface MyProfileResponse {
   }
 }
 
-export interface MyLogsResponse {
-  success: boolean
-  message?: string
-  data?: {
-    items: CommissionLog[]
-    total: number
-    page: number
-    page_size: number
-  }
-}
+export type MyLogsResponse = ApiResponse<CommissionLogPage>
 
 export interface MySummaryResponse {
   success: boolean
@@ -90,26 +84,14 @@ export async function getMyEmployeeProfile(): Promise<MyProfileResponse> {
   return res.data
 }
 
-export async function getMyCommissionLogs(params: {
-  page?: number
-  page_size?: number
-  customer_user_id?: number
-  model_name?: string
-  channel_id?: number
-  loss_status?: 'loss' | 'normal'
-  start_time?: number
-  end_time?: number
-}): Promise<MyLogsResponse> {
-  const q = new URLSearchParams()
-  if (params.page) q.set('page', String(params.page))
-  if (params.page_size) q.set('page_size', String(params.page_size))
-  if (params.customer_user_id)
-    {q.set('customer_user_id', String(params.customer_user_id))}
-  if (params.model_name) q.set('model_name', params.model_name)
-  if (params.channel_id) q.set('channel_id', String(params.channel_id))
-  if (params.loss_status) q.set('loss_status', params.loss_status)
-  appendUnixTimeRangeParams(q, params)
-  const res = await api.get(`/api/user/employee/commission?${q.toString()}`)
+export async function getMyCommissionLogs(
+  params: Omit<CommissionLogPageParams, 'employee_user_id'>,
+  signal?: AbortSignal
+): Promise<MyLogsResponse> {
+  const res = await api.get(
+    `/api/user/employee/commission?${commissionLogQueryParams(params)}`,
+    { signal }
+  )
   return res.data
 }
 

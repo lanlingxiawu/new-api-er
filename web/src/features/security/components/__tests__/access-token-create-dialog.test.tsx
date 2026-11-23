@@ -183,6 +183,40 @@ async function openCreate(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('create access token dialog', () => {
+  it('rejects a never-expiring management token before requesting verification', async () => {
+    renderCard()
+    const user = userEvent.setup()
+    const dialog = await openCreate(user)
+    await user.type(
+      within(dialog).getByLabelText('Token name'),
+      'restricted-ci'
+    )
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Never expires' })
+    )
+    await user.click(permission(dialog, 'Channels', 'Read'))
+    for (const name of ['90 days', '180 days', '1 year', 'Never expires']) {
+      expect(within(dialog).getByRole('button', { name })).toBeDisabled()
+    }
+    expect(
+      within(dialog).getByRole('button', { name: '30 days' })
+    ).toBeEnabled()
+    expect(within(dialog).getByRole('button', { name: 'Custom' })).toBeEnabled()
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Create access token' })
+    )
+    expect(
+      await within(dialog).findByText(
+        'Management tokens must expire within 30 days. Sign in to create a replacement token.'
+      )
+    ).toBeVisible()
+    expect(api.post).not.toHaveBeenCalled()
+    await user.click(permission(dialog, 'Channels', 'Read'))
+    expect(
+      within(dialog).getByRole('button', { name: 'Never expires' })
+    ).toBeEnabled()
+  })
+
   it('requires at least one permission before asking for verification', async () => {
     renderCard()
     const user = userEvent.setup()

@@ -117,14 +117,12 @@ func DeleteChannelDailyUsageByChannelIds(channelIds []int) (int64, error) {
 	return res.RowsAffected, res.Error
 }
 
-// DeleteOrphanChannelDailyUsage 删除所有指向已不存在渠道的用量行。
+// DeleteOrphanChannelDailyUsage checks one bounded page for deleted channels.
 //
 // 渠道删除后，累计器里残留的增量可能在下一个 flush 周期写回一行孤儿记录（孤儿行无害：
 // 列表只关联现存渠道）。由 master 的清理任务周期性调用，保证最终一致。
 func DeleteOrphanChannelDailyUsage() (int64, error) {
-	res := DB.Where("channel_id NOT IN (?)", DB.Model(&Channel{}).Select("id")).
-		Delete(&ChannelDailyUsage{})
-	return res.RowsAffected, res.Error
+	return dailyUsageOrphanSweep.run(&ChannelDailyUsage{})
 }
 
 // channelDailyUsageCleanupBatch 单批删除的行数上限。
