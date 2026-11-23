@@ -200,7 +200,9 @@ u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_i
 
 5. 日志 `other` 带 `billing_mode=tiered_expr`、`expr_b64`、`matched_tier`（如 `1080p_video`）、`usage_facts`。
 
-矩阵表达式不写入 `billing_setting`。公开定价 `GET /api/pricing`（`model.updatePricing`）在模型没有模型级表达式时调用 `billing_setting.ResolveForkPublicTaskBillingExpr(pluginKey, model)`：对 thirdpartysd2 模型返回实际计费表达式（插件覆盖优先，其次矩阵），填入 `billing_mode=tiered_expr` / `billing_expr`，定价页按任务表达式渲染各档价格；其他插件不受影响。fast 模型的 schema 含四档而默认矩阵只有两档，定价页最后一档以 tier 名（`720p_video`）显示，不展开条件。
+矩阵表达式不写入 `billing_setting`。公开定价 `GET /api/pricing`（`model.updatePricing`）对 thirdpartysd2 调用 `billing_setting.ResolveForkPublicTaskBillingExpr(pluginKey, model, mappedModel)`，与结算使用相同的优先级：客户端模型的插件覆盖、映射模型的插件覆盖、专属矩阵、模型级表达式。即使保存了模型级表达式，公开价格也必须显示实际生效的矩阵或插件覆盖，不能展示被遮蔽的表达式。返回值填入 `billing_mode=tiered_expr` / `billing_expr`，定价页按任务表达式渲染各档价格；其他插件不受影响。fast 模型的 schema 含四档而默认矩阵只有两档，定价页最后一档以 tier 名（`720p_video`）显示，不展开条件。
+
+2026-11-15 真实上游验收发现：保存包含固定费用的模型表达式后，公开定价显示该表达式，但真实视频仍按既有专属矩阵结算。修复仅统一公开定价与实际生效价格，不修改结算或优先级；MySQL / PostgreSQL 的新反例先在旧实现失败。Main Chain Impact：该修改仅在既有定价缓存刷新时运行，不增加 relay 同步调用、数据库/Redis 访问、锁或 goroutine；使用既有配置快照和定价缓存，无新增共享资源、查询、索引或迁移。
 
 ### 任务计费维度的展示
 

@@ -255,11 +255,6 @@ export function MarketplaceCapabilities(props: MarketplaceCapabilitiesProps) {
           ))}
         </dl>
       </section>
-      <p className='text-muted-foreground text-xs leading-relaxed'>
-        {t(
-          'This preview reads static plugin declarations. The gateway validates the plugin during installation.'
-        )}
-      </p>
     </div>
   )
 }

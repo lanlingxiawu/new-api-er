@@ -20,7 +20,12 @@ func publishModelPricingOptions(values map[string]string) error {
 	billing := map[string]string{}
 	performance := map[string]string{}
 	guard := map[string]string{}
+	streamValidation := map[string]string{}
 	for key, value := range values {
+		if key == streamValidationOption || key == legacyStreamValidationOption {
+			streamValidation[key] = value
+			continue
+		}
 		if field, ok := strings.CutPrefix(key, "group_retry_guard_setting."); ok {
 			guard[field] = value
 			continue
@@ -36,6 +41,11 @@ func publishModelPricingOptions(values map[string]string) error {
 		keys = append(keys, key)
 	}
 	var performanceErr error
+	if len(streamValidation) > 0 {
+		if err := publishStreamValidationOptions(streamValidation); err != nil {
+			return err
+		}
+	}
 	if len(guard) > 0 {
 		revision, hasRevision := guard["revision"]
 		delete(guard, "revision")

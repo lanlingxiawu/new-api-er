@@ -6,6 +6,8 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,4 +51,34 @@ export function parseTaskResult() { return {}; }
 	assert.Equal(t, expression, pricing[sd2Model].BillingExpr)
 	assert.Empty(t, pricing["ordinary-model"].BillingMode)
 	assert.Empty(t, pricing["ordinary-model"].BillingExpr)
+
+	// A model-level expression can be saved by price synchronization. Execution
+	// still uses the fork matrix, so public pricing must not advertise that
+	// shadowed expression as the price charged to clients.
+	saved := make(map[string]string)
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.LoadFromDB(saved)) })
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode": `{"dreamina-seedance-2-0-fast-260128":"tiered_expr"}`,
+		"billing_setting.billing_expr": `{"dreamina-seedance-2-0-fast-260128":"3.3 + u(\"tokens\") * 5.6 / 1000000"}`,
+	}))
+	InvalidatePricingCache()
+	pricing = pricingByModel(GetPricing())
+	assert.Equal(t, billing_setting.BillingModeTieredExpr, pricing[sd2Model].BillingMode)
+	assert.Equal(t, expression, pricing[sd2Model].BillingExpr, "public price must follow the effective matrix")
+
+	// Explicit provider pricing overrides both the matrix and model price.
+	const override = `4.4 + u("tokens") * 5.6 / 1000000`
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		billing_setting.PluginBillingExprOption: `{"thirdpartysd2::dreamina-seedance-2-0-fast-260128":"4.4 + u(\"tokens\") * 5.6 / 1000000"}`,
+	}))
+	InvalidatePricingCache()
+	pricing = pricingByModel(GetPricing())
+	assert.Equal(t, billing_setting.BillingModeTieredExpr, pricing[sd2Model].BillingMode)
+	assert.Equal(t, override, pricing[sd2Model].BillingExpr)
+	require.Len(t, pricing[sd2Model].BillingPluginVariants, 1)
+	assert.Equal(t, override, pricing[sd2Model].BillingPluginVariants[0].BillingExpr)
 }

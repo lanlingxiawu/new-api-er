@@ -28,7 +28,6 @@ import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -106,11 +105,6 @@ export function MarketplaceSourcesDialog(props: MarketplaceSourcesDialogProps) {
       <DialogContent className='max-w-2xl'>
         <DialogHeader>
           <DialogTitle>{t('Marketplace sources')}</DialogTitle>
-          <DialogDescription>
-            {t(
-              'Each source serves an index.json listing installable plugins. Indexes are fetched by your browser; the gateway makes no outbound requests.'
-            )}
-          </DialogDescription>
         </DialogHeader>
         <div className='space-y-3'>
           {draft.length === 0 && (

@@ -19,20 +19,29 @@ func TestResolveForkPublicTaskBillingExpr(t *testing.T) {
 	matrixExpr, ok := model_setting.GetThirdPartySD2BillingExpr(forkSD2Model)
 	require.True(t, ok)
 
-	expression, ok := ResolveForkPublicTaskBillingExpr(model_setting.ThirdPartySD2PluginKey, forkSD2Model)
+	expression, ok := ResolveForkPublicTaskBillingExpr(model_setting.ThirdPartySD2PluginKey, forkSD2Model, "")
 	require.True(t, ok)
 	assert.Equal(t, matrixExpr, expression)
 
-	_, ok = ResolveForkPublicTaskBillingExpr("doubao", forkSD2Model)
+	_, ok = ResolveForkPublicTaskBillingExpr("doubao", forkSD2Model, "")
 	assert.False(t, ok, "only fork-priced plugins publish a task expression")
-	_, ok = ResolveForkPublicTaskBillingExpr(model_setting.ThirdPartySD2PluginKey, "unknown-model")
+	_, ok = ResolveForkPublicTaskBillingExpr(model_setting.ThirdPartySD2PluginKey, "unknown-model", "")
 	assert.False(t, ok)
 
 	override := `tier("base", u("tokens") * 5 / 1000000)`
 	billingSetting.PluginBillingExpr[PluginBillingExprKey(model_setting.ThirdPartySD2PluginKey, forkSD2Model)] = override
-	expression, ok = ResolveForkPublicTaskBillingExpr(model_setting.ThirdPartySD2PluginKey, forkSD2Model)
+	expression, ok = ResolveForkPublicTaskBillingExpr(model_setting.ThirdPartySD2PluginKey, forkSD2Model, "")
 	require.True(t, ok)
 	assert.Equal(t, override, expression, "a saved plugin override is what the model bills with")
+
+	expression, ok = ResolveForkPublicTaskBillingExpr(model_setting.ThirdPartySD2PluginKey, "sd2-alias", forkSD2Model)
+	require.True(t, ok)
+	assert.Equal(t, override, expression, "an alias inherits the mapped provider price")
+	const aliasOverride = `tier("alias", u("tokens") * 6 / 1000000)`
+	billingSetting.PluginBillingExpr[PluginBillingExprKey("thirdpartysd2", "sd2-alias")] = aliasOverride
+	expression, ok = ResolveForkPublicTaskBillingExpr(model_setting.ThirdPartySD2PluginKey, "sd2-alias", forkSD2Model)
+	require.True(t, ok)
+	assert.Equal(t, aliasOverride, expression, "an alias provider override has the same priority as settlement")
 }
 
 func TestValidateForkTaskUsageFacts(t *testing.T) {

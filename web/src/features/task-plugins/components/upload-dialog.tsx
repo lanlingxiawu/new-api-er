@@ -262,9 +262,7 @@ export function UploadDialog(props: UploadDialogProps) {
           : t('Upload task plugin')
       }
       description={
-        props.initialKey
-          ? `${t('Plugin key')}: ${props.initialKey}`
-          : t('Upload a JavaScript task platform plugin.')
+        props.initialKey ? `${t('Plugin key')}: ${props.initialKey}` : undefined
       }
       footer={
         <>
@@ -372,10 +370,7 @@ export function UploadDialog(props: UploadDialogProps) {
             ) : null}
           </div>
           <FieldDescription>
-            {iconFileName ||
-              t(
-                'Optional icon.svg or icon.png shipped next to plugin.js, up to 512 KiB. Stored separately from the source.'
-              )}
+            {iconFileName || t('Optional SVG or PNG icon, up to 512 KiB.')}
           </FieldDescription>
           {iconError ? <FieldError>{iconError}</FieldError> : null}
         </Field>

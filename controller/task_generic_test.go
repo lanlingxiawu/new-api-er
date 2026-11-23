@@ -137,6 +137,25 @@ func TestTaskArtifactAuthorizationKeepsForeignTasksHidden(t *testing.T) {
 	_, exists, err = getTaskForArtifactRequest(apiToken, task.TaskID)
 	require.NoError(t, err)
 	assert.False(t, exists)
+
+	for _, role := range []int{common.RoleAdminUser, common.RoleRootUser} {
+		pat, _ := gin.CreateTestContext(httptest.NewRecorder())
+		pat.Set("id", 8)
+		pat.Set("role", role)
+		pat.Set("use_access_token", true)
+		_, exists, err = getTaskForArtifactRequest(pat, task.TaskID)
+		require.NoError(t, err)
+		assert.False(t, exists, "a personal access token must not inherit the administrator's all-task view")
+	}
+
+	ownPat, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ownPat.Set("id", task.UserId)
+	ownPat.Set("role", common.RoleAdminUser)
+	ownPat.Set("use_access_token", true)
+	found, exists, err = getTaskForArtifactRequest(ownPat, task.TaskID)
+	require.NoError(t, err)
+	require.True(t, exists)
+	assert.Equal(t, task.TaskID, found.TaskID)
 }
 
 func TestDashboardTaskArtifactsReturnsLegacyCapabilityWithoutUpstreamURL(t *testing.T) {

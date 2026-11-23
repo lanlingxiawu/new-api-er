@@ -96,12 +96,7 @@ export function MarketplacePanel() {
   return (
     <>
       <div className='h-full space-y-4 overflow-y-auto'>
-        <div className='flex flex-wrap items-center justify-between gap-2'>
-          <p className='text-muted-foreground text-sm'>
-            {t(
-              'Plugin indexes are fetched by your browser. Installing runs the same review and admission pipeline as a manual upload.'
-            )}
-          </p>
+        <div className='flex flex-wrap items-center justify-end gap-2'>
           <div className='flex shrink-0 gap-2'>
             <Button
               variant='outline'

@@ -47,11 +47,11 @@ func thirdPartySD2MatrixModel(pluginKey, model, mappedModel string) (string, boo
 // ResolveForkPublicTaskBillingExpr returns the effective task expression of a
 // fork-priced plugin model for the public pricing page, which otherwise only
 // shows model-level expressions. Other plugins return false.
-func ResolveForkPublicTaskBillingExpr(pluginKey, model string) (string, bool) {
+func ResolveForkPublicTaskBillingExpr(pluginKey, model, mappedModel string) (string, bool) {
 	if pluginKey != model_setting.ThirdPartySD2PluginKey {
 		return "", false
 	}
-	expression, ok := ResolveTaskBillingExpr(pluginKey, model, "")
+	expression, ok := ResolveTaskBillingExpr(pluginKey, model, mappedModel)
 	return expression, ok && strings.TrimSpace(expression) != ""
 }
 
