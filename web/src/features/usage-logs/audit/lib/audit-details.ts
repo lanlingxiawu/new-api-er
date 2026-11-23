@@ -21,19 +21,15 @@ import type { TFunction } from 'i18next'
 import { loginMethodLabel } from '@/features/security/components/login-session-utils'
 import type { PermissionResourceDef } from '@/lib/admin-permissions'
 import dayjs from '@/lib/dayjs'
-import { ROLE } from '@/lib/roles'
 
 import { renderAuditContent } from '../../lib/format'
 import { buildQuotaAuditOperation } from '../../lib/quota-audit-operation'
 import type { LogOtherData } from '../../types'
 import type { AuditLog } from '../api'
+import { auditFieldLabel } from './audit-field-labels'
+import { auditParameterValue } from './audit-parameter-value'
 
-const AUDIT_ROLE_NAMES: Record<number, string> = {
-  [ROLE.GUEST]: 'guest',
-  [ROLE.USER]: 'user',
-  [ROLE.ADMIN]: 'admin',
-  [ROLE.SUPER_ADMIN]: 'root',
-}
+export { auditFieldLabel } from './audit-field-labels'
 
 const TOKEN_AUDIT_OPERATIONS: Record<
   string,
@@ -67,6 +63,9 @@ export type AuditDetailField = {
   label: string
   value: unknown
   copyable?: boolean
+  key?: string
+  action?: string
+  literalKeys?: boolean
 }
 
 export type AuditDetailOptions = {
@@ -80,128 +79,9 @@ export function isAuditDetailObject(
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-export function auditFieldLabel(key: string, t: TFunction): string {
-  switch (key) {
-    case 'status':
-      return t('Status')
-    case 'role':
-      return t('Role')
-    case 'changed_fields':
-      return t('Changed Fields')
-    case 'changed':
-      return t('State changed')
-    case 'count':
-      return t('Count')
-    case 'total':
-      return t('Total')
-    case 'requested_redemption_ids':
-      return t('Requested redemption code IDs')
-    case 'requested_ids':
-      return t('Requested token IDs')
-    case 'returned_ids':
-      return t('Returned token IDs')
-    case 'requested_ids_truncated':
-      return t('Requested token IDs truncated')
-    case 'expired_time':
-      return t('Expiration Time')
-    case 'remain_quota':
-      return t('Remaining quota')
-    case 'unlimited_quota':
-      return t('Unlimited Quota')
-    case 'model_limits_enabled':
-      return t('Model limits enabled')
-    case 'model_limits':
-      return t('Model Limits')
-    case 'allow_ips':
-      return t('IP Whitelist (supports CIDR)')
-    case 'allow_user_quota_query':
-      return t('Allow querying user quota')
-    case 'auto_groups':
-      return t('Auto Group Chain')
-    case 'cross_group_retry':
-      return t('Cross-group retry')
-    case 'sourceId':
-      return t('Source ID')
-    case 'id':
-      return 'ID'
-    case 'name':
-      return t('Name')
-    case 'username':
-      return t('Username')
-    case 'target_user_id':
-      return t('User ID')
-    case 'plan_id':
-      return t('Plan ID')
-    case 'plan_title':
-      return t('Plan Title')
-    case 'reset_count':
-      return t('Reset Count')
-    case 'user_count':
-      return t('User Count')
-    case 'advance_reset_time':
-      return t('Advance next reset time')
-    case 'bindingType':
-      return t('Binding Type')
-    case 'from':
-      return t('Previous value')
-    case 'to':
-      return t('New value')
-    case 'action':
-      return t('Operation')
-    case 'method':
-      return t('Authentication Method')
-    case 'key':
-      return t('Key')
-    case 'tag':
-      return t('Tag')
-    case 'group':
-      return t('Group')
-    case 'models':
-      return t('Models')
-    case 'type':
-      return t('Type')
-    case 'base_url':
-      return t('Base URL')
-    case 'quota':
-      return t('Quota')
-    case 'admin_info':
-      return t('Operator Admin')
-    case 'audit_info':
-      return t('Request')
-    case 'token_id':
-      return t('Token ID')
-    case 'token_ref':
-      return t('Token identifier')
-    case 'scopes':
-      return t('Permissions')
-    case 'previous_scopes':
-      return t('Previous permissions')
-    case 'expires_at':
-      return t('Expiration')
-    case 'required_scope':
-      return t('Required permission')
-    case 'failure_reason':
-      return t('Failure reason')
-    case 'legacy':
-      return t('Legacy token')
-    case 'revoked_access_tokens':
-      return t('Revoked access tokens')
-    case 'verification_method':
-      return t('Verification method')
-    case 'password_reset':
-      return t('Reset password')
-    case 'admin_permissions_updated':
-      return t('Admin permissions updated')
-    case 'provider_id':
-      return t('Provider ID')
-    default:
-      return key
-  }
-}
-
 // Groups stored access token scopes by resource. Scopes missing from the
 // dictionary are only counted, so a raw scope key never reaches the reader.
-function describeAccessTokenScopes(
+export function describeAccessTokenScopes(
   scopes: string[],
   resources: PermissionResourceDef[] | undefined,
   t: TFunction
@@ -418,12 +298,22 @@ export function buildAuditDetails(
       typeof value === 'number' ||
       typeof value === 'boolean'
     ) {
-      summaryParams[key] = value
+      summaryParams[key] = auditParameterValue(
+        key,
+        value,
+        action,
+        t
+      ) as typeof value
     } else if (
       Array.isArray(value) &&
       value.every((item) => typeof item === 'string')
     ) {
-      summaryParams[key] = value
+      summaryParams[key] = auditParameterValue(
+        key,
+        value,
+        action,
+        t
+      ) as typeof value
     }
   }
   if (typeof summaryParams.method === 'string') {
@@ -433,7 +323,9 @@ export function buildAuditDetails(
     typeof summaryParams.role === 'number' &&
     [0, 1, 10, 100].includes(summaryParams.role)
   ) {
-    summaryParams.role = AUDIT_ROLE_NAMES[summaryParams.role]
+    summaryParams.role = String(
+      auditParameterValue('role', summaryParams.role, action, t)
+    )
   }
 
   let fallback = t('Operation audit')
@@ -471,7 +363,9 @@ export function buildAuditDetails(
   }
   let actorRole = ''
   if ([1, 10, 100].includes(entry.actor_role)) {
-    actorRole = AUDIT_ROLE_NAMES[entry.actor_role]
+    actorRole = String(
+      auditParameterValue('actor_role', entry.actor_role, action, t)
+    )
   }
   const authMethod =
     entry.auth_method ||
@@ -524,7 +418,7 @@ export function buildAuditDetails(
     typeof params.role === 'number' &&
     [0, 1, 10, 100].includes(params.role)
   ) {
-    params.role = AUDIT_ROLE_NAMES[params.role]
+    params.role = auditParameterValue('role', params.role, action, t)
   }
   if (typeof params.method === 'string') {
     params.method = loginMethodLabel(params.method, t)
@@ -581,7 +475,12 @@ export function buildAuditDetails(
     delete params.total
   }
   for (const [key, value] of Object.entries(params)) {
-    fields.push({ label: auditFieldLabel(key, t), value })
+    fields.push({
+      key,
+      action,
+      label: auditFieldLabel(key, t, action),
+      value: auditParameterValue(key, value, action, t),
+    })
   }
   if (
     typeof metadata.login_method === 'string' &&
@@ -594,6 +493,7 @@ export function buildAuditDetails(
   }
 
   const extra = { ...metadata }
+  delete extra.changes
   delete extra.op
   delete extra.admin_info
   delete extra.audit_info

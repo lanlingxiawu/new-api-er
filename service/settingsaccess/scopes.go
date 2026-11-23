@@ -1,7 +1,14 @@
 package settingsaccess
 
+import "github.com/QuantumNous/new-api/setting/operation_setting"
+
 func buildDefinitions() map[string]Definition {
+	auditKeys := make([]string, 0, len(operation_setting.AuditSecurityFields))
+	for _, key := range operation_setting.AuditSecurityFields {
+		auditKeys = append(auditKeys, operation_setting.AuditSecurityModule+"."+key)
+	}
 	items := []Definition{
+		configScope(ScopeAuditSecurityMonitor, operation_setting.AuditSecurityModule, auditKeys, operation_setting.AuditSecurityFields),
 		scope(ScopeChannelProfitPreview, "GroupRatio"),
 		configScope(ScopeVeridropDetection, "veridrop_monitor_setting",
 			[]string{

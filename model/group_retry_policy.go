@@ -9,7 +9,7 @@ import (
 
 // saveGroupRetryPolicy is called with configGroupMu held. Legacy count writes
 // share the same transaction/serialization path as the unified editor.
-func saveGroupRetryPolicy(module string, values map[string]string) (map[string]string, error) {
+func saveGroupRetryPolicy(module string, values map[string]string, audit ...*AuditChanges) (map[string]string, error) {
 	statuses := operation_setting.GetGroupRetryStatusSetting()
 	guard := operation_setting.GetGroupRetryGuardSetting()
 	stored := map[string]string{}
@@ -69,7 +69,7 @@ func saveGroupRetryPolicy(module string, values map[string]string) (map[string]s
 		stored["group_retry_guard_setting.rules"] = guard.Rules
 		stored["group_retry_guard_setting.revision"] = guard.Revision
 	}
-	if err := persistOptionsTx(stored); err != nil {
+	if err := persistOptionsTx(stored, audit...); err != nil {
 		return nil, err
 	}
 	if module != "group_retry_guard_setting" {

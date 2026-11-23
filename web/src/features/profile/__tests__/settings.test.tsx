@@ -262,15 +262,42 @@ describe('notifications a user receives', () => {
     }
   )
 
-  it('a user on a site with reminders off sees one line instead of notification settings', () => {
+  it('a user can subscribe to account security when site balance reminders are off', async () => {
+    const put = mockSave(ROLE.USER, { notify_type: 'email' })
     renderNotificationTab(ROLE.USER, { notify_type: 'email' }, false)
-    expect(
-      screen.getByText('No notifications are available to you right now')
-    ).toBeInTheDocument()
-    expect(screen.queryByText('Notification Method')).not.toBeInTheDocument()
+    expect(screen.getByText('Notification Method')).toBeInTheDocument()
+    const security = screen.getByRole('switch', {
+      name: 'Account security notifications',
+    })
+    expect(security).not.toBeChecked()
+    fireEvent.click(security)
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }))
+    await waitFor(() => expect(put).toHaveBeenCalled())
+    expect(sentBody(put)).toMatchObject({
+      account_security_notify_enabled: true,
+    })
     expect(
       screen.queryByRole('switch', { name: 'Low balance reminder' })
     ).not.toBeInTheDocument()
+  })
+
+  it('explicitly unsubscribes while preserving the selected notification method', async () => {
+    const setting = {
+      notify_type: 'webhook',
+      webhook_url: 'https://example.com/notify',
+      account_security_notify_enabled: true,
+    }
+    const put = mockSave(ROLE.USER, setting)
+    renderNotificationTab(ROLE.USER, setting, false)
+    fireEvent.click(
+      screen.getByRole('switch', { name: 'Account security notifications' })
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }))
+    await waitFor(() => expect(put).toHaveBeenCalled())
+    expect(sentBody(put)).toMatchObject({
+      ...setting,
+      account_security_notify_enabled: false,
+    })
   })
 
   it('an admin on a site with reminders off keeps only the administrator notifications', () => {

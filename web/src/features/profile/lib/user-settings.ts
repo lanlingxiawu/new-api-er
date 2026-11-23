@@ -21,7 +21,10 @@ import type { NotifyType, UpdateUserSettingsRequest } from '../types'
 import { parseUserSettings } from './format'
 
 /** Switches whose absence means "never chosen", which the server resolves */
-type DefaultedSwitch = 'quota_warning_enabled' | 'channel_notify_enabled'
+type DefaultedSwitch =
+  | 'quota_warning_enabled'
+  | 'channel_notify_enabled'
+  | 'account_security_notify_enabled'
 
 type NormalizedUserSettings = Required<
   Omit<UpdateUserSettingsRequest, DefaultedSwitch>
@@ -44,6 +47,7 @@ export function normalizeUserSettings(
     notify_type: notifyType,
     quota_warning_threshold: parsed.quota_warning_threshold ?? 0,
     quota_warning_enabled: parsed.quota_warning_enabled,
+    account_security_notify_enabled: parsed.account_security_notify_enabled,
     notification_email: parsed.notification_email ?? '',
     webhook_url: parsed.webhook_url ?? '',
     webhook_secret: parsed.webhook_secret ?? '',

@@ -32,8 +32,11 @@ import {
 } from '../../components/dialogs/log-detail-layout'
 import type { AuditLog } from '../api'
 import { auditFieldLabel, buildAuditDetails } from '../lib/audit-details'
+import { auditActorLabel } from '../lib/source'
+import { AuditChangesSection } from './audit-changes-section'
 import { AuditDetailFields } from './audit-detail-fields'
 import { AuditDetailValue } from './audit-detail-value'
+import { AuditIPCell } from './audit-ip-cell'
 
 export function AuditLogDetailsDialog(props: { entry: AuditLog }) {
   const { t } = useTranslation()
@@ -44,7 +47,8 @@ export function AuditLogDetailsDialog(props: { entry: AuditLog }) {
     enabled:
       open &&
       (props.entry.action === 'access_token.generate' ||
-        props.entry.action === 'access_token.update'),
+        props.entry.action === 'access_token.update' ||
+        props.entry.action === 'access_token.revoke'),
     staleTime: Infinity,
   })
   const detail = buildAuditDetails(props.entry, t, {
@@ -72,6 +76,7 @@ export function AuditLogDetailsDialog(props: { entry: AuditLog }) {
     <Dialog
       open={open}
       onOpenChange={setOpen}
+      initialFocus={false}
       title={t('Log Details')}
       description={t('View the complete details for this log entry')}
       descriptionClassName='sr-only'
@@ -80,9 +85,10 @@ export function AuditLogDetailsDialog(props: { entry: AuditLog }) {
           {t('Details')}
         </Button>
       }
-      contentClassName='min-w-0 sm:max-w-lg max-sm:max-h-(--dialog-available-height) max-sm:w-[calc(100vw-1.5rem)] max-sm:max-w-[calc(100vw-1.5rem)]'
+      contentClassName='min-w-0 max-h-[94dvh] overflow-y-hidden sm:max-w-4xl max-sm:max-h-(--dialog-available-height) max-sm:w-[calc(100vw-1.5rem)] max-sm:max-w-[calc(100vw-1.5rem)]'
       titleClassName='text-base'
-      contentHeight='auto'
+      contentHeight='min(76dvh, 56rem)'
+      scrollAreaClassName='[scrollbar-gutter:stable]'
       bodyClassName='space-y-3'
     >
       <div className='min-w-0 space-y-1.5'>
@@ -143,6 +149,10 @@ export function AuditLogDetailsDialog(props: { entry: AuditLog }) {
           )}
         </DetailSection>
       )}
+      <AuditChangesSection
+        entry={props.entry}
+        scopeResources={scopes.data?.resources}
+      />
       {hasRequest && (
         <DetailSection label={t('Request')}>
           {props.entry.method && (
@@ -152,8 +162,17 @@ export function AuditLogDetailsDialog(props: { entry: AuditLog }) {
             <DetailRow label='HTTP' value={props.entry.status} mono />
           )}
           {props.entry.ip && (
-            <DetailRow label='IP' value={props.entry.ip} mono />
+            <DetailRow label='IP' value={<AuditIPCell entry={props.entry} />} />
           )}
+          <DetailRow
+            label={t('Actor identity')}
+            value={t(
+              auditActorLabel(
+                props.entry.actor_role,
+                props.entry.actor_is_employee
+              )
+            )}
+          />
           {props.entry.user_agent && (
             <DetailRow
               label={t('Client')}
@@ -187,7 +206,9 @@ export function AuditLogDetailsDialog(props: { entry: AuditLog }) {
         <DetailSection label={t('Additional information')}>
           <AuditDetailFields
             fields={Object.entries(detail.extra).map(([key, value]) => ({
-              label: auditFieldLabel(key, t),
+              key,
+              action: props.entry.action,
+              label: auditFieldLabel(key, t, props.entry.action),
               value,
             }))}
           />

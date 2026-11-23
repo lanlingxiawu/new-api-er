@@ -92,7 +92,7 @@ func UpdateModelPricingConfig(c *gin.Context) {
 	if request.Options != nil || request.ExpectedOptions != nil {
 		saveErr = model.UpdateModelPricingOptionMaps(request.Options, request.ExpectedOptions)
 	} else {
-		saveErr = model.UpdateModelPricing(request.Changes)
+		saveErr = model.UpdateModelPricing(request.Changes, model.RequestAuditChanges(c))
 	}
 	if err := saveErr; err != nil {
 		logger.LogWarn(c, "model pricing update rejected: "+err.Error())

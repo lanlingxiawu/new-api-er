@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,13 +21,13 @@ var configGroupMu sync.Mutex
 var ErrGroupRetryTimesInvalid = errors.New("invalid group retry counts")
 
 // SaveGroupRetryPolicy commits the complete editor before publishing either setting.
-func SaveGroupRetryPolicy(times string, values map[string]string) (bool, error) {
+func SaveGroupRetryPolicy(times string, values map[string]string, audit ...*AuditChanges) (bool, error) {
 	configGroupMu.Lock()
 	defer configGroupMu.Unlock()
-	return saveGroupRetryStatusPolicy(&times, values)
+	return saveGroupRetryStatusPolicy(&times, values, audit...)
 }
 
-func saveGroupRetryStatusPolicy(times *string, values map[string]string) (bool, error) {
+func saveGroupRetryStatusPolicy(times *string, values map[string]string, audit ...*AuditChanges) (bool, error) {
 	if times != nil {
 		if err := operation_setting.CheckGroupRetryTimes(*times); err != nil {
 			return false, fmt.Errorf("%w: %v", ErrGroupRetryTimesInvalid, err)
@@ -46,7 +47,7 @@ func saveGroupRetryStatusPolicy(times *string, values map[string]string) (bool, 
 	if times != nil {
 		prefixed["GroupRetryTimes"] = *times
 	}
-	if err := persistOptionsTx(prefixed); err != nil {
+	if err := persistOptionsTx(prefixed, audit...); err != nil {
 		return false, err
 	}
 	if times != nil {
@@ -63,7 +64,7 @@ func saveGroupRetryStatusPolicy(times *string, values map[string]string) (bool, 
 	return true, nil
 }
 
-func SaveConfigGroup(module string, values map[string]string) (bool, error) {
+func SaveConfigGroup(module string, values map[string]string, audit ...*AuditChanges) (bool, error) {
 	configGroupMu.Lock()
 	defer configGroupMu.Unlock()
 	if len(values) == 0 {
@@ -71,9 +72,23 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 	}
 	prefixed := make(map[string]string, len(values))
 	switch module {
+	case "claude_stream_validation_setting", "stream_protocol_validation_setting":
+		raw, ok := values["enabled"]
+		if !ok || len(values) != 1 {
+			return false, fmt.Errorf("configuration field is not editable")
+		}
+		if raw != "true" && raw != "false" {
+			return false, fmt.Errorf("invalid boolean configuration value")
+		}
+		values = map[string]string{"enabled": raw}
+		prefixed[module+".enabled"] = values["enabled"]
+		if err := saveStreamValidationOptions(prefixed, audit...); err != nil {
+			return false, err
+		}
+		return true, nil
 	case "group_retry_policy", "group_retry_times", "group_retry_guard_setting":
 		var err error
-		prefixed, err = saveGroupRetryPolicy(module, values)
+		prefixed, err = saveGroupRetryPolicy(module, values, audit...)
 		if err != nil {
 			return false, err
 		}
@@ -85,13 +100,13 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 		for k, v := range values {
 			prefixed[module+"."+k] = v
 		}
-		if err := persistOptionsTx(prefixed); err != nil {
+		if err := persistOptionsTx(prefixed, audit...); err != nil {
 			return false, err
 		}
 		performance_setting.ReplacePerformanceSetting(draft)
 
 	case "group_retry_status_setting":
-		return saveGroupRetryStatusPolicy(nil, values)
+		return saveGroupRetryStatusPolicy(nil, values, audit...)
 	case "probe_routing_setting":
 		if len(values) != 1 {
 			return false, fmt.Errorf("invalid probe routing configuration")
@@ -109,7 +124,7 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 			return false, err
 		}
 		prefixed[module+".max_input_chars"] = raw
-		if err := persistOptionsTx(prefixed); err != nil {
+		if err := persistOptionsTx(prefixed, audit...); err != nil {
 			return false, err
 		}
 		operation_setting.ReplaceProbeRoutingSetting(draft)
@@ -127,7 +142,7 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 		for k, v := range values {
 			prefixed[module+"."+k] = v
 		}
-		if err := persistOptionsTx(prefixed); err != nil {
+		if err := persistOptionsTx(prefixed, audit...); err != nil {
 			return false, err
 		}
 		operation_setting.ReplaceRateLimitSetting(draft)
@@ -145,10 +160,22 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 		for k, v := range values {
 			prefixed[module+"."+k] = v
 		}
-		if err := persistOptionsTx(prefixed); err != nil {
+		if err := persistOptionsTx(prefixed, audit...); err != nil {
 			return false, err
 		}
 		operation_setting.ReplaceDBPoolSetting(draft)
+	case operation_setting.LoginProtectionModule:
+		draft, err := operation_setting.ParseLoginProtectionUpdate(values)
+		if err != nil {
+			return false, err
+		}
+		for key, value := range values {
+			prefixed[module+"."+key] = value
+		}
+		if err := persistOptionsTx(prefixed, audit...); err != nil {
+			return false, err
+		}
+		operation_setting.ReplaceLoginProtectionSetting(draft)
 	case "user_session_setting":
 		draft := operation_setting.GetUserSessionSetting()
 		if err := validateGroupFields(values, userSessionFields); err != nil {
@@ -163,7 +190,7 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 		for k, v := range values {
 			prefixed[module+"."+k] = v
 		}
-		if err := persistOptionsTx(prefixed); err != nil {
+		if err := persistOptionsTx(prefixed, audit...); err != nil {
 			return false, err
 		}
 		operation_setting.ReplaceUserSessionSetting(draft)
@@ -181,7 +208,7 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 		for k, v := range values {
 			prefixed[module+"."+k] = v
 		}
-		if err := persistOptionsTx(prefixed); err != nil {
+		if err := persistOptionsTx(prefixed, audit...); err != nil {
 			return false, err
 		}
 		operation_setting.ReplaceRelayTimeoutSetting(draft)
@@ -202,7 +229,7 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 		for k, v := range values {
 			prefixed[module+"."+k] = v
 		}
-		if err := persistOptionsTx(prefixed); err != nil {
+		if err := persistOptionsTx(prefixed, audit...); err != nil {
 			return false, err
 		}
 		operation_setting.ReplaceRelayErrorDisplaySetting(draft)
@@ -220,10 +247,27 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 		for k, v := range values {
 			prefixed[module+"."+k] = v
 		}
-		if err := persistOptionsTx(prefixed); err != nil {
+		if err := persistOptionsTx(prefixed, audit...); err != nil {
 			return false, err
 		}
 		operation_setting.ReplaceVeridropMonitorSetting(draft)
+	case operation_setting.AuditSecurityModule:
+		if _, err := operation_setting.ParseAuditSecurityUpdate(values); err != nil {
+			return false, err
+		}
+		normalized, err := operation_setting.NormalizeAuditSecurityUpdateValues(values)
+		if err != nil {
+			return false, err
+		}
+		for k, v := range normalized {
+			prefixed[module+"."+k] = v
+		}
+		if err := persistOptionsTx(prefixed, audit...); err != nil {
+			return false, err
+		}
+		if err := config.GlobalConfig.UpdateFromMap(module, normalized); err != nil {
+			return true, err
+		}
 	case "price_monitor_setting":
 		draft := *price_monitor_setting.GetPriceMonitorSetting()
 		if err := validatePriceMonitorFields(values); err != nil {
@@ -238,7 +282,7 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 		for k, v := range values {
 			prefixed[module+"."+k] = v
 		}
-		if err := persistOptionsTx(prefixed); err != nil {
+		if err := persistOptionsTx(prefixed, audit...); err != nil {
 			return false, err
 		}
 		if err := config.GlobalConfig.UpdateFromMap(module, values); err != nil {
@@ -261,7 +305,7 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 		for k, v := range values {
 			prefixed[module+"."+k] = v
 		}
-		if err := persistOptionsTx(prefixed); err != nil {
+		if err := persistOptionsTx(prefixed, audit...); err != nil {
 			return false, err
 		}
 		if err := config.GlobalConfig.UpdateFromMap(module, values); err != nil {
@@ -437,18 +481,26 @@ func fieldSet(fields ...string) map[string]struct{} {
 	}
 	return out
 }
-func persistOptionsTx(values map[string]string) error {
-	return DB.Transaction(func(tx *gorm.DB) error {
-		for k, v := range values {
-			o := Option{Key: k}
-			if err := tx.FirstOrCreate(&o, Option{Key: k}).Error; err != nil {
-				return err
-			}
-			o.Value = v
-			if err := tx.Save(&o).Error; err != nil {
+func persistOptionsTx(values map[string]string, audit ...*AuditChanges) error {
+	var receipt *AuditChanges
+	if optionalAudit(audit) != nil {
+		receipt = NewAuditChanges()
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		for _, key := range keys {
+			if err := persistAuditOption(tx, key, values[key], receipt); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+	if err == nil && receipt != nil {
+		audit[0].Merge(receipt)
+	}
+	return err
 }

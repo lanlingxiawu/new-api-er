@@ -16,10 +16,27 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useLocation } from '@tanstack/react-router'
 
 import { AuditLogs } from '@/features/usage-logs/audit'
+import { parseAuditSearch } from '@/lib/audit-navigation'
 
 export const Route = createFileRoute('/_authenticated/usage-logs/audit')({
-  component: AuditLogs,
+  validateSearch: parseAuditSearch,
+  component: AuditRoute,
 })
+
+function AuditRoute() {
+  const search = Route.useSearch()
+  const navigate = Route.useNavigate()
+  const pendingVisit = useLocation({
+    select: (location) => location.state.auditPendingVisit,
+  })
+  return (
+    <AuditLogs
+      search={search}
+      pendingVisit={pendingVisit}
+      onSearchChange={(next) => void navigate({ search: next, state: true })}
+    />
+  )
+}

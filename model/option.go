@@ -19,7 +19,6 @@ import (
 	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
-	"gorm.io/gorm"
 )
 
 type Option struct {
@@ -267,6 +266,9 @@ func loadOptionsFromDatabase() {
 	}
 	passkeyOptions := make(map[string]string)
 	values := make(map[string]string, len(options))
+	// A removed override must not survive the next database reload.
+	values[streamValidationOption] = "null"
+	values[legacyStreamValidationOption] = "true"
 	for _, option := range options {
 		if IsPasskeyDomainOption(option.Key) {
 			passkeyOptions[option.Key] = option.Value
@@ -289,6 +291,10 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if field, ok := strings.CutPrefix(key, operation_setting.LoginProtectionModule+"."); ok {
+		_, err := operation_setting.ParseLoginProtectionUpdate(map[string]string{field: value})
+		return err
+	}
 	if key == legacyAccessTokenRetireAtKey {
 		return errLegacyRetireAtReadOnly
 	}
@@ -479,47 +485,45 @@ func normalizeStoredUserGroupRatioCacheMax(value string) string {
 	return strconv.Itoa(ratio_setting.DefaultUserGroupRatioCacheMax)
 }
 
-func UpdateOption(key string, value string) error {
+func UpdateOption(key string, value string, audit ...*AuditChanges) error {
+	for _, module := range []string{"stream_protocol_validation_setting", "claude_stream_validation_setting"} {
+		if field, ok := strings.CutPrefix(key, module+"."); ok {
+			_, err := SaveConfigGroup(module, map[string]string{field: value}, audit...)
+			return err
+		}
+	}
 	if IsRequestPolicyOption(key) {
-		return UpdateRequestPolicyOptions(map[string]string{key: value})
+		return UpdateRequestPolicyOptions(map[string]string{key: value}, audit...)
 	}
 	if IsPasskeyDomainOption(key) {
-		_, err := UpdatePasskeyDomainOptions(map[string]string{key: value}, false, "")
+		_, err := UpdatePasskeyDomainOptions(map[string]string{key: value}, false, "", audit...)
 		return err
 	}
 	if IsModelPricingOption(key) {
-		return UpdateModelPricingOptions(map[string]string{key: value})
+		return UpdateModelPricingOptions(map[string]string{key: value}, audit...)
 	}
 	if key == "GroupRetryTimes" {
-		_, err := SaveConfigGroup("group_retry_times", map[string]string{"times": value})
+		_, err := SaveConfigGroup("group_retry_times", map[string]string{"times": value}, audit...)
 		return err
 	}
 	if field, ok := strings.CutPrefix(key, "group_retry_guard_setting."); ok {
-		_, err := SaveConfigGroup("group_retry_guard_setting", map[string]string{field: value})
+		_, err := SaveConfigGroup("group_retry_guard_setting", map[string]string{field: value}, audit...)
 		return err
 	}
 	if field, ok := strings.CutPrefix(key, "performance_setting."); ok {
-		_, err := SaveConfigGroup("performance_setting", map[string]string{field: value})
+		_, err := SaveConfigGroup("performance_setting", map[string]string{field: value}, audit...)
 		return err
 	}
 	if field, ok := strings.CutPrefix(key, "group_retry_status_setting."); ok {
-		_, err := SaveConfigGroup("group_retry_status_setting", map[string]string{field: value})
+		_, err := SaveConfigGroup("group_retry_status_setting", map[string]string{field: value}, audit...)
 		return err
 	}
 	if err := validateOptionValue(key, value); err != nil {
 		return err
 	}
-	// Save to database first
-	option := Option{
-		Key: key,
+	if err := persistAuditOption(DB, key, value, optionalAudit(audit)); err != nil {
+		return err
 	}
-	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
-	option.Value = value
-	// Save is a combination function.
-	// If save value does not contain primary key, it will execute Create,
-	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
 	// Update OptionMap
 	return updateOptionMap(key, value)
 }
@@ -529,7 +533,14 @@ func UpdateOption(key string, value string) error {
 // any DB write fails the whole transaction rolls back and no in-memory state
 // is touched — safe for callers that must commit a set of related options
 // atomically (e.g. payment gateway binding).
-func UpdateOptionsBulk(values map[string]string) error {
+func UpdateOptionsBulk(values map[string]string, audit ...*AuditChanges) error {
+	_, canonical := values[streamValidationOption]
+	_, legacy := values[legacyStreamValidationOption]
+	if canonical || legacy {
+		configGroupMu.Lock()
+		defer configGroupMu.Unlock()
+		return saveStreamValidationOptions(values, audit...)
+	}
 	performance := map[string]string{}
 	for key, value := range values {
 		if field, ok := strings.CutPrefix(key, "performance_setting."); ok {
@@ -548,7 +559,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 	}
 	for key := range values {
 		if IsPasskeyDomainOption(key) {
-			_, err := UpdatePasskeyDomainOptions(values, false, "")
+			_, err := UpdatePasskeyDomainOptions(values, false, "", audit...)
 			return err
 		}
 	}
@@ -562,7 +573,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 		pricing = pricing || IsModelPricingOption(key)
 	}
 	if pricing {
-		return updateModelPricingOptionsBulk(values)
+		return updateModelPricingOptionsBulk(values, audit...)
 	}
 	var policySnapshot *RequestPolicySnapshot
 	for key := range values {
@@ -584,19 +595,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 		}
 	}
 
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		for k, v := range values {
-			option := Option{Key: k}
-			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
-				return err
-			}
-			option.Value = v
-			if err := tx.Save(&option).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	err := persistOptionsTx(values, audit...)
 	if err != nil {
 		return err
 	}
@@ -1069,6 +1068,15 @@ func handleConfigUpdate(key, value string) bool {
 
 	configName := parts[0]
 	configKey := parts[1]
+	if configName == operation_setting.LoginProtectionModule {
+		draft, err := operation_setting.ParseLoginProtectionUpdate(map[string]string{configKey: value})
+		if err != nil {
+			common.SysError("invalid stored login protection setting")
+			return true
+		}
+		operation_setting.ReplaceLoginProtectionSetting(draft)
+		return true
+	}
 
 	// 获取配置对象
 	cfg := config.GlobalConfig.Get(configName)

@@ -1,0 +1,37 @@
+package model
+
+import (
+	"context"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/QuantumNous/new-api/common"
+	"gorm.io/gorm/logger"
+)
+
+// Snapshot-only observer. It never records DML, credentials or bind values.
+type upgradeDDLLogger struct{ logger.Interface }
+
+var upgradeDDLMu sync.Mutex
+
+func (l upgradeDDLLogger) LogMode(level logger.LogLevel) logger.Interface {
+	return upgradeDDLLogger{l.Interface.LogMode(level)}
+}
+func (l upgradeDDLLogger) Trace(ctx context.Context, start time.Time, fc func() (string, int64), err error) {
+	sql, _ := fc()
+	upper := strings.ToUpper(strings.TrimSpace(sql))
+	if strings.HasPrefix(upper, "CREATE ") || strings.HasPrefix(upper, "ALTER ") || strings.HasPrefix(upper, "DROP ") || strings.HasPrefix(upper, "REINDEX ") {
+		row := map[string]any{"sql": sql, "ms": float64(time.Since(start).Microseconds()) / 1000, "failed": err != nil}
+		b, _ := common.Marshal(row)
+		upgradeDDLMu.Lock()
+		f, e := os.OpenFile(os.Getenv("LARGE_DATA_DDL"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if e == nil {
+			_, _ = f.Write(append(b, '\n'))
+			_ = f.Close()
+		}
+		upgradeDDLMu.Unlock()
+	}
+	l.Interface.Trace(ctx, start, fc, err)
+}

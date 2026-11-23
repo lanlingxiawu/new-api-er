@@ -42,6 +42,8 @@ func (w *auditResponseWriter) WriteString(s string) (int, error) {
 // 这些是未被 handler 手动埋点的写操作，由中间件兜底记录；前端依据 action 用 i18n 本地化展示。
 // 未命中的写操作回退为 action="generic"，前端展示 "METHOD route"。
 var auditRouteActions = map[string]string{
+	"DELETE /api/user/:id/access_tokens": "user.access_tokens.delete_all",
+	"DELETE /api/user/:id/tokens":        "user.api_keys.delete_all",
 	// 用户管理
 	"POST /api/user/topup/complete":                    "user.topup_complete",
 	"DELETE /api/user/:id/reset_passkey":               "user.reset_passkey",
@@ -116,6 +118,8 @@ var auditRouteActions = map[string]string{
 // 表中部分路由的 handler 已手动埋点（成功路径不会走到兜底），保留登记是为了让
 // 业务失败提前返回时的兜底记录同样带上目标用户。
 var auditRouteTargetUserParam = map[string]string{
+	"DELETE /api/user/:id/access_tokens":               "id",
+	"DELETE /api/user/:id/tokens":                      "id",
 	"DELETE /api/user/:id":                             "id",
 	"DELETE /api/user/:id/2fa":                         "id",
 	"DELETE /api/user/:id/reset_passkey":               "id",
@@ -366,6 +370,15 @@ func finishAccessTokenAudit(c *gin.Context) {
 		return
 	}
 	audit.entry.Status = audit.writer.Status()
+	if module := c.GetString("admin_token_module"); module != "" {
+		setAccessTokenAuditParam(c, "module", module)
+	}
+	if c.GetBool("admin_token_denial") {
+		setAccessTokenAuditParam(c, "failure_reason", "channel_not_accessible")
+	}
+	if ids, ok := c.Get("admin_token_channel_ids"); ok {
+		setAccessTokenAuditParam(c, "channel_ids", ids)
+	}
 	audit.entry.Success = auditResponseSuccess(audit.entry.Status, audit.writer.body.Bytes())
 	model.RecordAuditLog(c, audit.entry)
 }

@@ -148,11 +148,13 @@ func TestMain(m *testing.M) {
 
 	if err := db.AutoMigrate(
 		&model.Channel{},
+		&model.ChannelCreator{},
 		&model.Token{},
 		&model.User{},
 		&model.UserChannelExclusion{},
 		&model.UserChannelExclusionCleanup{},
 		&model.UserSession{},
+		&model.UserLoginProtection{},
 		&model.UserAccessToken{},
 		&model.AuthFlow{},
 		&model.TwoFA{},

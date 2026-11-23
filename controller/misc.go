@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -253,12 +255,18 @@ func SendEmailVerification(c *gin.Context) {
 	return
 }
 
+// passwordResetMinimumResponse keeps a missing mailbox from answering faster
+// than a mailbox that is waiting on mail delivery. The JSON body stays the same.
+const passwordResetMinimumResponse = 200 * time.Millisecond
+
 func SendPasswordResetEmail(c *gin.Context) {
+	started := time.Now()
 	email := model.NormalizeEmail(c.Query("email"))
 	if err := common.Validate.Var(email, "required,email"); err != nil {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
+	model.CaptureSecurityEvent(c, "auth.recovery_requested", email, "", true)
 	if user, err := model.GetUniqueUserByEmail(email); err == nil {
 		code := common.GenerateVerificationCode(0)
 		common.RegisterVerificationCodeWithKey(email, code, common.PasswordResetPurpose)
@@ -278,12 +286,25 @@ func SendPasswordResetEmail(c *gin.Context) {
 			i18n.Translate(lang, i18n.MsgEmailPasswordResetLink, linkParams),
 			i18n.Translate(lang, i18n.MsgEmailPasswordResetLinkFallback, linkParams),
 			i18n.Translate(lang, i18n.MsgEmailPasswordResetValidity, map[string]any{"Minutes": common.VerificationValidMinutes}))
-		err := common.SendEmail(subject, email, content)
-		if err != nil {
-			logger.LogError(c.Request.Context(), common.LogText("failed to send password reset email to %s: %s", email, err.Error()))
-		}
+		// Copy the message before returning. Delivery must not use the request
+		// context, or a disconnect cancels the send after the uniform response.
+		sendCtx := context.WithoutCancel(c.Request.Context())
+		go func() {
+			if err := common.SendEmail(subject, email, content); err != nil {
+				logger.LogError(sendCtx, common.LogText("failed to send password reset email to %s: %s", email, err.Error()))
+			}
+		}()
 	} else if err != nil && !errors.Is(err, model.ErrEmailNotFound) {
 		logger.LogWarn(c.Request.Context(), common.LogText("skip password reset email for %s: %s", email, err.Error()))
+	}
+	if wait := passwordResetMinimumResponse - time.Since(started); wait > 0 {
+		timer := time.NewTimer(wait)
+		select {
+		case <-c.Request.Context().Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -309,11 +330,19 @@ func ResetPassword(c *gin.Context) {
 		return
 	}
 	if !common.VerifyCodeWithKey(req.Email, req.Token, common.PasswordResetPurpose) {
+		model.CaptureSecurityEvent(c, "auth.recovery_rejected", req.Email, "invalid_code", false)
 		common.ApiErrorT(c, "Password reset link is invalid or has expired")
 		return
 	}
 	password := common.GenerateVerificationCode(12)
-	err = model.ResetUserPasswordByEmail(req.Email, password)
+	committed, resetErr := model.ResetUserPasswordByEmailWithIdentity(req.Email, password)
+	err = resetErr
+	if committed != nil {
+		model.CapturePasswordRecoveryOutcome(c, *committed, false)
+		if err != nil {
+			model.CapturePasswordRecoveryOutcome(c, *committed, true)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, model.ErrEmailNotFound) || errors.Is(err, model.ErrEmailAmbiguous) {
 			common.ApiErrorT(c, "Password reset link is invalid or has expired")

@@ -18,9 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
 
+import { createInstance } from 'i18next'
 import { describe, test } from 'vitest'
 
-import { getAuditTargetUser } from '../format'
+import en from '@/i18n/locales/en.json'
+import zh from '@/i18n/locales/zh.json'
+
+import { getAuditTargetUser, renderAuditContent } from '../format'
 
 describe('getAuditTargetUser', () => {
   test('reads target_user_id written by the backend', () => {
@@ -56,3 +60,27 @@ describe('getAuditTargetUser', () => {
     )
   })
 })
+
+test.each(['en', 'zh'])(
+  'marks missing audit evidence in %s without losing recorded targets or zero counts',
+  async (language) => {
+    const i18n = createInstance()
+    await i18n.init({ lng: language, resources: { en, zh } })
+    const params = { id: 42, username: 'alice' }
+    const summary = renderAuditContent(
+      { op: { action: 'user.create', params } },
+      i18n.t
+    )
+    assert.ok(summary?.includes('alice (ID: 42)'))
+    assert.ok(summary?.includes(i18n.t('Not recorded')))
+    assert.ok(!summary?.includes('{{'))
+    assert.deepEqual(params, { id: 42, username: 'alice' })
+    const batch = renderAuditContent(
+      { op: { action: 'channel.status_update_batch', params: { count: 0 } } },
+      i18n.t
+    )
+    assert.ok(batch?.includes('0'))
+    assert.ok(batch?.includes(i18n.t('Not recorded')))
+    assert.ok(!batch?.includes('{{'))
+  }
+)

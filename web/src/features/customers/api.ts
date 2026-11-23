@@ -1,4 +1,5 @@
 import { api } from '@/lib/api'
+
 import type {
   ApiResponse,
   CustomerProfile,
@@ -78,15 +79,19 @@ export async function createMyCustomer(data: {
   return res.data
 }
 
-export async function getMyCustomers(params: {
-  page?: number
-  page_size?: number
-  customer_user_id?: number
-  keyword?: string
-  status?: number
-}): Promise<PagedResponse<CustomerProfile>> {
+export async function getMyCustomers(
+  params: {
+    page?: number
+    page_size?: number
+    customer_user_id?: number
+    keyword?: string
+    status?: number
+  },
+  signal?: AbortSignal
+): Promise<PagedResponse<CustomerProfile>> {
   const res = await api.get(
-    `/api/user/employee/customers?${buildQuery(params)}`
+    `/api/user/employee/customers?${buildQuery(params)}`,
+    { signal }
   )
   return res.data
 }

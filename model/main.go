@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/url"
@@ -310,6 +311,10 @@ func is64BitIntegerType(dbType common.DatabaseType, dataType string) bool {
 	}
 }
 
+// Deployment risk DB-R03: startup includes data backfills as well as DDL.
+// A second start without DDL does not prove bounded startup time. Rehearse
+// populated user/session/identity tables and record lock/transaction duration;
+// see docs/design/database-performance-review-20261115.md.
 func migrateDB() error {
 	if err := migrateUserChannelExclusionColumn(DB); err != nil {
 		return err
@@ -335,9 +340,11 @@ func migrateDB() error {
 
 	err := DB.AutoMigrate(
 		&Channel{},
+		&ChannelCreator{},
 		&Token{},
 		&User{},
 		&UserSession{},
+		&UserLoginProtection{},
 		&AuthFlow{},
 		&ExternalIdentityClaim{},
 		&PasskeyCredential{},
@@ -421,6 +428,13 @@ func migrateDB() error {
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	// Security tables belong to the master migration, even when monitoring is
+	// disabled. Auxiliary migration failures must not prevent the relay startup.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := MigrateAuditSecurity(ctx, DB); err != nil {
+		common.SysError(common.LogText("audit security migration incomplete: %s", err.Error()))
 	}
 	return nil
 }

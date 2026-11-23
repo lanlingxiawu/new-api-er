@@ -21,6 +21,9 @@ const systemSettingsAllowedKeysContextKey = "system_settings_allowed_keys"
 
 // AllowsSystemSettingsOption enforces the field intersection for legacy grants.
 func AllowsSystemSettingsOption(c *gin.Context, key string) bool {
+	if strings.HasPrefix(key, "audit_security_setting.") && c.GetInt("role") != common.RoleRootUser {
+		return false
+	}
 	scope := c.GetString(SystemSettingsScopeContextKey)
 	if scope != "" && !settingsaccess.AllowsOption(scope, key) {
 		return false
@@ -58,6 +61,10 @@ func RequireSystemSettingsScope(action string) func(c *gin.Context) {
 		}
 
 		role := c.GetInt("role")
+		if scope == "security.audit-monitor" && role != common.RoleRootUser {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
 		if scope == "" {
 			if role == common.RoleRootUser {
 				c.Set(SystemSettingsScopeContextKey, "")

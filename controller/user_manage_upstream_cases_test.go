@@ -354,6 +354,9 @@ func TestManageUserQuotaRecordsTopupAndAudit(t *testing.T) {
 			assert.True(t, audits[0].Success)
 			params, err = common.Marshal(audits[0].Other.Op.Params)
 			require.NoError(t, err)
+			expectedParams["target_role"] = user.Role
+			expected, err = common.Marshal(expectedParams)
+			require.NoError(t, err)
 			assert.JSONEq(t, string(expected), string(params))
 			assert.Equal(t, "quota-test-request", audits[0].RequestId)
 		})

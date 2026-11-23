@@ -2115,10 +2115,17 @@ func insertRelayLogs(db *gorm.DB, logs []*Log, batchSize int) error {
 			pending = append(pending, log)
 		}
 	}
-	if len(pending) == 0 {
-		return nil
+	if len(pending) > 0 {
+		if err := db.CreateInBatches(&pending, batchSize).Error; err != nil {
+			return err
+		}
 	}
-	return db.CreateInBatches(&pending, batchSize).Error
+	for _, log := range logs {
+		if log.Type == LogTypeConsume || log.Type == LogTypeError {
+			QueueSecurityRelayIP(log.UserId, log.Ip, log.CreatedAt)
+		}
+	}
+	return nil
 }
 
 // normalizeRelayLogText runs only on background writers, before identity queries

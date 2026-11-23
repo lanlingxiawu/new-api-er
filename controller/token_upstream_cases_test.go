@@ -825,7 +825,11 @@ func verifyAPITokenAudit(t *testing.T) {
 			expectedRoute := strings.NewReplacer("$id", ":id", "$other", ":id", "999999", ":id").Replace(strings.Split(tc.path, "?")[0])
 			assert.Equal(t, "/api/token"+expectedRoute, operation.Route)
 			assert.NotEmpty(t, operation.RequestId)
-			assert.Empty(t, operation.TokenRef)
+			if tc.usePAT {
+				assert.Equal(t, model.AccessTokenFingerprint(pat), operation.TokenRef)
+			} else {
+				assert.Empty(t, operation.TokenRef)
+			}
 			assert.Nil(t, operation.Other.AdminInfo)
 			authMethod := "session"
 			if tc.usePAT {

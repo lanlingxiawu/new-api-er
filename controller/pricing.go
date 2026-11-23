@@ -79,7 +79,7 @@ func GetPricing(c *gin.Context) {
 
 func ResetModelRatio(c *gin.Context) {
 	defaultStr := ratio_setting.DefaultModelRatio2JSONString()
-	err := model.UpdateOption("ModelRatio", defaultStr)
+	err := model.UpdateOption("ModelRatio", defaultStr, model.RequestAuditChanges(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return

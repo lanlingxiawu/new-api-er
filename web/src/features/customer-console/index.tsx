@@ -33,6 +33,7 @@ import {
   // updateMyCustomerUser,
 } from '@/features/customers/api'
 import type { CustomerProfile } from '@/features/customers/types'
+import { CustomerAuditDialog } from './customer-audit-dialog'
 
 function CreateCustomerDialog({
   open,
@@ -400,8 +401,10 @@ function TransferDialog({
 
 function useMyCustomerColumns({
   onEdit,
+  onAudit,
 }: {
   onEdit: (row: CustomerProfile) => void
+  onAudit: (row: CustomerProfile) => void
 }) {
   const { t } = useTranslation()
 
@@ -471,17 +474,26 @@ function useMyCustomerColumns({
       {
         id: 'actions',
         cell: ({ row }) => (
-          <Button
-            size='icon'
-            variant='ghost'
-            onClick={() => onEdit(row.original)}
-          >
-            <Pencil />
-          </Button>
+          <div className='flex items-center gap-2'>
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => onAudit(row.original)}
+            >
+              {t('Audit and risk')}
+            </Button>
+            <Button
+              size='icon'
+              variant='ghost'
+              onClick={() => onEdit(row.original)}
+            >
+              <Pencil />
+            </Button>
+          </div>
         ),
       },
     ],
-    [onEdit, t]
+    [onEdit, onAudit, t]
   )
 }
 
@@ -490,6 +502,7 @@ function MyCustomersTab() {
   const qc = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [editRow, setEditRow] = useState<CustomerProfile | undefined>()
+  const [auditRow, setAuditRow] = useState<CustomerProfile>()
   const [filterForm, setFilterForm] = useState({
     keyword: '',
   })
@@ -500,7 +513,10 @@ function MyCustomersTab() {
     pageIndex: 0,
     pageSize: 10,
   })
-  const columns = useMyCustomerColumns({ onEdit: setEditRow })
+  const columns = useMyCustomerColumns({
+    onEdit: setEditRow,
+    onAudit: setAuditRow,
+  })
   // Employee quota adjustment is temporarily disabled.
   // const [transferRow, setTransferRow] = useState<CustomerProfile | undefined>()
 
@@ -599,6 +615,12 @@ function MyCustomersTab() {
         onOpenChange={(open) => !open && setEditRow(undefined)}
         onSuccess={refresh}
       />
+      {auditRow && (
+        <CustomerAuditDialog
+          customer={auditRow}
+          onClose={() => setAuditRow(undefined)}
+        />
+      )}
     </>
   )
 }
@@ -646,7 +668,6 @@ function MyRechargeLogsTab() {
   )
 }
 */
-
 
 export function CustomerConsole() {
   const { t } = useTranslation()

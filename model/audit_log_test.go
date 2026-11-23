@@ -14,6 +14,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	gormlogger "gorm.io/gorm/logger"
 	"gorm.io/gorm/schema"
 )
 
@@ -133,6 +134,31 @@ ORDER BY index_column.ordinal_position
 					assert.EqualValues(t, 3, total)
 					require.Len(t, logs, 1)
 					assert.Equal(t, "event-older", logs[0].EventId)
+					if !upgrade {
+						assert.Error(t, db.Create(&AuditLog{EventId: "event-a"}).Error, "event IDs must remain unique")
+						return
+					}
+					// Intermediate releases created these names with incomplete keys.
+					legacy := map[string]string{
+						"idx_audit_actor_time": "actor_role", "idx_audit_route_time": "actor_role",
+						"idx_audit_user_route": "actor_role", "idx_audit_employee_time": "actor_role, actor_is_employee",
+					}
+					for name, columns := range legacy {
+						require.NoError(t, db.Migrator().DropIndex(&AuditLog{}, name))
+						require.NoError(t, db.Exec("CREATE INDEX ? ON ? ("+columns+")", clause.Column{Name: name}, clause.Table{Name: "audit_sort_test_audit_logs"}).Error)
+					}
+					require.NoError(t, MigrateAuditLogs())
+					repaired, err := db.Migrator().GetIndexes(&AuditLog{})
+					require.NoError(t, err)
+					for _, index := range repaired {
+						if _, ok := legacy[index.Name()]; ok {
+							require.Contains(t, index.Columns(), "created_at", index.Name())
+						}
+					}
+					migrationLog := &creatorMigrationLog{Interface: gormlogger.Default}
+					LOG_DB = db.Session(&gorm.Session{Logger: migrationLog})
+					require.NoError(t, MigrateAuditLogs())
+					require.Empty(t, migrationLog.ddl, "correct indexes must not be rebuilt on restart")
 					assert.Error(t, db.Create(&AuditLog{EventId: "event-a"}).Error, "event IDs must remain unique")
 				})
 			}

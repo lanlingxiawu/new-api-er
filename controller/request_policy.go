@@ -35,7 +35,7 @@ func UpdateRequestPolicy(c *gin.Context) {
 			return
 		}
 	}
-	if err := model.UpdateRequestPolicyOptions(request.Options); err != nil {
+	if err := model.UpdateRequestPolicyOptions(request.Options, model.RequestAuditChanges(c)); err != nil {
 		logger.LogError(c, "failed to update request policy: "+err.Error())
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return

@@ -386,7 +386,11 @@ func GetAuditLogs(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	page.SetItems(logs)
+	if filter.SelfView {
+		page.SetItems(model.ProjectAuditActivities(logs))
+	} else {
+		page.SetItems(logs)
+	}
 	page.SetTotal(int(total))
 	common.ApiSuccess(c, page)
 }

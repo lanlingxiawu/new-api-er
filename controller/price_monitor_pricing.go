@@ -400,7 +400,7 @@ func applyPriceMonitorDrafts(c *gin.Context, request priceMonitorApplyPriceReque
 			return errPriceMonitorDraftChanged
 		}
 		return nil
-	})
+	}, model.RequestAuditChanges(c))
 	if err != nil {
 		logger.LogWarn(c, "price monitor draft save failed: "+err.Error())
 		if errors.Is(err, model.ErrModelPricingConflict) || errors.Is(err, errPriceMonitorDraftChanged) {

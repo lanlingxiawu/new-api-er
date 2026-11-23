@@ -2,13 +2,20 @@ package model
 
 import (
 	"context"
+	"fmt"
+	"net/url"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 // audit_logs 此前没有任何保留策略：每个带鉴权的后台请求都会写一行，
@@ -98,4 +105,87 @@ func TestAuditLogCleanup_TargetTimestampFollowsRetention(t *testing.T) {
 	target = AuditLogCleanupTargetTimestamp()
 	expected := common.GetTimestamp() - int64(operation_setting.MinAuditLogRetentionDays)*24*60*60
 	assert.InDelta(t, float64(expected), float64(target), 5)
+}
+
+func TestAuditRetentionMigrationClickHouse(t *testing.T) {
+	dsn := os.Getenv("AUDIT_TEST_CH_DSN")
+	if dsn == "" {
+		t.Skip("isolated ClickHouse required")
+	}
+	require.Contains(t, dsn, "/audit_test")
+	t.Setenv("LOG_SQL_DSN", dsn)
+	admin, err := OpenAuditSecurityDB(t.Context(), true)
+	require.NoError(t, err)
+	pool, err := admin.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pool.Close()) })
+	originalDays := operation_setting.GetAuditLogSetting().RetentionDays
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.UpdateFromMap("audit_log_setting", map[string]string{"retention_days": fmt.Sprint(originalDays)}))
+	})
+	for _, upgrade := range []bool{false, true} {
+		t.Run(fmt.Sprint("upgrade=", upgrade), func(t *testing.T) {
+			database := "audit_test_retention_" + fmt.Sprint(time.Now().UnixNano())
+			require.NoError(t, admin.Exec("CREATE DATABASE "+database).Error)
+			t.Cleanup(func() { require.NoError(t, admin.Exec("DROP DATABASE "+database).Error) })
+			u, err := url.Parse(dsn)
+			require.NoError(t, err)
+			u.Path = "/" + database
+			t.Setenv("LOG_SQL_DSN", u.String())
+			db, err := OpenAuditSecurityDB(t.Context(), true)
+			require.NoError(t, err)
+			p, err := db.DB()
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, p.Close()) })
+			oldDB, oldKind := LOG_DB, common.LogDatabaseType()
+			LOG_DB = db
+			common.SetLogDatabaseType(common.DatabaseTypeClickHouse)
+			t.Cleanup(func() { LOG_DB = oldDB; common.SetLogDatabaseType(oldKind) })
+			require.NoError(t, config.GlobalConfig.UpdateFromMap("audit_log_setting", map[string]string{"retention_days": "0"}))
+			if upgrade {
+				require.NoError(t, db.Exec(`CREATE TABLE audit_logs (
+					id Int64 DEFAULT 0, event_id String, user_id Int64, username String, actor_role Int32,
+					created_at Int64, category String, action String, token_ref String,
+					auth_method String, ip String, user_agent String, method String, route String,
+					status Int32, success UInt8, request_id String, content String, other JSON
+				) ENGINE = MergeTree() PARTITION BY toYYYYMM(toDateTime(created_at))
+				ORDER BY (created_at, event_id) TTL toDateTime(created_at) + INTERVAL 180 DAY`).Error)
+				require.NoError(t, db.Exec("SYSTEM STOP MERGES audit_logs").Error)
+			}
+			now := common.GetTimestamp()
+			if upgrade {
+				require.NoError(t, db.Exec("INSERT INTO audit_logs (event_id, created_at) VALUES ('legacy', ?)", now-181*86400).Error)
+			}
+			require.NoError(t, MigrateAuditLogs())
+			var ddl string
+			require.NoError(t, db.Raw("SHOW CREATE TABLE audit_logs").Scan(&ddl).Error)
+			require.NotContains(t, ddl, "TTL ", "native TTL must not override configured retention")
+			rec := &creatorMigrationLog{Interface: gormlogger.Default}
+			LOG_DB = db.Session(&gorm.Session{Logger: rec})
+			require.NoError(t, MigrateAuditLogs())
+			require.Empty(t, rec.ddl, "second initialization must issue no DDL")
+			LOG_DB = db
+			require.NoError(t, db.Exec("INSERT INTO audit_logs (event_id, created_at) VALUES ('old', ?), ('recent', ?)", now-181*86400, now).Error)
+			require.NoError(t, db.Exec("SYSTEM START MERGES audit_logs").Error)
+			require.NoError(t, db.Exec("OPTIMIZE TABLE audit_logs FINAL").Error)
+			var count int64
+			require.NoError(t, db.Raw("SELECT count() FROM audit_logs").Scan(&count).Error)
+			want := int64(2)
+			if upgrade {
+				want++
+			}
+			require.Equal(t, want, count)
+			require.Zero(t, AuditLogCleanupTargetTimestamp())
+			require.NoError(t, config.GlobalConfig.UpdateFromMap("audit_log_setting", map[string]string{"retention_days": "365"}))
+			old, err := CountOldAuditLog(context.Background(), AuditLogCleanupTargetTimestamp())
+			require.NoError(t, err)
+			require.Zero(t, old)
+			require.NoError(t, config.GlobalConfig.UpdateFromMap("audit_log_setting", map[string]string{"retention_days": "30"}))
+			removed, err := DeleteOldAuditLogBatch(context.Background(), AuditLogCleanupTargetTimestamp(), 100)
+			require.NoError(t, err)
+			require.Equal(t, want-1, removed)
+			require.NoError(t, db.Raw("SELECT count() FROM audit_logs WHERE event_id = 'recent'").Scan(&count).Error)
+			require.EqualValues(t, 1, count)
+		})
+	}
 }

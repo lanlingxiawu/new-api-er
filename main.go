@@ -30,6 +30,7 @@ import (
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/auditsecurity"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
@@ -65,6 +66,16 @@ func main() {
 	common.SysLog("NEXAXIS API " + common.Version + " started")
 	stopRetryGuard := retryguard.Start()
 	defer stopRetryGuard()
+	if err := model.InitAuditReadPools(context.Background()); err != nil {
+		common.SysError("audit query initialization incomplete")
+	}
+	defer model.CloseAuditReadPools()
+	if err := model.InitAuditExportPools(context.Background()); err != nil {
+		common.SysError("audit export initialization incomplete")
+	}
+	defer model.CloseAuditExportPools()
+	stopAuditSecurity := auditsecurity.Start()
+	defer stopAuditSecurity()
 	if os.Getenv("GIN_MODE") != "debug" {
 		gin.SetMode(gin.ReleaseMode)
 	}

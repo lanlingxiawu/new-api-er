@@ -621,11 +621,11 @@ func validateModelPricing(name string, values, previous PricingValues) error {
 	return nil
 }
 
-func UpdateModelPricing(changes []ModelPricingChange) error {
-	return UpdateModelPricingWithGuard(changes, nil)
+func UpdateModelPricing(changes []ModelPricingChange, audit ...*AuditChanges) error {
+	return UpdateModelPricingWithGuard(changes, nil, audit...)
 }
 
-func UpdateModelPricingWithGuard(changes []ModelPricingChange, guard func([]ModelPricingEntry, []ModelPricingChange) error) error {
+func UpdateModelPricingWithGuard(changes []ModelPricingChange, guard func([]ModelPricingEntry, []ModelPricingChange) error, audit ...*AuditChanges) error {
 	if len(changes) == 0 || len(changes) > 100 {
 		return errors.New("invalid pricing change count")
 	}
@@ -671,12 +671,12 @@ func UpdateModelPricingWithGuard(changes []ModelPricingChange, guard func([]Mode
 			replaceModelPricing(values, change.ModelName, change.Pricing)
 		}
 		return nil
-	})
+	}, audit...)
 }
 
 // UpdateModelPricingOptions keeps legacy single-option callers on the same
 // locking, validation and transaction path as the model-level API.
-func UpdateModelPricingOptions(updates map[string]string) error {
+func UpdateModelPricingOptions(updates map[string]string, audit ...*AuditChanges) error {
 	return mutateModelPricingOptions(func(_ *gorm.DB, values map[string]map[string]any) error {
 		previous := maps.Clone(values)
 		names := make(map[string]bool)
@@ -711,13 +711,14 @@ func UpdateModelPricingOptions(updates map[string]string) error {
 			}
 		}
 		return nil
-	})
+	}, audit...)
 }
 
-func mutateModelPricingOptions(mutate func(*gorm.DB, map[string]map[string]any) error) error {
+func mutateModelPricingOptions(mutate func(*gorm.DB, map[string]map[string]any) error, audit ...*AuditChanges) error {
 	modelPricingMutationMu.Lock()
 	defer modelPricingMutationMu.Unlock()
 	var committed map[string]map[string]any
+	auditBefore := map[string]string{}
 	version := ""
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		// Fork: every whole-block pricing write must advance PricingConfigVersion so the
@@ -747,6 +748,14 @@ func mutateModelPricingOptions(mutate func(*gorm.DB, map[string]map[string]any) 
 			row := Option{Key: key, Value: string(encoded)}
 			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
 				return err
+			}
+		}
+		if optionalAudit(audit) != nil {
+			for key, entries := range values {
+				if existing[key] {
+					data, _ := common.Marshal(entries)
+					auditBefore[key] = string(data)
+				}
 			}
 		}
 		if err := mutate(tx, values); err != nil {
@@ -784,6 +793,7 @@ func mutateModelPricingOptions(mutate func(*gorm.DB, map[string]map[string]any) 
 		}
 		written[key] = string(encoded)
 	}
+	optionalAudit(audit).OptionValues(auditBefore, written, true)
 	if err := publishModelPricingOptions(written); err != nil {
 		return err
 	}
@@ -826,8 +836,8 @@ func persistModelPricingValues(tx *gorm.DB, values map[string]string) error {
 	return nil
 }
 
-func updateModelPricingOptionsBulk(updates map[string]string) error {
-	return updateModelPricingOptionMaps(updates, nil)
+func updateModelPricingOptionsBulk(updates map[string]string, audit ...*AuditChanges) error {
+	return updateModelPricingOptionMaps(updates, nil, audit...)
 }
 
 func validateCompletionPricingChange(name string, previous, draft PricingValues) error {
@@ -850,7 +860,7 @@ func validateCompletionPricingChange(name string, previous, draft PricingValues)
 	return nil
 }
 
-func UpdateModelPricingOptionMaps(updates, expected map[string]string) error {
+func UpdateModelPricingOptionMaps(updates, expected map[string]string, audit ...*AuditChanges) error {
 	if len(updates) == 0 || len(updates) != len(expected) {
 		return errors.New("expected pricing maps are required")
 	}
@@ -862,12 +872,13 @@ func UpdateModelPricingOptionMaps(updates, expected map[string]string) error {
 			return errors.New("missing expected pricing map")
 		}
 	}
-	return updateModelPricingOptionMaps(updates, expected)
+	return updateModelPricingOptionMaps(updates, expected, audit...)
 }
 
-func updateModelPricingOptionMaps(updates, expected map[string]string) error {
+func updateModelPricingOptionMaps(updates, expected map[string]string, audit ...*AuditChanges) error {
 	modelPricingMutationMu.Lock()
 	defer modelPricingMutationMu.Unlock()
+	auditBefore := map[string]string{}
 	written := make(map[string]string, len(updates)+1)
 	for key, value := range updates {
 		written[key] = value
@@ -877,9 +888,17 @@ func updateModelPricingOptionMaps(updates, expected map[string]string) error {
 		if err != nil {
 			return err
 		}
-		values, _, _, err := readModelPricingMaps(lockedPricingTx(tx))
+		values, existing, _, err := readModelPricingMaps(lockedPricingTx(tx))
 		if err != nil {
 			return err
+		}
+		if optionalAudit(audit) != nil {
+			for key := range updates {
+				if entries, ok := values[key]; ok && existing[key] {
+					data, _ := common.Marshal(entries)
+					auditBefore[key] = string(data)
+				}
+			}
 		}
 		for key, raw := range expected {
 			var prior map[string]any
@@ -949,6 +968,7 @@ func updateModelPricingOptionMaps(updates, expected map[string]string) error {
 	if err != nil {
 		return err
 	}
+	optionalAudit(audit).OptionValues(auditBefore, written, true)
 	if err := publishModelPricingOptions(written); err != nil {
 		return err
 	}

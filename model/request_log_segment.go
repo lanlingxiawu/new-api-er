@@ -207,6 +207,9 @@ func (w *RequestLogWriter) Record(logs []*RequestLog) {
 			continue
 		}
 		appendRequestLogIndexBatch(entries)
+		for _, entry := range entries {
+			QueueSecurityRelayIP(entry.meta.UserId, entry.meta.Ip, entry.meta.CreatedAt)
+		}
 	}
 	// 个别超大批次过后不长期占着大缓冲。
 	if cap(w.buf) > 4*requestLogFlushBytes {

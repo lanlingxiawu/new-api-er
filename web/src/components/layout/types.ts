@@ -19,12 +19,15 @@ For commercial licensing, please contact support@quantumnous.com
 import type { LinkProps } from '@tanstack/react-router'
 import type { TFunction } from 'i18next'
 
+import type { AuditSearch } from '@/lib/audit-navigation'
+
 /**
  * Base navigation item type
  */
 type BaseNavItem = {
   title: string
   badge?: string
+  badgeLabel?: string
   icon?: React.ElementType
   activeUrls?: (LinkProps['to'] | (string & {}))[]
   configUrls?: (LinkProps['to'] | (string & {}))[]
@@ -41,6 +44,8 @@ type BaseNavItem = {
  */
 export type NavLink = BaseNavItem & {
   url: LinkProps['to'] | (string & {})
+  search?: AuditSearch
+  onNavigate?: () => void
   items?: never
   type?: never
 }
@@ -115,6 +120,12 @@ export type SidebarViewParent = {
 export type SidebarBadges = {
   /** Task models whose price needs attention, on the entries leading to model pricing */
   modelPricing?: string
+  auditPending?: {
+    value: string
+    label: string
+    search: AuditSearch
+    onNavigate: () => void
+  }
 }
 
 /**

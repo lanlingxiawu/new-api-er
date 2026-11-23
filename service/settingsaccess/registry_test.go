@@ -13,6 +13,7 @@ var nonSystemSettingsScopes = []string{
 	ScopeChannelProfitPreview,
 	ScopeVeridropDetection,
 	ScopeCommissionTierReset,
+	ScopeAuditSecurityMonitor,
 }
 
 func TestRegistryCoversEverySystemSettingsScope(t *testing.T) {
@@ -29,6 +30,9 @@ func TestRegistryCoversEverySystemSettingsScope(t *testing.T) {
 }
 
 func TestOptionKeyAllowlist(t *testing.T) {
+	assert.True(t, AllowsOption("request-policies.filtering", "claude_stream_validation_setting.enabled"))
+	assert.True(t, AllowsGroup("request-policies.filtering", "claude_stream_validation_setting", map[string]string{"enabled": "false"}))
+	assert.False(t, AllowsGroup("request-policies.routing", "claude_stream_validation_setting", map[string]string{"enabled": "false"}))
 	assert.True(t, AllowsOption("operations.performance", "performance_setting.body_governance_enabled"))
 	assert.True(t, AllowsOption("operations.performance", "performance_setting.body_memory_budget_mb"))
 	assert.True(t, AllowsOption("site.notice", "Notice"))
@@ -42,8 +46,9 @@ func TestOptionKeyAllowlist(t *testing.T) {
 
 func TestSettingsFormOptionScopes(t *testing.T) {
 	for scope, optionKeys := range map[string][]string{
-		"operations.logs": {"log_setting.user_export_enabled", "log_setting.max_range_days"},
-		"billing.quota":   {"quota_setting.trust_quota_usd", "quota_setting.pre_consume_multiplier"},
+		"system-tuning.log-export": {"log_export_setting.admin_cooldown_sec", "log_export_setting.user_cooldown_sec"},
+		"operations.logs":          {"log_setting.user_export_enabled", "log_setting.max_range_days"},
+		"billing.quota":            {"quota_setting.trust_quota_usd", "quota_setting.pre_consume_multiplier"},
 	} {
 		for _, key := range optionKeys {
 			t.Run(key, func(t *testing.T) {

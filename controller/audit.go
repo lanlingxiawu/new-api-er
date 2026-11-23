@@ -22,36 +22,38 @@ import (
 // 用户——这是审计的核心信息，不能缺席。历史日志的 Content 已入库不再重渲染，
 // 因此这里的改动只影响新写入的记录。
 var auditContentTemplates = map[string]string{
-	"user.create":               "Created user ${target_username} (ID: ${target_user_id}, role ${role})",
-	"user.update":               "Updated user ${target_username} (ID: ${target_user_id})",
-	"user.delete":               "Deleted user ${target_username} (ID: ${target_user_id})",
-	"user.account_delete":       "Account deletion",
-	"user.manage":               "Performed ${action} on user ${target_username} (ID: ${target_user_id})",
-	"user.quota_add":            "Increased quota of user ${target_username} (ID: ${target_user_id}) by ${quota}",
-	"user.quota_subtract":       "Decreased quota of user ${target_username} (ID: ${target_user_id}) by ${quota}",
-	"user.quota_override":       "Overrode quota of user ${target_username} (ID: ${target_user_id}) from ${from} to ${to}",
-	"user.binding_clear":        "Cleared ${bindingType} binding for user ${target_username} (ID: ${target_user_id})",
-	"user.2fa_disable":          "Force-disabled two-factor authentication for user ${target_username} (ID: ${target_user_id})",
-	"user.passkey_register":     "Registered a passkey",
-	"access_token.generate":     "Generated an access token",
-	"access_token.revoke":       "Revoked an access token",
-	"access_token.rename":       "Renamed an access token",
-	"access_token.update":       "Changed access token permissions",
-	"user.2fa_setup":            "Started two-factor authentication setup",
-	"user.2fa_enable":           "Enabled two-factor authentication",
-	"user.2fa_disable_self":     "Disabled two-factor authentication",
-	"user.2fa_backup_codes":     "Regenerated two-factor backup codes",
-	"user.security_verify":      "Completed security verification",
-	"user.password_change":      "Account password change",
-	"user.binding_start":        "Account binding request",
-	"user.binding_bind":         "Account binding",
-	"user.binding_unbind":       "Account unlinking",
-	"user.email_binding_resend": "Email confirmation code resend",
-	"user.passkey_delete":       "Deleted a passkey",
-	"user.reset_passkey":        "Reset the passkey of user ${target_username} (ID: ${target_user_id})",
-	"user.oauth_unbind":         "Removed an OAuth binding for user ${target_username} (ID: ${target_user_id})",
-	"user.topup_complete":       "Completed top-up order ${trade_no} for user ${target_username} (ID: ${target_user_id})",
-	"option.update":             "Updated system setting ${key}",
+	"user.create":                   "Created user ${target_username} (ID: ${target_user_id}, role ${role})",
+	"user.update":                   "Updated user ${target_username} (ID: ${target_user_id})",
+	"user.delete":                   "Deleted user ${target_username} (ID: ${target_user_id})",
+	"user.access_tokens.delete_all": "Cleared access tokens of user ${target_username} (ID: ${target_user_id}, revoked: ${revoked_count})",
+	"user.api_keys.delete_all":      "Cleared API keys of user ${target_username} (ID: ${target_user_id}, deleted: ${deleted_count}, completed: ${completed})",
+	"user.account_delete":           "Account deletion",
+	"user.manage":                   "Performed ${action} on user ${target_username} (ID: ${target_user_id})",
+	"user.quota_add":                "Increased quota of user ${target_username} (ID: ${target_user_id}) by ${quota}",
+	"user.quota_subtract":           "Decreased quota of user ${target_username} (ID: ${target_user_id}) by ${quota}",
+	"user.quota_override":           "Overrode quota of user ${target_username} (ID: ${target_user_id}) from ${from} to ${to}",
+	"user.binding_clear":            "Cleared ${bindingType} binding for user ${target_username} (ID: ${target_user_id})",
+	"user.2fa_disable":              "Force-disabled two-factor authentication for user ${target_username} (ID: ${target_user_id})",
+	"user.passkey_register":         "Registered a passkey",
+	"access_token.generate":         "Generated an access token",
+	"access_token.revoke":           "Revoked an access token",
+	"access_token.rename":           "Renamed an access token",
+	"access_token.update":           "Changed access token permissions",
+	"user.2fa_setup":                "Started two-factor authentication setup",
+	"user.2fa_enable":               "Enabled two-factor authentication",
+	"user.2fa_disable_self":         "Disabled two-factor authentication",
+	"user.2fa_backup_codes":         "Regenerated two-factor backup codes",
+	"user.security_verify":          "Completed security verification",
+	"user.password_change":          "Account password change",
+	"user.binding_start":            "Account binding request",
+	"user.binding_bind":             "Account binding",
+	"user.binding_unbind":           "Account unlinking",
+	"user.email_binding_resend":     "Email confirmation code resend",
+	"user.passkey_delete":           "Deleted a passkey",
+	"user.reset_passkey":            "Reset the passkey of user ${target_username} (ID: ${target_user_id})",
+	"user.oauth_unbind":             "Removed an OAuth binding for user ${target_username} (ID: ${target_user_id})",
+	"user.topup_complete":           "Completed top-up order ${trade_no} for user ${target_username} (ID: ${target_user_id})",
+	"option.update":                 "Updated system setting ${key}",
 
 	"option.passkey_domains":           "Updated Passkey domains: removed ${domains}; affected ${known}; unknown ${unknown}",
 	"option.passkey_domains_confirmed": "Confirmed removal of Passkey domains: ${domains}; affected ${known}; unknown ${unknown}",
@@ -160,6 +162,11 @@ func recordManageAudit(c *gin.Context, action string, params map[string]any) {
 	if params == nil {
 		params = map[string]any{}
 	}
+	if method := c.GetString("admin_token_verification_method"); method != "" {
+		if _, exists := params["verification_method"]; !exists {
+			params["verification_method"] = method
+		}
+	}
 	writeManageAudit(c, action, params)
 }
 
@@ -208,7 +215,11 @@ func fillAuditTargetUser(params map[string]any, targetUserId int, targetUsername
 
 func writeManageAudit(c *gin.Context, action string, params map[string]any) {
 	operatorUserId := c.GetInt("id")
-	model.RecordOperationAuditLog(operatorUserId, c.GetInt("role"), auditContentEN(action, params), c.ClientIP(), action, params, auditOperatorInfo(c), nil, c)
+	var result *model.AuditRequestInfo
+	if success, ok := params["success"].(bool); ok {
+		result = &model.AuditRequestInfo{Method: c.Request.Method, Route: c.FullPath(), Path: c.FullPath(), Status: c.Writer.Status(), Success: success}
+	}
+	model.RecordOperationAuditLog(operatorUserId, c.GetInt("role"), auditContentEN(action, params), c.ClientIP(), action, params, auditOperatorInfo(c), result, c)
 	markAuditLogged(c)
 }
 

@@ -114,6 +114,9 @@ func GetOptions(c *gin.Context) {
 	optionValues := make(map[string]string)
 	common.OptionMapRWMutex.RLock()
 	for k, v := range common.OptionMap {
+		if strings.HasPrefix(k, "audit_security_setting.") && c.GetInt("role") != common.RoleRootUser {
+			continue
+		}
 		if k == "theme.frontend" || k == "billing_setting.billing_mode" || k == "billing_setting.billing_expr" || k == "ResendKeyConfigured" {
 			continue
 		}
@@ -123,6 +126,9 @@ func GetOptions(c *gin.Context) {
 			}
 		}
 		value := common.Interface2String(v)
+		if k == "audit_security_setting.ip_intelligence_providers_json" {
+			value = operation_setting.SanitizedIPIntelligenceProvidersJSON(value)
+		}
 		isSensitiveKey := strings.HasSuffix(k, "Token") ||
 			strings.HasSuffix(k, "Secret") ||
 			strings.HasSuffix(k, "Key") ||
@@ -225,6 +231,23 @@ func UpdateOptionGroup(c *gin.Context) {
 		return
 	}
 	request.Scope = scope
+	if request.Module == operation_setting.AuditSecurityModule {
+		if _, ok := middleware.GetSessionAuthIdentity(c); !ok || c.GetInt("role") != common.RoleRootUser {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+		if _, err := operation_setting.ParseAuditSecurityUpdate(request.Values); err != nil {
+			if errors.Is(err, operation_setting.ErrSecurityAbuseLookupRequired) {
+				common.ApiErrorI18n(c, "audit_security.abuse_lookup_required")
+				return
+			}
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		if requireAdminUserProof(c, service.VerificationScopeAuditSecuritySettings, map[string]any{"values": request.Values}) == nil {
+			return
+		}
+	}
 	if request.Module == "data_cleanup_setting" && c.GetInt("role") != common.RoleRootUser {
 		c.AbortWithStatus(http.StatusForbidden)
 		return
@@ -267,12 +290,16 @@ func UpdateOptionGroup(c *gin.Context) {
 	var applied bool
 	var err error
 	if request.GroupRetryTimes != nil {
-		applied, err = model.SaveGroupRetryPolicy(*request.GroupRetryTimes, request.Values)
+		applied, err = model.SaveGroupRetryPolicy(*request.GroupRetryTimes, request.Values, model.RequestAuditChanges(c))
 	} else {
-		applied, err = model.SaveConfigGroup(request.Module, request.Values)
+		applied, err = model.SaveConfigGroup(request.Module, request.Values, model.RequestAuditChanges(c))
 	}
 	if err != nil {
 		logger.LogError(c, "failed to update configuration group: "+err.Error())
+		if errors.Is(err, model.ErrLegacyStreamValidationConflict) {
+			common.ApiErrorI18n(c, i18n.MsgStreamValidationLegacyConflict)
+			return
+		}
 		if errors.Is(err, model.ErrGroupRetryTimesInvalid) {
 			common.ApiErrorI18n(c, i18n.MsgSettingGroupRetryTimesInvalid)
 			return
@@ -318,7 +345,7 @@ func UpdatePasskeyDomains(c *gin.Context) {
 	}
 	change, err := model.UpdatePasskeyDomainOptions(map[string]string{
 		"passkey.rp_id": *request.RPID, "passkey.legacy_rp_ids": *request.LegacyRPIDs, "passkey.origins": *request.Origins,
-	}, request.Preview, request.RemovalConfirmation)
+	}, request.Preview, request.RemovalConfirmation, model.RequestAuditChanges(c))
 	if err != nil {
 		writePasskeyDomainSettingsError(c, err)
 		if !request.Preview {
@@ -361,6 +388,10 @@ func UpdateOption(c *gin.Context) {
 		return
 	}
 	option.Scope = scope
+	if strings.HasPrefix(option.Key, operation_setting.AuditSecurityModule+".") {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
 	if option.Scope != "" && !middleware.AllowsSystemSettingsOption(c, option.Key) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -393,6 +424,14 @@ func UpdateOption(c *gin.Context) {
 		option.Value = value
 	}
 	switch option.Key {
+	case "log_export_setting.admin_cooldown_sec":
+		cooldown, err := strconv.Atoi(strings.TrimSpace(option.Value.(string)))
+		if err != nil || cooldown < -1 || cooldown > operation_setting.MaxLogExportUserCooldownSec {
+			logger.LogWarn(c, "invalid administrator log export cooldown")
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		option.Value = strconv.Itoa(cooldown)
 	case "commission_tier_reset_setting.last_reset_at":
 		common.ApiErrorMsg(c, "last_reset_at is maintained by the reset task and cannot be modified manually")
 		return
@@ -735,7 +774,7 @@ func UpdateOption(c *gin.Context) {
 		}
 	}
 	if model.IsPasskeyDomainOption(option.Key) {
-		change, updateErr := model.UpdatePasskeyDomainOptions(map[string]string{option.Key: option.Value.(string)}, false, "")
+		change, updateErr := model.UpdatePasskeyDomainOptions(map[string]string{option.Key: option.Value.(string)}, false, "", model.RequestAuditChanges(c))
 		if updateErr != nil {
 			writePasskeyDomainSettingsError(c, updateErr)
 			recordPasskeyDomainAudit(c, change, false, updateErr)
@@ -755,17 +794,22 @@ func UpdateOption(c *gin.Context) {
 	}
 	if strings.HasPrefix(option.Key, "infini_setting.") {
 		// Publish credentials only after the existing transactional save commits.
-		err = model.UpdateOptionsBulk(map[string]string{option.Key: option.Value.(string)})
-	} else if parts := strings.SplitN(option.Key, ".", 2); len(parts) == 2 && (parts[0] == "performance_setting" || parts[0] == "probe_routing_setting" || parts[0] == "rate_limit_setting" || parts[0] == "db_pool_setting" || parts[0] == "user_session_setting" || parts[0] == "relay_timeout_setting" || parts[0] == "veridrop_monitor_setting" || parts[0] == "channel_daily_limit_setting") {
-		_, err = model.SaveConfigGroup(parts[0], map[string]string{parts[1]: option.Value.(string)})
+		err = model.UpdateOptionsBulk(map[string]string{option.Key: option.Value.(string)}, model.RequestAuditChanges(c))
+	} else if parts := strings.SplitN(option.Key, ".", 2); len(parts) == 2 && (parts[0] == "performance_setting" || parts[0] == "probe_routing_setting" || parts[0] == "rate_limit_setting" || parts[0] == "db_pool_setting" || parts[0] == "user_session_setting" || parts[0] == operation_setting.LoginProtectionModule || parts[0] == "relay_timeout_setting" || parts[0] == "veridrop_monitor_setting" || parts[0] == "channel_daily_limit_setting") {
+		_, err = model.SaveConfigGroup(parts[0], map[string]string{parts[1]: option.Value.(string)}, model.RequestAuditChanges(c))
 	} else {
-		err = model.UpdateOption(option.Key, option.Value.(string))
+		err = model.UpdateOption(option.Key, option.Value.(string), model.RequestAuditChanges(c))
 	}
 	if err != nil {
 		if strings.HasPrefix(option.Key, "infini_setting.") {
 			// Driver errors can contain rejected values; SQL logging owns their details.
 			logger.LogError(c, fmt.Sprintf("failed to persist Infini v2 credential (database error type=%T)", err))
 			common.ApiErrorI18n(c, i18n.MsgDatabaseError)
+			return
+		}
+		if errors.Is(err, model.ErrLegacyStreamValidationConflict) {
+			logger.LogWarn(c, "legacy stream validation write rejected")
+			common.ApiErrorI18n(c, i18n.MsgStreamValidationLegacyConflict)
 			return
 		}
 		if errors.Is(err, system_setting.ErrPasskeyRPIDInvalid) {

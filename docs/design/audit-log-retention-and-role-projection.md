@@ -51,16 +51,24 @@
 
 ## 2. 员工视角日志的角色投影
 
-`/api/log/employee` 只需要 `RoleCommonUser`。此前 `GetEmployeeCustomerLogs`
-只调用 `fillLogChannelNames`，完全没有做 `other` 投影，于是员工能拿到完整的
-`admin_info`（渠道 key 指纹、`use_channel` 重试链、`reject_reason`、
-`conversion_diagnostics`、`quota_saturation`）以及 `root_info`、`audit_info`。
+2026-11-13 按当前代码校正：`/api/log/employee` 使用用户认证，controller 额外
+验证 `model.IsEmployee`，model 限定为员工本人及其客户的日志。返回前使用
+`model.formatEmployeeLogs`：保留真实日志 ID 和渠道编号，清空渠道名称列，移除
+顶层 `channel_name`、`root_info`、`audit_info`，以及 `admin_info.channel_name`
+和平台承担的超时成本 `admin_info.timeout_absorbed`。其余 `admin_info` 保留，
+包括 `request_policy`；员工错误正文不作普通用户视角的脱敏。
 
-修复用 `model.formatNonAdminLogOther`：只做 `other` 的普通用户可见性投影，
-**不动 `ChannelName` 与 `Id`**。不能直接复用 `formatUserLogs`——它会清空
-`ChannelName` 并把 `Id` 改写成页内序号，而员工页面按渠道名展示、按真实日志 id 定位。
+员工查看「请求策略决策」复用上述接口返回的 `other.admin_info.request_policy`，
+从日志表格经 `DetailsDialog` 传入 `LogDetailBody`，使用既有
+`PolicyDecisionRecord` 展示选择渠道、失败、重试和终止记录。新增可选显示参数
+`canViewPolicyDecisions`，由管理员/员工日志视角的 `showAdminFields` 提供；未传时
+沿用 `isAdmin`，保持其他详情调用方的行为。普通用户视角隐藏记录，无记录时不显示
+空分区。此参数只控制策略记录，不开放「查询上游」「查同类」等管理员操作。
 
-投影发生在任何返回之前：`fillLogChannelNames` 出错时也必须返回已剥离的 `other`。
+这是已有数据的前端显示权限修正，不增加接口、配置、存储字段、数据库查询或迁移；
+错误处理沿用现有日志加载逻辑。没有新增共享资源访问，转发主链、日志写入、计费、
+Redis、连接池和后台任务均不变。回归测试通过真实表格详情入口覆盖员工、管理员、
+普通用户、缺失/空记录及管理员操作边界。
 
 ---
 
@@ -93,10 +101,15 @@
 - 批大小沿用 `logCleanupBatchSize`，单次任务最多 `auditLogCleanupMaxBatches = 2000` 批：
   审计表首次清理可能积压数百万行，不能把连接占到任务超时，剩余行数留给下一次任务。
 - **失败只记 warn，不把任务判失败**——消费日志已经删干净了。
-- ClickHouse 侧在建表 SQL 里带 `TTL toDateTime(created_at) + INTERVAL 180 DAY`
-  （默认保留期）；管理员把保留期调得更短时，由批量删除分支补齐。
+- ClickHouse 新建审计表不带 TTL；初始化移除旧表的 TTL。所有保留配置统一由清理任务执行，0 跳过清理，正值按当前时间上界删除。
+
+**2026-11-15 修复前实测：** 固定 TTL 与 3.2 的永久/超过 180 天保留配置冲突；配置为 0 时，181 天前的测试记录经原生合并从 1 条变为 0 条，近期对照仍为 1 条。随后已按 3.4 方案修复，真实 ClickHouse 25.8.33.6 新建/旧表升级、再次初始化无 DDL、原生合并保留旧行及 365 天→30 天应用清理切换均通过。全部发生于隔离库，详见 [上线审计修复补充](release-audit-20261115.md#本分支修复补充2026-11-15)。
 
 ### 3.4 三库兼容（Rule 2）
+
+2026-11-15 已实施修复（用户要求修复本分支问题）：ClickHouse 新审计表不再附加 TTL；初始化检查现有审计表的建表元数据，仅发现 TTL 时执行 `ALTER TABLE audit_logs REMOVE TTL`。统一由现有清理任务读取当前保留配置，设置变更无需动态 DDL；0 跳过清理，正值沿用按时间清理。初始化失败向上返回错误，不能在旧 TTL 仍存在时宣称迁移完成。SQLite/MySQL/PG 分支不变，无表列/索引变化。已验证新库、旧 180 天 TTL 升级、第二次初始化无 DDL、永久及 365 天/30 天配置切换、原生合并保留旧行和应用清理边界。仅操作独立测试库；已被历史 TTL 删除的数据不能由此恢复。
+
+该迁移仅在启动访问日志表元数据，移除 TTL 可能短暂占用日志表元数据锁；运行时不新增 relay 查询或连接池，现有后台清理仍共享日志数据库 I/O。生产执行前仍需在实际 schema 副本演练。语法依据：[ClickHouse REMOVE TTL](https://clickhouse.com/docs/reference/statements/alter/ttl)、[system.tables](https://clickhouse.com/docs/reference/system-tables/tables)。
 
 `DELETE ... LIMIT` 只有 MySQL 支持，PostgreSQL 与默认编译的 SQLite 下 GORM 会
 **静默丢掉 LIMIT**，一条语句删空整段区间并长时间持有事务与连接。因此

@@ -79,10 +79,10 @@ afterEach(() => {
 })
 
 it.each([
-  [100, 'root'],
-  [10, 'admin'],
-  [1, 'user'],
-] as const)('keeps role %i as %s in Chinese', async (role, label) => {
+  [100, zh.translation['Super administrator']],
+  [10, zh.translation['Administrator']],
+  [1, zh.translation['User']],
+] as const)('translates role %i as %s in Chinese', async (role, label) => {
   const i18n = createInstance()
   await i18n.init({ lng: 'zh', resources: { zh } })
   const log = {
@@ -100,7 +100,9 @@ it.each([
   )
   await userEvent.click(screen.getByRole('button', { name: '详情' }))
   const dialog = await screen.findByRole('dialog', { name: '日志详情' })
-  expect(within(dialog).getByText(label)).toBeVisible()
+  expect(
+    within(dialog).getByText(zh.translation.Role).parentElement
+  ).toHaveTextContent(label)
   expect(within(dialog).getByText('literal-name (ID: 1)')).toBeVisible()
 })
 
@@ -350,7 +352,9 @@ it('renders the channel update as a readable summary and compact operation rows 
   expect(
     within(dialog).getByText('Field change details were not recorded')
   ).toBeVisible()
-  expect(within(dialog).getByText('root')).toBeVisible()
+  expect(within(dialog).getByText('Role').parentElement).toHaveTextContent(
+    'Super administrator'
+  )
   expect(within(dialog).getByText('Session')).toBeVisible()
   expect(within(dialog).getByText(userAgent)).toBeVisible()
   expect(within(dialog).queryByText('Token identifier')).not.toBeInTheDocument()
@@ -422,7 +426,7 @@ it.each([
     { count: 0, total: 3, status: 1 },
     ['Enabled', '0 / 3'],
   ],
-  ['user.create', { username: 'alice', role: 10 }, ['admin', 'alice']],
+  ['user.create', { username: 'alice', role: 10 }, ['Administrator', 'alice']],
 ])(
   'formats known parameters for %s without losing zero or false',
   async (action, params, values) => {
@@ -507,8 +511,10 @@ it.each([
     expect(within(dialog).getAllByText(summary).length).toBeGreaterThan(0)
     expect(within(dialog).getByText('Failed')).toBeVisible()
     expect(within(dialog).getByText('403')).toBeVisible()
-    expect(within(dialog).queryByText('root')).not.toBeInTheDocument()
-    expect(within(dialog).getByText('user')).toBeVisible()
+    expect(
+      within(dialog).queryByText('Super administrator')
+    ).not.toBeInTheDocument()
+    expect(within(dialog).getByText('User')).toBeVisible()
   }
 )
 
@@ -704,7 +710,7 @@ it('shows the affected count separately from requested redemption IDs', async ()
     i18n.t
   )
   expect(detail.summary).toBe('Batch deleted 2 redemption codes')
-  expect(detail.fields).toEqual(
+  expect(detail.fields.map(({ label, value }) => ({ label, value }))).toEqual(
     expect.arrayContaining([
       { label: 'Count', value: 2 },
       { label: 'Total', value: 4 },
@@ -871,7 +877,7 @@ it('labels account operation parameters', async () => {
     },
     i18n.t
   )
-  expect(detail.fields).toEqual([
+  expect(detail.fields.map(({ label, value }) => ({ label, value }))).toEqual([
     { label: 'Legacy token', value: true },
     { label: 'Revoked access tokens', value: 2 },
     { label: 'Verification method', value: 'Passkey' },

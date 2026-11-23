@@ -81,14 +81,14 @@ func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
-	Id                   int            `json:"id"`
+	Id                   int            `json:"id" gorm:"index:idx_users_security_assignees,priority:4;index:idx_users_customer_audit,priority:3"`
 	Username             string         `json:"username" gorm:"unique;index" validate:"max=32"`
 	Password             string         `json:"password" gorm:"not null;" validate:"min=8,max=128"`
 	HasPassword          bool           `json:"-" gorm:"-:all"`
 	OriginalPassword     string         `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
 	DisplayName          string         `json:"display_name" gorm:"index" validate:"max=32"`
-	Role                 int            `json:"role" gorm:"type:int;default:1"`   // admin, common
-	Status               int            `json:"status" gorm:"type:int;default:1"` // enabled, disabled
+	Role                 int            `json:"role" gorm:"type:int;default:1;index:idx_users_security_assignees,priority:1;index:idx_users_customer_audit,priority:2"` // admin, common
+	Status               int            `json:"status" gorm:"type:int;default:1;index:idx_users_security_assignees,priority:2"`                                         // enabled, disabled
 	Email                string         `json:"email" gorm:"index" validate:"max=50"`
 	GitHubId             string         `json:"github_id" gorm:"column:github_id;index"`
 	DiscordId            string         `json:"discord_id" gorm:"column:discord_id;index"`
@@ -108,8 +108,8 @@ type User struct {
 	AffCount             int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
 	AffQuota             int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
 	AffHistoryQuota      int            `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
-	InviterId            int            `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
-	DeletedAt            gorm.DeletedAt `gorm:"index"`
+	InviterId            int            `json:"inviter_id" gorm:"type:int;column:inviter_id;index;index:idx_users_customer_audit,priority:1"`
+	DeletedAt            gorm.DeletedAt `gorm:"index;index:idx_users_security_assignees,priority:3;index:idx_users_customer_audit,priority:4"`
 	LinuxDOId            string         `json:"linux_do_id" gorm:"column:linux_do_id;index"`
 	Setting              string         `json:"setting" gorm:"type:text;column:setting"`
 	Remark               string         `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`

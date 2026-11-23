@@ -46,6 +46,11 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from '@/components/ui/sidebar'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 
 import { checkIsActive } from '../lib/url-utils'
 import type {
@@ -121,24 +126,63 @@ function NavBadge({ children }: { children: ReactNode }) {
  * Sidebar menu link item
  */
 function SidebarMenuLink({ item, href }: { item: NavLink; href: string }) {
-  const { isMobile, setOpenMobile } = useSidebar()
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        isActive={checkIsActive(href, item)}
-        tooltip={item.title}
-        render={
+  const { state, isMobile, setOpenMobile } = useSidebar()
+  const collapsed = state === 'collapsed' && !isMobile
+  const button = (
+    <SidebarMenuButton
+      isActive={checkIsActive(href, item)}
+      tooltip={item.badgeLabel ? undefined : item.title}
+      render={
+        item.search ? (
+          <Link
+            to='/usage-logs/audit'
+            search={item.search}
+            state={(previous) => ({
+              ...previous,
+              // This view-reset marker also works on ordinary HTTP origins.
+              auditPendingVisit: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            })}
+            aria-label={`${item.title}: ${item.badgeLabel}`}
+            preload={isMobile ? false : undefined}
+            onClick={() => {
+              item.onNavigate?.()
+              setOpenMobile(false)
+            }}
+          />
+        ) : (
           <Link
             to={item.url}
             preload={isMobile ? false : undefined}
             onClick={() => setOpenMobile(false)}
           />
-        }
-      >
-        {item.icon && <item.icon className='shrink-0' />}
-        <span className='min-w-0 flex-1 truncate'>{item.title}</span>
-        {item.badge && <NavBadge>{item.badge}</NavBadge>}
-      </SidebarMenuButton>
+        )
+      }
+    >
+      {item.icon && <item.icon className='shrink-0' />}
+      <span className='min-w-0 flex-1 truncate'>{item.title}</span>
+      {item.badge && !(collapsed && item.badgeLabel) && (
+        <NavBadge>{item.badge}</NavBadge>
+      )}
+    </SidebarMenuButton>
+  )
+  return (
+    <SidebarMenuItem>
+      {item.badgeLabel ? (
+        <Tooltip>
+          <TooltipTrigger render={button} />
+          <TooltipContent side='right'>{item.badgeLabel}</TooltipContent>
+        </Tooltip>
+      ) : (
+        button
+      )}
+      {collapsed && item.badge && item.badgeLabel && (
+        <Badge
+          aria-hidden
+          className='pointer-events-none absolute -end-1 -top-1 z-10 px-1 py-0 text-[10px] tabular-nums'
+        >
+          {item.badge}
+        </Badge>
+      )}
     </SidebarMenuItem>
   )
 }

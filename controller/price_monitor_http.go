@@ -170,7 +170,7 @@ func UpdatePriceMonitorSettings(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	applied, err := model.SaveConfigGroup("price_monitor_setting", values)
+	applied, err := model.SaveConfigGroup("price_monitor_setting", values, model.RequestAuditChanges(c))
 	if err != nil {
 		logger.LogError(c, "failed to update price monitor settings: "+err.Error())
 		common.ApiErrorI18n(c, i18n.MsgRetryLater)

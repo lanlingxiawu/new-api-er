@@ -24,27 +24,49 @@ import {
   isAuditDetailObject,
   type AuditDetailField,
 } from '../lib/audit-details'
+import {
+  auditLiteralMaps,
+  auditParameterValue,
+} from '../lib/audit-parameter-value'
 import { AuditDetailValue } from './audit-detail-value'
 
 export function AuditDetailFields(props: { fields: AuditDetailField[] }) {
   const { t } = useTranslation()
   return props.fields.map((field) => {
-    const value = field.value
-    if (value === null || value === undefined || value === '') return null
+    const value =
+      field.key && !field.literalKeys
+        ? auditParameterValue(field.key, field.value, field.action ?? '', t)
+        : field.value
+    if (value === undefined) return null
     if (isAuditDetailObject(value) || Array.isArray(value)) {
       const entries = Array.isArray(value)
         ? value.map((item, i) => [String(i + 1), item] as const)
         : Object.entries(value)
-      if (!entries.length) return null
+      const literalKeys =
+        field.literalKeys || auditLiteralMaps.has(field.key ?? '')
+      if (!entries.length) {
+        return (
+          <DetailRow
+            key={field.key ?? field.label}
+            label={field.label}
+            value={t('None')}
+          />
+        )
+      }
       return (
-        <div key={field.label} className='min-w-0 space-y-1'>
+        <div key={field.key ?? field.label} className='min-w-0 space-y-1'>
           <div className='text-muted-foreground text-xs break-all'>
             {field.label}
           </div>
           <div className='space-y-1 border-l pl-2'>
             <AuditDetailFields
               fields={entries.map(([key, item]) => ({
-                label: auditFieldLabel(key, t),
+                key,
+                action: field.action,
+                literalKeys,
+                label: literalKeys
+                  ? key
+                  : auditFieldLabel(key, t, field.action),
                 value: item,
               }))}
             />
@@ -52,11 +74,11 @@ export function AuditDetailFields(props: { fields: AuditDetailField[] }) {
         </div>
       )
     }
-    let text = String(value)
+    let text = value === null || value === '' ? t('None') : String(value)
     if (typeof value === 'boolean') text = value ? t('Yes') : t('No')
     return (
       <DetailRow
-        key={field.label}
+        key={field.key ?? field.label}
         label={field.label}
         value={
           <AuditDetailValue

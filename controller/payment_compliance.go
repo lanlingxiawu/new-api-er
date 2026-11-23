@@ -57,7 +57,7 @@ func ConfirmPaymentCompliance(c *gin.Context) {
 	}
 
 	for key, value := range updates {
-		if err := model.UpdateOption(key, value); err != nil {
+		if err := model.UpdateOption(key, value, model.RequestAuditChanges(c)); err != nil {
 			common.ApiError(c, err)
 			return
 		}

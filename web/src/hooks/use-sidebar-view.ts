@@ -39,6 +39,7 @@ import {
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { useAuditPendingBadge } from './use-audit-pending-badge'
 import { useSidebarConfig } from './use-sidebar-config'
 import { useSidebarData } from './use-sidebar-data'
 
@@ -64,7 +65,11 @@ export function useSidebarView(): ResolvedSidebarView {
   const userRole = useAuthStore((s) => s.auth.user?.role)
   const user = useAuthStore((s) => s.auth.user)
   const modelPricingBadge = useModelPricingIssueBadge()
-  const badges: SidebarBadges = { modelPricing: modelPricingBadge }
+  const auditPending = useAuditPendingBadge()
+  const badges: SidebarBadges = {
+    modelPricing: modelPricingBadge,
+    auditPending,
+  }
   const rootSidebarData = useSidebarData(badges)
   const configFilteredRoot = useSidebarConfig(rootSidebarData.navGroups)
 

@@ -26,10 +26,13 @@ import dayjs from '@/lib/dayjs'
 
 import type { AuditLog } from '../api'
 import { buildAuditDetails } from '../lib/audit-details'
+import { auditActorLabel, identifyAuditClient } from '../lib/source'
+import { AuditIPCell } from './audit-ip-cell'
 import { AuditLogDetailsDialog } from './audit-log-details-dialog'
 
 export function useAuditLogColumns(
-  accessOnly?: boolean
+  accessOnly?: boolean,
+  onIPFilter?: (ip: string) => void
 ): ColumnDef<AuditLog>[] {
   const { t } = useTranslation()
   return useMemo(() => {
@@ -106,11 +109,37 @@ export function useAuditLogColumns(
     }
     columns.push(
       {
+        id: 'actor_identity',
+        header: t('Actor identity'),
+        size: 150,
+        cell: ({ row }) =>
+          t(
+            auditActorLabel(
+              row.original.actor_role,
+              row.original.actor_is_employee
+            )
+          ),
+        meta: { label: t('Actor identity') },
+      },
+      {
+        accessorKey: 'auth_method',
+        header: t('Operation source'),
+        size: 120,
+        cell: ({ row }) => {
+          if (row.original.auth_method === 'session') return t('Web session')
+          if (row.original.auth_method === 'access_token') {
+            return t('Access Token')
+          }
+          return t('Unknown source')
+        },
+        meta: { label: t('Operation source') },
+      },
+      {
         accessorKey: 'ip',
         header: 'IP',
-        size: 120,
+        size: 240,
         cell: ({ row }) => (
-          <span className='font-mono'>{row.original.ip || '—'}</span>
+          <AuditIPCell entry={row.original} onFilter={onIPFilter} />
         ),
         meta: { label: 'IP' },
       },
@@ -120,21 +149,21 @@ export function useAuditLogColumns(
         size: 180,
         cell: ({ row }) => (
           <TruncatedCell className='max-w-48'>
-            {row.original.user_agent || '—'}
+            {t(identifyAuditClient(row.original.user_agent))}
           </TruncatedCell>
         ),
         meta: { label: t('Client'), mobileHidden: true },
       },
       {
         accessorKey: 'method',
-        header: t('Method'),
+        header: t('Request method'),
         size: 76,
         cell: ({ row }) => (
           <span className='text-muted-foreground font-mono'>
             {row.original.method || '—'}
           </span>
         ),
-        meta: { label: t('Method') },
+        meta: { label: t('Request method') },
       },
       {
         accessorKey: 'route',
@@ -181,5 +210,5 @@ export function useAuditLogColumns(
       }
     )
     return columns
-  }, [accessOnly, t])
+  }, [accessOnly, t, onIPFilter])
 }

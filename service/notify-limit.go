@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/bytedance/gopkg/util/gopool"
+	"github.com/go-redis/redis/v8"
 )
 
 // notifyLimitStore is used for in-memory rate limiting when Redis is disabled
@@ -55,11 +56,24 @@ func CheckNotificationLimit(userId int, notifyType string) (bool, error) {
 }
 
 func checkRedisLimit(userId int, notifyType string) (bool, error) {
-	ctx := context.Background()
+	return CheckNotificationLimitContext(context.Background(), common.RDB, userId, notifyType)
+}
+
+// Background notification workers provide their own bounded Redis pool.
+func CheckNotificationLimitContext(ctx context.Context, client *redis.Client, userId int, notifyType string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if !common.RedisEnabled {
+		return checkMemoryLimit(userId, notifyType)
+	}
+	if client == nil {
+		return false, fmt.Errorf("notification limiter unavailable")
+	}
 	key := fmt.Sprintf("notify_limit:%d:%s", userId, notifyType)
 
 	// SETNX 只在窗口开始时写入过期时间，INCR 会保留原 TTL；放在同一事务里避免产生永不过期的计数
-	pipe := common.RDB.TxPipeline()
+	pipe := client.TxPipeline()
 	pipe.SetNX(ctx, key, 0, getDuration())
 	incr := pipe.Incr(ctx, key)
 	if _, err := pipe.Exec(ctx); err != nil {

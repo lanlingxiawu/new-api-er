@@ -15,7 +15,6 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"gorm.io/gorm"
 )
 
 // RequestPolicySnapshot is the validated read model behind the request policy
@@ -220,7 +219,7 @@ func refreshRequestPolicySnapshot() error {
 
 // UpdateRequestPolicyOptions validates the entire resulting policy before any
 // write. Unknown JSON rule fields stay in the original option string.
-func UpdateRequestPolicyOptions(values map[string]string) error {
+func UpdateRequestPolicyOptions(values map[string]string, audit ...*AuditChanges) error {
 	requestPolicyOptionMutex.Lock()
 	defer requestPolicyOptionMutex.Unlock()
 	options := maps.Clone(CurrentRequestPolicy().Options)
@@ -234,18 +233,7 @@ func UpdateRequestPolicyOptions(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	if err := DB.Transaction(func(tx *gorm.DB) error {
-		for key, value := range values {
-			option := Option{Key: key}
-			if err := tx.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
-				return err
-			}
-			if err := tx.Model(&option).Update("value", value).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
+	if err := persistOptionsTx(values, audit...); err != nil {
 		return err
 	}
 	for key, value := range values {

@@ -105,6 +105,10 @@ export function useSidebarData(badges: SidebarBadges = {}): SidebarData {
             title: t('Audit Logs'),
             url: '/usage-logs/audit',
             icon: ClipboardList,
+            badge: badges.auditPending?.value,
+            badgeLabel: badges.auditPending?.label,
+            search: badges.auditPending?.search,
+            onNavigate: badges.auditPending?.onNavigate,
           },
           {
             title: t('Task Logs'),

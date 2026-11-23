@@ -102,6 +102,7 @@ export interface UserSettings {
   quota_warning_threshold?: number
   /** Receive low balance reminders; absent means on */
   quota_warning_enabled?: boolean
+  account_security_notify_enabled?: boolean
   /** Webhook URL */
   webhook_url?: string
   /** Webhook secret */
@@ -157,6 +158,7 @@ export interface UpdateUserSettingsRequest {
   notify_type?: string
   quota_warning_threshold?: number
   quota_warning_enabled?: boolean
+  account_security_notify_enabled?: boolean
   webhook_url?: string
   webhook_secret?: string
   notification_email?: string

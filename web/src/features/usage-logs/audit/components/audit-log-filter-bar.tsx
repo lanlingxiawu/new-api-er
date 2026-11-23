@@ -17,9 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Table } from '@tanstack/react-table'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Combobox } from '@/components/ui/combobox'
+import { ROLE } from '@/lib/roles'
 
 import { CompactDateTimeRangePicker } from '../../components/compact-date-time-range-picker'
 import {
@@ -27,7 +29,8 @@ import {
   LogsFilterInput,
   LogsFilterToolbar,
 } from '../../components/logs-filter-toolbar'
-import type { AuditFilters, AuditLog } from '../api'
+import type { AuditFilters, AuditRecord } from '../api'
+import { AuditRouteSelect } from './audit-route-select'
 
 function AuditFilterSelect(props: {
   label: string
@@ -51,10 +54,15 @@ function AuditFilterSelect(props: {
 }
 
 export function AuditLogFilterBar(props: {
-  table: Table<AuditLog>
+  actionEnd?: ReactNode
+  table: Table<AuditRecord>
   filters: AuditFilters
+  baseline: AuditFilters
+  applied: AuditFilters
+  canReadSecurity?: boolean
   onChange: (patch: Partial<AuditFilters>) => void
   scope: 'all' | 'self'
+  viewerRole: number
   accessOnly?: boolean
   tokenScope: string
   defaultTokenScope: string
@@ -68,6 +76,7 @@ export function AuditLogFilterBar(props: {
   const dateFilter = (
     <LogsFilterField wide>
       <CompactDateTimeRangePicker
+        maxRangeSec={30 * 86400}
         start={
           props.filters.start_timestamp === undefined
             ? undefined
@@ -140,53 +149,127 @@ export function AuditLogFilterBar(props: {
       )}
     </>
   )
-  const advancedFilters =
-    !props.accessOnly || props.scope === 'all' ? (
-      <>
-        {!props.accessOnly && (
-          <>
-            <LogsFilterField>
-              <LogsFilterInput
-                aria-label={t('Token identifier')}
-                placeholder={t('Token identifier')}
-                value={props.filters.token_ref ?? ''}
-                onChange={(event) =>
-                  props.onChange({ token_ref: event.target.value || undefined })
-                }
-              />
-            </LogsFilterField>
-            <LogsFilterField>
-              <LogsFilterInput
-                aria-label={t('Request ID')}
-                placeholder={t('Request ID')}
-                value={props.filters.request_id ?? ''}
-                onChange={(event) =>
-                  props.onChange({
-                    request_id: event.target.value || undefined,
-                  })
-                }
-              />
-            </LogsFilterField>
-          </>
-        )}
-        {props.scope === 'all' && (
-          <LogsFilterField>
-            <LogsFilterInput
-              aria-label={t('Username')}
-              placeholder={t('Username')}
-              value={props.filters.username ?? ''}
-              onChange={(event) =>
-                props.onChange({ username: event.target.value || undefined })
-              }
-            />
-          </LogsFilterField>
-        )}
-      </>
-    ) : undefined
+  const advancedFilters = (
+    <>
+      <LogsFilterField>
+        <LogsFilterInput
+          aria-label='IP'
+          placeholder='IP'
+          value={props.filters.ip ?? ''}
+          onChange={(event) =>
+            props.onChange({ ip: event.target.value || undefined })
+          }
+        />
+      </LogsFilterField>
+      {props.scope === 'all' && props.viewerRole >= ROLE.ADMIN && (
+        <AuditFilterSelect
+          label={t('Actor identity')}
+          value={props.filters.actor_type ?? 'all'}
+          options={[
+            { value: 'all', label: t('All identities') },
+            ...(props.viewerRole >= ROLE.SUPER_ADMIN
+              ? [{ value: 'root', label: t('Super administrator') }]
+              : []),
+            { value: 'admin', label: t('Administrator') },
+            { value: 'employee', label: t('Employee') },
+            { value: 'user', label: t('User') },
+            {
+              value: 'unclassified_user',
+              label: t('User (employee status not recorded)'),
+            },
+            ...(props.viewerRole >= ROLE.SUPER_ADMIN
+              ? [{ value: 'unknown', label: t('Unknown identity') }]
+              : []),
+          ]}
+          onChange={(value) =>
+            props.onChange({ actor_type: value === 'all' ? undefined : value })
+          }
+        />
+      )}
+      <AuditFilterSelect
+        label={t('Operation source')}
+        value={props.filters.auth_method ?? 'all'}
+        options={[
+          { value: 'all', label: t('All sources') },
+          { value: 'session', label: t('Web session') },
+          { value: 'access_token', label: t('Access Token') },
+          { value: 'unknown', label: t('Unknown source') },
+        ]}
+        onChange={(value) =>
+          props.onChange({ auth_method: value === 'all' ? undefined : value })
+        }
+      />
+      {props.scope === 'all' && (
+        <LogsFilterField>
+          <AuditRouteSelect
+            scope={props.scope}
+            applied={props.applied}
+            filters={props.filters}
+            onChange={props.onChange}
+          />
+        </LogsFilterField>
+      )}
+      {props.canReadSecurity && (
+        <AuditFilterSelect
+          label={t('IP risk')}
+          value={props.filters.ip_risk ?? 'all'}
+          options={[
+            { value: 'all', label: t('All IPs') },
+            { value: 'abnormal', label: t('Abnormal IPs only') },
+            { value: 'attention', label: t('Needs attention') },
+            { value: 'high', label: t('High risk') },
+          ]}
+          onChange={(value) =>
+            props.onChange({ ip_risk: value === 'all' ? undefined : value })
+          }
+        />
+      )}
+      {!props.accessOnly && props.scope === 'all' && (
+        <LogsFilterField>
+          <LogsFilterInput
+            aria-label={t('Token identifier')}
+            placeholder={t('Token identifier')}
+            value={props.filters.token_ref ?? ''}
+            onChange={(event) =>
+              props.onChange({ token_ref: event.target.value || undefined })
+            }
+          />
+        </LogsFilterField>
+      )}
+      <LogsFilterField>
+        <LogsFilterInput
+          aria-label={t('Request ID')}
+          placeholder={t('Request ID')}
+          value={props.filters.request_id ?? ''}
+          onChange={(event) =>
+            props.onChange({ request_id: event.target.value || undefined })
+          }
+        />
+      </LogsFilterField>
+      {props.scope === 'all' && (
+        <LogsFilterField>
+          <LogsFilterInput
+            aria-label={t('Username')}
+            placeholder={t('Username')}
+            value={props.filters.username ?? ''}
+            onChange={(event) =>
+              props.onChange({ username: event.target.value || undefined })
+            }
+          />
+        </LogsFilterField>
+      )}
+    </>
+  )
   const advancedCount = [
-    props.filters.token_ref,
+    props.scope === 'all' && !props.accessOnly && props.filters.token_ref,
     props.filters.request_id,
-    props.filters.username,
+    props.scope === 'all' && props.filters.username,
+    props.filters.ip,
+    props.scope === 'all' && props.filters.actor_type,
+    props.filters.auth_method,
+    props.scope === 'all' && props.filters.route,
+    props.scope === 'all' && props.filters.route_missing,
+    props.canReadSecurity && props.filters.ip_risk,
   ].filter(Boolean).length
   const filterCount =
     advancedCount +
@@ -197,10 +280,12 @@ export function AuditLogFilterBar(props: {
     ].filter(Boolean).length
   const hasFilters =
     filterCount > 0 ||
-    props.filters.start_timestamp !== undefined ||
-    props.filters.end_timestamp !== undefined
+    props.filters.start_timestamp !== props.baseline.start_timestamp ||
+    props.filters.end_timestamp !== props.baseline.end_timestamp
   return (
     <LogsFilterToolbar
+      compactMobile
+      actionEnd={props.actionEnd}
       table={props.table}
       primaryFilters={
         <>

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
@@ -15,8 +16,6 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -25,41 +24,48 @@ func TestDeleteRedemptionBatch(t *testing.T) {
 		t.Run(dialect, func(t *testing.T) {
 			var driver, logDriver gorm.Dialector
 			dbType := common.DatabaseTypeSQLite
+			var dsn, logDSN string
 			switch dialect {
 			case "sqlite":
 				driver = sqlite.Open(":memory:")
 				logDriver = sqlite.Open(":memory:")
 			case "mysql":
-				dsn := os.Getenv("TEST_MYSQL_DSN")
+				dsn = os.Getenv("TEST_MYSQL_DSN")
 				if dsn == "" {
 					t.Skip("TEST_MYSQL_DSN is not configured")
 				}
-				driver = mysql.Open(dsn)
-				logDSN := os.Getenv("TEST_MYSQL_LOG_DSN")
-				if logDSN == "" {
-					logDSN = dsn
-				}
-				logDriver = mysql.Open(logDSN)
+				logDSN = os.Getenv("TEST_MYSQL_LOG_DSN")
 				dbType = common.DatabaseTypeMySQL
 			case "postgres":
-				dsn := os.Getenv("TEST_POSTGRES_DSN")
+				dsn = os.Getenv("TEST_POSTGRES_DSN")
 				if dsn == "" {
 					t.Skip("TEST_POSTGRES_DSN is not configured")
 				}
-				driver = postgres.Open(dsn)
-				logDSN := os.Getenv("TEST_POSTGRES_LOG_DSN")
-				if logDSN == "" {
-					logDSN = dsn
-				}
-				logDriver = postgres.Open(logDSN)
+				logDSN = os.Getenv("TEST_POSTGRES_LOG_DSN")
 				dbType = common.DatabaseTypePostgreSQL
 			}
-			db, err := gorm.Open(driver, &gorm.Config{})
-			require.NoError(t, err)
-			sqlDB, err := db.DB()
-			require.NoError(t, err)
-			sqlDB.SetMaxOpenConns(1)
-			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			var db, logDB *gorm.DB
+			var err error
+			if dialect == "sqlite" {
+				db, err = gorm.Open(driver, &gorm.Config{})
+				require.NoError(t, err)
+				logDB, err = gorm.Open(logDriver, &gorm.Config{})
+				require.NoError(t, err)
+			} else {
+				db, _ = newAuditTestDatabase(t, dialect, dsn)
+				logDB = db
+				if logDSN != "" && logDSN != dsn {
+					logDB, _ = newAuditTestDatabase(t, dialect, logDSN)
+				}
+			}
+			for _, current := range []*gorm.DB{db, logDB} {
+				connection, err := current.DB()
+				require.NoError(t, err)
+				connection.SetMaxOpenConns(1)
+				if dialect == "sqlite" {
+					t.Cleanup(func() { require.NoError(t, connection.Close()) })
+				}
+			}
 			var version string
 			query := "SELECT version()"
 			if dialect == "sqlite" {
@@ -67,13 +73,6 @@ func TestDeleteRedemptionBatch(t *testing.T) {
 			}
 			require.NoError(t, db.Raw(query).Scan(&version).Error)
 			t.Logf("database version: %s", version)
-
-			logDB, err := gorm.Open(logDriver, &gorm.Config{})
-			require.NoError(t, err)
-			logSQL, err := logDB.DB()
-			require.NoError(t, err)
-			logSQL.SetMaxOpenConns(1)
-			t.Cleanup(func() { require.NoError(t, logSQL.Close()) })
 			previousDB, previousLogDB := model.DB, model.LOG_DB
 			previousMain, previousLog := common.MainDatabaseType(), common.LogDatabaseType()
 			previousRedis := common.RedisEnabled
@@ -85,7 +84,7 @@ func TestDeleteRedemptionBatch(t *testing.T) {
 				common.SetDatabaseTypes(previousMain, previousLog)
 				common.RedisEnabled = previousRedis
 			})
-			for _, table := range []any{&model.User{}, &model.Redemption{}} {
+			for _, table := range []any{&model.User{}, &model.Redemption{}, &model.UserSession{}, &model.Option{}} {
 				require.False(t, db.Migrator().HasTable(table), "use an empty test database")
 				require.NoError(t, db.AutoMigrate(table))
 				t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(table)) })
@@ -93,9 +92,12 @@ func TestDeleteRedemptionBatch(t *testing.T) {
 			require.False(t, logDB.Migrator().HasTable(&model.AuditLog{}), "use an empty test log database")
 			require.NoError(t, logDB.AutoMigrate(&model.AuditLog{}))
 			t.Cleanup(func() { require.NoError(t, logDB.Migrator().DropTable(&model.AuditLog{})) })
+			model.InitColumnNames()
+			require.NoError(t, model.EnsureLegacyAccessTokenRetireAt(time.Now().Unix()))
 			token := "redemption-audit-test-token"
 			admin := model.User{Username: "redemption-audit-admin", Password: "unused", Role: common.RoleAdminUser, Status: common.UserStatusEnabled, Group: "default", AccessToken: &token}
 			require.NoError(t, db.Create(&admin).Error)
+			_, browser := createAccessTokenTestSession(t, admin.Id, "redemption-batch-session")
 			codes := make([]model.Redemption, 16)
 			for index := range codes {
 				codes[index] = model.Redemption{Name: "selected", Key: fmt.Sprintf("%032d", index+1), Quota: 100, Status: common.RedemptionCodeStatusEnabled}
@@ -107,6 +109,12 @@ func TestDeleteRedemptionBatch(t *testing.T) {
 			router := gin.New()
 			router.Use(middleware.RequestId())
 			router.POST("/api/redemption/batch", middleware.AdminAuth(), DeleteRedemptionBatch)
+			blocked := httptest.NewRecorder()
+			legacyRequest := httptest.NewRequest(http.MethodPost, "/api/redemption/batch", bytes.NewBufferString(`{"ids":[1]}`))
+			legacyRequest.Header.Set("Authorization", "Bearer "+token)
+			router.ServeHTTP(blocked, legacyRequest)
+			require.Equal(t, http.StatusForbidden, blocked.Code)
+			token = browser
 
 			overLimit := make([]int, 1001)
 			for index := range overLimit {

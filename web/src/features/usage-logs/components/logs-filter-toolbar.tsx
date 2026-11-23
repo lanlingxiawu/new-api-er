@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Table } from '@tanstack/react-table'
-import { ChevronDown, Loader2 } from 'lucide-react'
+import { ChevronDown, Loader2, Search } from 'lucide-react'
 import { useState, type ComponentProps, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -181,7 +181,11 @@ export function LogsFilterToolbar<TData>(props: LogsFilterToolbarProps<TData>) {
                 disabled={props.searchLoading}
                 aria-busy={props.searchLoading}
               >
-                {props.searchLoading && <Loader2 className='animate-spin' />}
+                {props.searchLoading ? (
+                  <Loader2 aria-hidden className='animate-spin' />
+                ) : (
+                  <Search aria-hidden />
+                )}
                 {t('Search')}
               </Button>
               {props.actionEnd}
@@ -233,8 +237,13 @@ export function LogsFilterToolbar<TData>(props: LogsFilterToolbarProps<TData>) {
                 type='button'
                 onClick={handleMobileSearch}
                 disabled={props.searchLoading}
+                aria-busy={props.searchLoading}
               >
-                {props.searchLoading && <Loader2 className='animate-spin' />}
+                {props.searchLoading ? (
+                  <Loader2 aria-hidden className='animate-spin' />
+                ) : (
+                  <Search aria-hidden />
+                )}
                 {t('Search')}
               </Button>
             </DrawerFooter>
@@ -285,8 +294,13 @@ export function LogsFilterToolbar<TData>(props: LogsFilterToolbarProps<TData>) {
             type='button'
             onClick={props.onSearch}
             disabled={props.searchLoading}
+            aria-busy={props.searchLoading}
           >
-            {props.searchLoading && <Loader2 className='animate-spin' />}
+            {props.searchLoading ? (
+              <Loader2 aria-hidden className='animate-spin' />
+            ) : (
+              <Search aria-hidden />
+            )}
             {t('Search')}
           </Button>
           {props.actionEnd}

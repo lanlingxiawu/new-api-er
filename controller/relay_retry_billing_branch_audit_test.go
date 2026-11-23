@@ -71,12 +71,16 @@ type retryAuditFixture struct {
 	quotaAtAttempt    []int
 	statusByAttempt   []int
 	defaultStatusCode int
+	firstHit          chan struct{}
 }
 
 func (f *retryAuditFixture) record(userQuota int) (int, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.hits++
+	if f.hits == 1 {
+		close(f.firstHit)
+	}
 	f.quotaAtAttempt = append(f.quotaAtAttempt, userQuota)
 	status := f.defaultStatusCode
 	if f.hits <= len(f.statusByAttempt) {
@@ -109,6 +113,7 @@ func newRetryAuditFixture(t *testing.T, statuses []int, defaultStatus int) *retr
 		quota:             1_000_000, // below the trust quota, so pre-consume really happens
 		statusByAttempt:   statuses,
 		defaultStatusCode: defaultStatus,
+		firstHit:          make(chan struct{}),
 	}
 
 	// Global state touched by the relay chain, restored afterwards.
@@ -565,9 +570,30 @@ func (f *retryAuditFixture) sendBodyAndLeave(t *testing.T, body string, leaveAft
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(body)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer sk-"+f.token.Key)
-	time.AfterFunc(leaveAfter, cancel)
 	started := time.Now()
-	f.engine.ServeHTTP(httptest.NewRecorder(), req)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		f.engine.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	// These cases exercise leaving during an accepted upstream request, not
+	// cancellation during a slow database/cache setup before dispatch.
+	select {
+	case <-f.firstHit:
+		timer := time.AfterFunc(leaveAfter, cancel)
+		defer timer.Stop()
+	case <-finished:
+		require.FailNow(t, "request finished before reaching the fixture upstream")
+	case <-time.After(10 * time.Second):
+		cancel()
+		require.FailNow(t, "request did not reach the fixture upstream")
+	}
+	select {
+	case <-finished:
+	case <-time.After(10 * time.Second):
+		cancel()
+		require.FailNow(t, "request did not finish after cancellation")
+	}
 	return time.Since(started)
 }
 

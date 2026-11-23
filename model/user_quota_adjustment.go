@@ -17,6 +17,7 @@ var (
 // adjustment. Pending relay deductions in the quota cache are not part of it.
 type UserQuotaAdjustment struct {
 	UserID   int
+	Role     int
 	Username string
 	Before   int
 	After    int
@@ -67,7 +68,7 @@ func AdjustUserQuota(userID, operatorRole int, mode string, value int) (*UserQuo
 				return gorm.ErrRecordNotFound
 			}
 		}
-		adjustment = UserQuotaAdjustment{UserID: user.Id, Username: user.Username, Before: user.Quota, After: after}
+		adjustment = UserQuotaAdjustment{UserID: user.Id, Role: user.Role, Username: user.Username, Before: user.Quota, After: after}
 		return nil
 	})
 	if err != nil {

@@ -1,0 +1,355 @@
+// Copied into an isolated source snapshot by run.py. Never uses a project .env.
+package main
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/glebarez/sqlite"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+)
+
+// Bounded configuration/coordination tables must retain meaningful cardinality.
+var smallTables = map[string]string{
+	"options": "actual options only", "setups": "installation singleton",
+	"login_encryption_keys": "key rotation state", "casbin_rule": "actual policy only", "casbin_rules": "actual policy only",
+	"authz_roles": "actual roles only", "task_plugins": "embedded plugin definitions",
+	"models": "model dictionary", "vendors": "vendor dictionary", "prefill_groups": "group dictionary",
+	"subscription_plans": "plan definitions", "custom_o_auth_providers": "provider definitions",
+	"custom_oauth_providers": "provider definitions", "log_export_templates": "export templates",
+	"employee_export_templates": "export templates", "employee_commission_tiers": "tier definitions",
+	"employee_tier_levels": "tier definitions", "system_instances": "live node registry",
+	"system_task_locks": "task leases", "business_daily_stats_coverages": "coverage watermarks",
+	"audit_security_states": "scanner/repair singleton state", "audit_security_risk_states": "risk singleton state",
+}
+
+type migrationRecorder struct {
+	logger.Interface
+	ddl []string
+}
+
+func (r *migrationRecorder) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
+	query, _ := fc()
+	upper := strings.ToUpper(strings.TrimSpace(query))
+	if strings.HasPrefix(upper, "CREATE ") || strings.HasPrefix(upper, "ALTER ") || strings.HasPrefix(upper, "DROP ") {
+		r.ddl = append(r.ddl, query)
+	}
+}
+
+func emit(value any) {
+	b, err := common.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(b))
+}
+
+func main() {
+	if os.Getenv("LARGE_DATA_ISOLATED") != "yes" {
+		panic("isolated fixture runner required")
+	}
+	mode := os.Getenv("LARGE_DATA_MODE")
+	common.InitEnv()
+	if mode == "seed" {
+		if err := model.InitDB(); err != nil {
+			panic(err)
+		}
+		if err := model.InitLogDB(); err != nil {
+			panic(err)
+		}
+	} else {
+		var dial gorm.Dialector
+		dsn := os.Getenv("SQL_DSN")
+		switch {
+		case strings.HasPrefix(dsn, "postgres://"):
+			dial = postgres.Open(dsn)
+		case dsn == "":
+			dial = sqlite.Open(common.SQLitePath)
+		default:
+			dial = mysql.Open(dsn)
+		}
+		db, err := gorm.Open(dial, &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+		if err != nil {
+			panic(err)
+		}
+		model.DB, model.LOG_DB = db, db
+	}
+	db := model.DB.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent), SkipDefaultTransaction: true})
+	defer model.CloseDB()
+	if mode == "probe" {
+		probe(db)
+		return
+	}
+	if mode == "seed-new" || mode == "seed-security" {
+		seedNewSchema(db)
+	}
+	tables, err := db.Migrator().GetTables()
+	if err != nil {
+		panic(err)
+	}
+	sort.Strings(tables)
+	rows, _ := strconv.Atoi(os.Getenv("LARGE_DATA_ROWS"))
+	logRows, _ := strconv.Atoi(os.Getenv("LARGE_DATA_LOG_ROWS"))
+	for _, table := range tables {
+		if table == "sqlite_sequence" {
+			continue
+		}
+		var count int64
+		if err := db.Table(table).Count(&count).Error; err != nil {
+			panic(err)
+		}
+		reason := smallTables[table]
+		target := rows
+		if table == "logs" || table == "audit_logs" || table == "abilities" {
+			target = logRows
+		}
+		if mode == "seed-new" && !strings.HasPrefix(table, "audit_security_") && table != "channel_creators" {
+			reason = "populated in previous-release phase"
+		}
+		if mode == "count" || reason != "" || count >= int64(target) {
+			emit(map[string]any{"table": table, "rows": count, "reason": reason})
+			continue
+		}
+		columns, err := db.Migrator().ColumnTypes(table)
+		if err != nil {
+			panic(err)
+		}
+		start := time.Now()
+		for offset := int(count); offset < target; offset += 500 {
+			batch := make([]map[string]any, 0, 500)
+			for j := offset; j < min(offset+500, target); j++ {
+				i := j + 1
+				row := make(map[string]any, len(columns))
+				for _, col := range columns {
+					name, typ := col.Name(), strings.ToLower(col.DatabaseTypeName())
+					nullable, _ := col.Nullable()
+					var value any
+					switch {
+					case name == "deleted_at":
+						if i%10 == 0 {
+							value = time.Now().Add(-24 * time.Hour)
+						}
+					case strings.Contains(typ, "json"):
+						value = "{}"
+					case strings.Contains(typ, "bool"):
+						value = false
+					case strings.Contains(typ, "int"), strings.Contains(typ, "numeric"), strings.Contains(typ, "decimal"), strings.Contains(typ, "float"), strings.Contains(typ, "double"), strings.Contains(typ, "real"):
+						value = int64(0)
+						if name == "id" || strings.HasSuffix(name, "_id") {
+							value = int64(i)
+						}
+						if strings.HasSuffix(name, "_at") || strings.HasSuffix(name, "_time") || name == "at" || name == "last_seen" || name == "first_seen" {
+							value = time.Now().Unix() - int64(i%30)*86400 - int64(i%86400)
+						}
+						if strings.Contains(name, "expires") || strings.Contains(name, "expired") {
+							value = time.Now().Add(365 * 24 * time.Hour).Unix()
+						}
+					case strings.Contains(typ, "time"), strings.Contains(typ, "date"):
+						if !nullable {
+							value = time.Now().Add(-24 * time.Hour)
+						}
+					case strings.Contains(typ, "blob"), strings.Contains(typ, "bytea"):
+						value = []byte("fixture")
+					default:
+						text := fmt.Sprintf("f%08d", i)
+						if length, ok := col.Length(); ok && length > 0 && int64(len(text)) > length {
+							text = text[len(text)-int(length):]
+						}
+						value = text
+					}
+					row[name] = value
+				}
+				fixtureValues(table, i, rows, row)
+				batch = append(batch, row)
+			}
+			if err := db.Table(table).CreateInBatches(batch, 500).Error; err != nil {
+				panic(fmt.Sprintf("seed %s at %d: %v", table, offset, err))
+			}
+		}
+		emit(map[string]any{"table": table, "rows": target, "seed_seconds": time.Since(start).Seconds()})
+		// Explicit fixture IDs do not advance PostgreSQL sequences. Restore the
+		// normal allocator before startup inserts any backfill or system rows.
+		if db.Dialector.Name() == "postgres" {
+			for _, column := range columns {
+				if column.Name() != "id" {
+					continue
+				}
+				var sequence sql.NullString
+				if err := db.Raw("SELECT pg_get_serial_sequence(?, ?)", table, "id").Scan(&sequence).Error; err != nil {
+					panic(err)
+				}
+				if sequence.Valid {
+					var highest int64
+					if err := db.Table(table).Select("MAX(id)").Scan(&highest).Error; err != nil {
+						panic(err)
+					}
+					if err := db.Exec("SELECT setval(?, ?, true)", sequence.String, highest).Error; err != nil {
+						panic(err)
+					}
+				}
+			}
+		}
+	}
+	if mode == "seed-new" || mode == "seed-security" {
+		recorder := &migrationRecorder{Interface: logger.Default.LogMode(logger.Silent)}
+		observed := db.Session(&gorm.Session{Logger: recorder})
+		for pass := range 2 {
+			recorder.ddl = nil
+			start := time.Now()
+			seedNewSchema(observed)
+			emit(map[string]any{"populated_security_migration": pass + 1, "ms": time.Since(start).Milliseconds(), "ddl": recorder.ddl})
+			if len(recorder.ddl) != 0 {
+				panic("populated security tables issued repeated DDL")
+			}
+		}
+	}
+}
+
+func fixtureValues(table string, i, rows int, row map[string]any) {
+	set := func(k string, v any) {
+		if _, ok := row[k]; ok {
+			row[k] = v
+		}
+	}
+	for _, k := range []string{"setting", "settings", "other_info", "channel_info", "properties", "private_data", "data", "payload", "facts", "evidence", "other", "group_ratios", "param_override", "header_override", "model_mapping", "status_code_mapping", "cost_snapshot", "pricing_snapshot"} {
+		set(k, "{}")
+	}
+	set("group", "default")
+	set("user_id", (i-1)%rows+1)
+	set("actor_id", (i-1)%rows+1)
+	set("actor_role", 1)
+	set("actor_is_employee", nil)
+	set("ip", fmt.Sprintf("10.%d.%d.%d", i%16, i%251, (i/251)%251))
+	set("user_agent", strings.Repeat("fixture ", 16))
+	switch table {
+	case "users":
+		set("password", "invalid-test-password-hash")
+		set("role", 1)
+		if i == 1 {
+			set("role", 100)
+		}
+		set("status", 1)
+		set("auth_version", 1)
+		set("access_token", nil)
+		set("access_token_created_at", nil)
+		set("excluded_channel_ids", "[]")
+		for _, k := range []string{"github_id", "discord_id", "oidc_id", "wechat_id", "linux_do_id", "telegram_id", "stripe_customer"} {
+			set(k, "")
+		}
+		// Existing bindings exercise the startup backfill as well as empty users.
+		if i%100 == 0 {
+			set("telegram_id", fmt.Sprint(i))
+		}
+	case "tokens":
+		set("status", 2)
+		set("key", fmt.Sprintf("fixture-not-a-token-%08d", i))
+		set("auto_groups", "[]")
+	case "user_sessions":
+		set("status", "active")
+		set("refresh_hash", strings.Repeat("0", 64))
+		set("previous_refresh_hash", nil)
+		set("version", 1)
+		set("user_auth_version", 1)
+		set("previous_valid_until", 0)
+		set("revoked_at", 0)
+		set("login_method", "password")
+	case "channels":
+		set("type", 1)
+		set("status", 2)
+		set("key", "fixture-disabled")
+		set("base_url", "http://127.0.0.1:9")
+		set("models", "fixture-model")
+		for _, k := range []string{"daily_quota_limit", "daily_limit_disabled_at", "daily_limit_period_start", "daily_limit_recover_minutes", "daily_limit_disabled_date"} {
+			set(k, 0)
+		}
+	case "abilities":
+		set("channel_id", (i-1)%rows+1)
+		set("model", fmt.Sprintf("fixture-model-%d", (i-1)/rows))
+		set("enabled", false)
+	case "channel_creators":
+		set("channel_id", i)
+		set("creator_user_id", 1)
+	case "logs":
+		set("type", 2+i%2)
+		set("content", strings.Repeat("x", 256))
+		set("channel_id", (i-1)%rows+1)
+		set("model_name", fmt.Sprintf("fixture-model-%d", i%10))
+	case "audit_logs":
+		set("category", "operation")
+		set("auth_method", "session")
+		set("route", fmt.Sprintf("/api/fixture/%d", i%200))
+		set("method", "GET")
+		set("success", true)
+		set("status", 200)
+		set("content", strings.Repeat("x", 256))
+	case "tasks", "midjourneys":
+		set("status", "SUCCESS")
+		set("progress", "100%")
+	case "system_tasks", "data_cleanup_runs":
+		set("status", "succeeded")
+	case "user_subscriptions":
+		set("status", "expired")
+	case "audit_security_alerts":
+		set("status", "open")
+		set("visibility", 10)
+		set("rule", "login_failure_burst")
+		set("version", 1)
+	case "audit_security_deliveries":
+		set("status", "sent")
+		set("destination", "")
+		set("alert_id", i)
+	case "audit_security_actions", "audit_security_alert_events":
+		set("alert_id", i)
+	case "external_identity_claims":
+		set("provider", "fixture")
+	}
+}
+
+func probe(db *gorm.DB) {
+	var reads, writes []float64
+	errors := 0
+	for os.Getenv("LARGE_DATA_STOP") != "" {
+		if _, err := os.Stat(os.Getenv("LARGE_DATA_STOP")); err == nil {
+			break
+		}
+		for _, op := range []string{"read", "write"} {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			start := time.Now()
+			var err error
+			if op == "read" {
+				var at int64
+				err = db.WithContext(ctx).Raw("SELECT created_at FROM audit_logs WHERE id = ?", 1).Scan(&at).Error
+			} else {
+				err = db.WithContext(ctx).Exec("UPDATE audit_logs SET status = status WHERE id = ?", 1).Error
+			}
+			ms := float64(time.Since(start).Microseconds()) / 1000
+			cancel()
+			if err != nil {
+				errors++
+			}
+			if op == "read" {
+				reads = append(reads, ms)
+			} else {
+				writes = append(writes, ms)
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for k, values := range map[string][]float64{"read": reads, "write": writes} {
+		sort.Float64s(values)
+		if len(values) > 0 {
+			emit(map[string]any{"operation": k, "samples": len(values), "p95_ms": values[(len(values)-1)*95/100], "p99_ms": values[(len(values)-1)*99/100], "max_ms": values[len(values)-1], "total_errors": errors})
+		}
+	}
+}

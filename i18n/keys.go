@@ -10,6 +10,48 @@ const MsgPaymentInfiniV2CredentialsInvalid = "payment.infini_v2_credentials_inva
 const MsgPaymentInfiniV2Unavailable = "payment.infini_v2_unavailable"
 
 const (
+	MsgAuditSecurityUnavailable       = "audit_security.unavailable"
+	MsgAuditSecurityNotFound          = "audit_security.not_found"
+	MsgAuditSecurityConflict          = "audit_security.conflict"
+	MsgAuditCustomerScopeChanged      = "audit_security.customer_scope_changed"
+	MsgAuditSecurityActivityChanged   = "audit_security.activity_changed"
+	MsgAuditSecurityInvalidAssignee   = "audit_security.invalid_assignee"
+	MsgAuditSecuritySubject           = "audit_security.subject"
+	MsgAuditSecurityBody              = "audit_security.body"
+	MsgAuditSecurityAccountBody       = "audit_security.account_body"
+	MsgAuditFilterInvalid             = "audit_filter.invalid"
+	MsgAuditFilterUnavailable         = "audit_filter.unavailable"
+	MsgAuditFilterChanged             = "audit_filter.changed"
+)
+
+const (
+	MsgAuditSecurityResponseInvalidTarget           = "audit_security.response_invalid_target"
+	MsgAuditSecurityResponseConflict                = "audit_security.response_conflict"
+	MsgAuditSecurityBanSucceeded                    = "audit_security.ban_succeeded"
+	MsgAuditSecurityBanFailed                       = "audit_security.ban_failed"
+	MsgAuditSecurityBanUnconfirmed                  = "audit_security.ban_unconfirmed"
+	MsgAuditSecurityRuleMultiAccountKeyAccess       = "audit_security.rule_multi_account_key_access"
+	MsgAuditSecurityRuleMultiSourceKeyAccess        = "audit_security.rule_multi_source_key_access"
+	MsgAuditSecurityRuleNewSourceChannelRewrite     = "audit_security.rule_new_source_channel_rewrite"
+	MsgAuditSecurityRuleSessionReuse                = "audit_security.rule_session_reuse"
+	MsgAuditSecurityRuleRiskyIPLogin                = "audit_security.rule_risky_ip_login"
+	MsgAuditSecurityRuleRiskyIPSensitiveOperation   = "audit_security.rule_risky_ip_sensitive_operation"
+	MsgAuditSecurityRuleNewSourceSensitiveOperation = "audit_security.rule_new_source_sensitive_operation"
+	MsgAuditSecurityResponseStopped                 = "audit_security.response_stopped"
+	MsgAuditSecurityAbuseLookupRequired             = "audit_security.abuse_lookup_required"
+	MsgAuditSecurityClearAPIKeys                    = "audit_security.clear_api_keys"
+	MsgAuditSecurityClearAPIKeysCount               = "audit_security.clear_api_keys_count"
+	MsgAuditSecurityClearAPIKeysEmpty               = "audit_security.clear_api_keys_empty"
+	MsgAuditSecurityClearAccessTokens               = "audit_security.clear_access_tokens"
+	MsgAuditSecurityClearAccessTokensCount          = "audit_security.clear_access_tokens_count"
+	MsgAuditSecurityClearAccessTokensEmpty          = "audit_security.clear_access_tokens_empty"
+	MsgAuditSecurityCleanupResult                   = "audit_security.cleanup_result"
+	MsgAuditSecurityCleanupFailed                   = "audit_security.cleanup_failed"
+	MsgAuditSecurityCleanupIncomplete               = "audit_security.cleanup_incomplete"
+	MsgAuditSecurityCleanupSkipped                  = "audit_security.cleanup_skipped"
+)
+
+const (
 	MsgCleanupInvalidDate    = "cleanup.invalid_date"
 	MsgCleanupDisabled       = "cleanup.disabled"
 	MsgCleanupPreviewExpired = "cleanup.preview_expired"
