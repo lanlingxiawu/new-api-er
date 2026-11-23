@@ -7,6 +7,8 @@ upload
 *.db
 build
 *.db-journal
+*.db-wal
+*.db-shm
 logs
 web/dist
 web/node_modules
@@ -39,12 +41,17 @@ certs
 *.log
 tmp/
 
+# Local scratch output; keep reusable evidence under _local/.
+.tmp/
+
 AGENTS.md
 CLAUDE.md
 /.tmp-go-cache
 /test
 /docs/*
 !/docs/design/
+!/docs/production-environment.md
+!/docs/release-checklist.md
 /.agents
 
 debugmain.go
@@ -65,3 +72,12 @@ go.work
 go.work.sum
 /relay_log
 /logger/binlog.*
+
+# Python bytecode, tool caches, and local virtual environments.
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/

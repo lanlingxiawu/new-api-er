@@ -100,6 +100,46 @@ func Unmarshal(data []byte, v any) error {
 	return kitutil.Unmarshal(data, v)
 }
 
+// UnmarshalJSONObject decodes one object with unique, decoded field names.
+// Use it at restricted management boundaries where silently accepting a
+// duplicate key could make the authorized payload ambiguous.
+func UnmarshalJSONObject(data []byte) (map[string]RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	start, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if start != json.Delim('{') {
+		return nil, errors.New("expected a JSON object")
+	}
+	fields := make(map[string]RawMessage)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return nil, errors.New("expected a JSON field name")
+		}
+		if _, exists := fields[key]; exists {
+			return nil, errors.New("duplicate JSON field")
+		}
+		var value RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		fields[key] = value
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, errors.New("unexpected data after JSON object")
+	}
+	return fields, nil
+}
+
 func UnmarshalJsonStr(data string, v any) error {
 	return kitutil.UnmarshalJsonStr(data, v)
 }

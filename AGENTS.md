@@ -149,7 +149,8 @@ All database code MUST be fully compatible with all three databases simultaneous
 **Tags that re-migrate on every restart:** AutoMigrate compares tag defaults with what the database reports; a mismatch issues `ALTER TABLE ... MODIFY COLUMN` on every boot. Known traps: `default:1.0` on a float column (MySQL reports `1` — write `default:1`), any `default:` on a MySQL `TEXT` column (TEXT cannot have a literal default), and boolean `default:true` (MySQL/PostgreSQL normalize differently — set such defaults in code instead).
 
 **Verification matrix (mandatory for any change that can affect database behaviour):** ORM/driver dependency changes, DSN/protocol/prepared-statement config, models and GORM tags, migrations/AutoMigrate, constraints and indexes, `Scanner`/`Valuer` behaviour, raw SQL, transactions and row locking.
-- Exercise real SQLite, MySQL and PostgreSQL instances — a build, mocks or a single dialect are not substitutes. Treat GORM core and its dialect/driver packages as one version set.
+- Exercise real MySQL and PostgreSQL instances — a build, mocks or a single dialect are not substitutes. Treat GORM core and its dialect/driver packages as one version set.
+- Consult the local production environment record (`docs/production-environment.md`) and [release checklist](docs/release-checklist.md) before preparing acceptance tests. Keep environment facts in the local environment document.
 - Test schema/migration changes both on a fresh database and by upgrading a database created by the previous release; start at least twice and confirm the second start issues no DDL. Cover the log database when the path touches it.
 - Before deploying a migration to a server, rehearse it against that server's schema (schema-only dump loaded into a scratch database) and check its data for rows that would violate new unique constraints.
 - Record database versions, commands and results in the handoff. If any part cannot be run, say so explicitly.
@@ -249,6 +250,12 @@ upstream tests depending on it are simply not carried.
 - `bun run i18n:sync` — sync translations
 
 ### Rule 7: New Features — Design Document First (docs/design/)
+
+**Mandatory investigation before proposing a design:**
+- Before writing or presenting a design, read the actual implementation of the affected functionality and trace its related logic: callers, downstream dependencies, shared helpers and resources, and other entry points that use the same behavior. File names, search hits, screenshots, old documents, and assumptions alone are not sufficient.
+- Verify the relevant end-to-end flow and lifecycle in code, including API contracts, authorization, validation, storage, cache updates, background work, error handling, and frontend state/pagination where applicable. Read related tests to identify existing contracts and missing coverage.
+- Base the proposal on these findings. Identify the concrete files/functions to change, existing capabilities to reuse, missing backend behavior, and effects on related paths. Resolve implementation choices from the current code before presenting a concrete plan; do not substitute a generic checklist or unverified alternatives for an actual solution.
+- Include an **Existing Logic and Related-Path Findings** section in the design document with code references, verified current behavior, and how the proposed changes fit it. Explicitly distinguish verified facts from unresolved questions; investigate any uncertainty that could change the solution before asking the user to approve it.
 
 Before writing any code for a **new feature or significant modification to existing functionality**, you MUST:
 
@@ -479,6 +486,14 @@ When working on tiered/dynamic billing (expression-based pricing), you MUST read
 - **Never** make real network calls to OpenAI, Claude, Gemini, or any upstream AI API in tests.
 - Mock upstream responses with `httptest.NewServer` returning fixture JSON — already the pattern used in `relay/channel/` tests.
 - Relay tests must be fast (< 1s) and deterministic — no external I/O.
+
+**Channel integration / deployment acceptance (user decision, 2026-11-10):**
+- Keep the fast fixture-based unit tests above. Real channel acceptance must additionally use: test client → this branch's configured channel → latest official `main` service's configured channel → authenticated mock. Direct handler calls or a branch connected directly to mock do not replace this acceptance step.
+- Always fetch and build the newest official main; check remote main again before deployment and testing. Record its exact revision and binary SHA256; rebuild/redeploy if it advanced.
+- Cover every protocol supported by that main revision, with JSON, streaming, WebSocket, multipart/binary and task lifecycle variants where applicable. The protocol inventory must fail when main adds an unimplemented fixture.
+- Compare actual mock evidence, returned usage, and both gateways' persisted usage/settlement. Wait for asynchronous logs and task final states. Preserve failures rather than weakening assertions to get a passing report.
+- The dedicated Hong Kong fixture stack's location is recorded in local `docs/production-environment.md`. Keep it isolated from the existing gateway, database tables, Redis and user quotas. Never commit or log credentials; never call real paid model providers.
+- Reusable scripts and recorded scope: `scripts/testing/main-channel/`, `scripts/testing/build-latest-main.py`, `docs/design/main-upstream-channel-testing.md`.
 
 #### 15.5 Database tests — use real project env; SQLite as fallback only
 

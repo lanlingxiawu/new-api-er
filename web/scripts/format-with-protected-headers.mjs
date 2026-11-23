@@ -81,9 +81,28 @@ function snapshotFiles(files) {
   return snapshot
 }
 
+function writeFileWithRetry(file, content) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      writeFileSync(file, content)
+      return
+    } catch (error) {
+      if (attempt === 7) throw error
+      Atomics.wait(
+        new Int32Array(new SharedArrayBuffer(4)),
+        0,
+        0,
+        25 * (attempt + 1)
+      )
+    }
+  }
+}
+
 function restoreSnapshot(snapshot) {
   for (const [file, content] of snapshot) {
-    writeFileSync(file, content)
+    if (!readFileSync(file).equals(content)) {
+      writeFileWithRetry(file, content)
+    }
   }
 }
 
@@ -112,7 +131,7 @@ function restoreProtectedHeaders(headers) {
   for (const [file, header] of headers) {
     const content = readFileSync(file, 'utf8').replace(/^\n+/, '')
     if (!content.startsWith(header)) {
-      writeFileSync(file, header + content)
+      writeFileWithRetry(file, header + content)
     }
   }
 }
